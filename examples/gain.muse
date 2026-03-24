@@ -1,0 +1,33 @@
+// Gain — the simplest possible Muse plugin.
+// A single knob controlling signal level.
+
+plugin "Warm Gain" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.warm-gain"
+    description "A warm, musical gain stage"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseWarmGain1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  process {
+    input -> gain(param.gain) -> output
+  }
+}

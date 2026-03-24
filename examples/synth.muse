@@ -1,0 +1,76 @@
+// Synth — a simple subtractive synthesizer with MIDI input.
+// Demonstrates note handling, envelopes, and oscillator → filter chains.
+
+plugin "Glass Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.glass-synth"
+    description "A crystalline subtractive synthesizer"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseGlassSyn1"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  param attack: float = 10.0 in 0.5..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param decay: float = 200.0 in 1.0..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param sustain: float = 0.7 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  param release: float = 300.0 in 1.0..10000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param cutoff: float = 4000.0 in 20.0..20000.0 {
+    smoothing logarithmic 15ms
+    unit "Hz"
+  }
+
+  param resonance: float = 0.3 in 0.0..1.0 {
+    smoothing linear 10ms
+  }
+
+  param osc_mix: float = 0.5 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  param volume: float = -6.0 in -60.0..0.0 {
+    unit "dB"
+  }
+
+  process {
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    let osc1 = saw(note.pitch)
+    let osc2 = square(note.pitch)
+    let tone = mix(osc1, osc2) -> gain(param.osc_mix)
+    tone -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(param.volume) -> output
+  }
+}

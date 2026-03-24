@@ -1,0 +1,57 @@
+// Filter — a resonant filter with multiple parameter types.
+// Demonstrates enum params, display formatting, and signal chaining.
+
+plugin "Velvet Filter" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.velvet-filter"
+    description "A smooth, resonant filter with character"
+    features    [audio_effect, stereo, filter]
+  }
+
+  vst3 {
+    id              "MuseVelvetFlt"
+    subcategories   [Fx, Filter]
+  }
+
+  input  stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+    display "frequency"
+  }
+
+  param resonance: float = 0.5 in 0.0..1.0 {
+    smoothing linear 10ms
+    display "percentage"
+  }
+
+  param mode: enum [lowpass, highpass, bandpass, notch] = lowpass
+
+  param drive: float = 0.0 in 0.0..24.0 {
+    smoothing logarithmic 30ms
+    unit "dB"
+  }
+
+  param mix: float = 1.0 in 0.0..1.0 {
+    unit "%"
+    display "percentage"
+  }
+
+  process {
+    let filtered = input -> lowpass(param.cutoff, param.resonance)
+    let shaped = if param.drive > 0.0 {
+      filtered -> gain(param.drive) -> tanh()
+    } else {
+      filtered
+    }
+    mix(input, shaped) -> gain(param.mix) -> output
+  }
+}
