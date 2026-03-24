@@ -7,6 +7,7 @@ use chumsky::input::{Stream, ValueInput};
 use chumsky::prelude::*;
 
 use crate::ast::*;
+use crate::diagnostic::{Diagnostic, Severity};
 use crate::span::Span;
 use crate::token::{lex, Token};
 
@@ -34,6 +35,137 @@ pub fn parse(source: &str) -> (Option<PluginDef>, Vec<Rich<'_, Token, Span>>) {
 
     let (ast, errs) = plugin_parser().parse(stream).into_output_errors();
     (ast, errs)
+}
+
+/// Parse a Muse source string, returning an optional AST and structured diagnostics.
+///
+/// This is the primary public API for tooling — converts chumsky's internal error
+/// representation into `Diagnostic` structs with error codes, messages, and suggestions.
+pub fn parse_to_diagnostics(source: &str) -> (Option<PluginDef>, Vec<Diagnostic>) {
+    let (ast, errors) = parse(source);
+    let diagnostics = errors
+        .into_iter()
+        .map(|err| rich_error_to_diagnostic(&err))
+        .collect();
+    (ast, diagnostics)
+}
+
+/// Convert a chumsky `Rich` error into a structured `Diagnostic`.
+fn rich_error_to_diagnostic(err: &Rich<'_, Token, Span>) -> Diagnostic {
+    let span = *err.span();
+
+    // Extract what the parser expected vs what it found
+    let expected: Vec<String> = err
+        .expected()
+        .map(|e| match e {
+            chumsky::error::RichPattern::Token(t) => {
+                let token: &Token = t;
+                format!("'{token}'")
+            }
+            chumsky::error::RichPattern::Label(l) => l.to_string(),
+            chumsky::error::RichPattern::EndOfInput => "end of input".to_string(),
+            chumsky::error::RichPattern::Identifier(id) => format!("identifier '{id}'"),
+            chumsky::error::RichPattern::Any => "any token".to_string(),
+            chumsky::error::RichPattern::SomethingElse => "something else".to_string(),
+        })
+        .collect();
+
+    let found = err.found().map(|t| format!("'{t}'"));
+
+    // Determine error code and build message based on the error pattern
+    let (code, message, suggestion) = classify_error(&expected, found.as_deref(), err);
+
+    let mut diag = Diagnostic {
+        code,
+        span: (span.start, span.end),
+        severity: Severity::Error,
+        message,
+        suggestion: None,
+    };
+
+    if let Some(s) = suggestion {
+        diag = diag.with_suggestion(s);
+    }
+
+    diag
+}
+
+/// Classify a parse error into an error code, message, and optional suggestion.
+fn classify_error(
+    expected: &[String],
+    found: Option<&str>,
+    _err: &Rich<'_, Token, Span>,
+) -> (String, String, Option<String>) {
+    // Check for unclosed block (expected '}')
+    let expects_rbrace = expected.iter().any(|e| e.contains('}'));
+    let expects_rparen = expected.iter().any(|e| e.contains(')'));
+    let expects_rbracket = expected.iter().any(|e| e.contains(']'));
+
+    if expects_rbrace && found.is_none() {
+        return (
+            "E002".to_string(),
+            "unclosed block: expected '}'".to_string(),
+            Some("add closing brace '}'".to_string()),
+        );
+    }
+
+    if expects_rparen && found.is_none() {
+        return (
+            "E002".to_string(),
+            "unclosed group: expected ')'".to_string(),
+            Some("add closing parenthesis ')'".to_string()),
+        );
+    }
+
+    if expects_rbracket && found.is_none() {
+        return (
+            "E002".to_string(),
+            "unclosed bracket: expected ']'".to_string(),
+            Some("add closing bracket ']'".to_string()),
+        );
+    }
+
+    // Build the expected list for the message
+    let expected_str = if expected.is_empty() {
+        "something else".to_string()
+    } else if expected.len() == 1 {
+        expected[0].clone()
+    } else if expected.len() <= 4 {
+        let (head, tail) = expected.split_at(expected.len() - 1);
+        format!(
+            "{}, or {}",
+            head.iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            tail[0]
+        )
+    } else {
+        // Too many expected tokens — just show the first few
+        format!(
+            "{}, or one of {} others",
+            expected[..3]
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            expected.len() - 3
+        )
+    };
+
+    let message = match found {
+        Some(f) => format!("unexpected token {f}, expected {expected_str}"),
+        None => format!("unexpected end of input, expected {expected_str}"),
+    };
+
+    // Generate a suggestion for simple cases
+    let suggestion = if expected.len() == 1 {
+        Some(format!("add {}", expected[0]))
+    } else {
+        None
+    };
+
+    ("E001".to_string(), message, suggestion)
 }
 
 // ── Sub-parsers ──────────────────────────────────────────────
