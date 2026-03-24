@@ -1,0 +1,11 @@
+[package]
+name = "muse-lang"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+logos = "0.16"
+chumsky = "=1.0.0-alpha.8"
+ariadne = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
