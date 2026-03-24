@@ -1,11 +1,12 @@
 use logos::Logos;
+use std::fmt;
 
 /// All tokens produced by the Muse lexer.
 ///
 /// Logos drives tokenization via the `#[token]` and `#[regex]` attributes.
 /// Keywords have priority over identifiers because `#[token]` matches are
 /// checked before `#[regex]` patterns.
-#[derive(Logos, Debug, Clone, PartialEq)]
+#[derive(Logos, Debug, Clone, PartialEq, Eq, Hash)]
 #[logos(skip r"[ \t\r\n\f]+")]
 pub enum Token {
     // ── Keywords ──────────────────────────────────────────────
@@ -217,6 +218,100 @@ pub enum Token {
     /// alphanumeric characters or underscores.
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*", |lex| lex.slice().to_string(), priority = 1)]
     Ident(String),
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Token::Plugin => write!(f, "plugin"),
+            Token::Param => write!(f, "param"),
+            Token::Process => write!(f, "process"),
+            Token::Input => write!(f, "input"),
+            Token::Output => write!(f, "output"),
+            Token::Clap => write!(f, "clap"),
+            Token::Vst3 => write!(f, "vst3"),
+            Token::Midi => write!(f, "midi"),
+            Token::Note => write!(f, "note"),
+            Token::Cc => write!(f, "cc"),
+            Token::Vendor => write!(f, "vendor"),
+            Token::Version => write!(f, "version"),
+            Token::Url => write!(f, "url"),
+            Token::Email => write!(f, "email"),
+            Token::Category => write!(f, "category"),
+            Token::Mono => write!(f, "mono"),
+            Token::Stereo => write!(f, "stereo"),
+            Token::In => write!(f, "in"),
+            Token::If => write!(f, "if"),
+            Token::Else => write!(f, "else"),
+            Token::Let => write!(f, "let"),
+            Token::Return => write!(f, "return"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::Id => write!(f, "id"),
+            Token::Description => write!(f, "description"),
+            Token::Features => write!(f, "features"),
+            Token::Subcategories => write!(f, "subcategories"),
+            Token::Smoothing => write!(f, "smoothing"),
+            Token::Linear => write!(f, "linear"),
+            Token::Logarithmic => write!(f, "logarithmic"),
+            Token::Exponential => write!(f, "exponential"),
+            Token::Display => write!(f, "display"),
+            Token::Unit => write!(f, "unit"),
+            Token::Effect => write!(f, "effect"),
+            Token::Instrument => write!(f, "instrument"),
+            Token::Analyzer => write!(f, "analyzer"),
+            Token::Utility => write!(f, "utility"),
+            Token::Voice => write!(f, "voice"),
+            Token::Poly => write!(f, "poly"),
+            Token::Sample => write!(f, "sample"),
+            Token::Import => write!(f, "import"),
+            Token::Test => write!(f, "test"),
+            Token::Feedback => write!(f, "feedback"),
+            Token::Split => write!(f, "split"),
+            Token::Merge => write!(f, "merge"),
+            Token::Bus => write!(f, "bus"),
+            Token::Float => write!(f, "float"),
+            Token::Int => write!(f, "int"),
+            Token::Bool => write!(f, "bool"),
+            Token::Enum => write!(f, "enum"),
+            Token::UnitHz => write!(f, "Hz"),
+            Token::UnitKHz => write!(f, "kHz"),
+            Token::UnitMs => write!(f, "ms"),
+            Token::UnitS => write!(f, "s"),
+            Token::UnitDB => write!(f, "dB"),
+            Token::UnitSt => write!(f, "st"),
+            Token::Arrow => write!(f, "->"),
+            Token::EqEq => write!(f, "=="),
+            Token::BangEq => write!(f, "!="),
+            Token::LtEq => write!(f, "<="),
+            Token::GtEq => write!(f, ">="),
+            Token::AmpAmp => write!(f, "&&"),
+            Token::PipePipe => write!(f, "||"),
+            Token::DotDot => write!(f, ".."),
+            Token::Plus => write!(f, "+"),
+            Token::Minus => write!(f, "-"),
+            Token::Star => write!(f, "*"),
+            Token::Slash => write!(f, "/"),
+            Token::Percent => write!(f, "%"),
+            Token::Eq => write!(f, "="),
+            Token::Lt => write!(f, "<"),
+            Token::Gt => write!(f, ">"),
+            Token::Bang => write!(f, "!"),
+            Token::Dot => write!(f, "."),
+            Token::LBrace => write!(f, "{{"),
+            Token::RBrace => write!(f, "}}"),
+            Token::LParen => write!(f, "("),
+            Token::RParen => write!(f, ")"),
+            Token::LBracket => write!(f, "["),
+            Token::RBracket => write!(f, "]"),
+            Token::Comma => write!(f, ","),
+            Token::Colon => write!(f, ":"),
+            Token::Semicolon => write!(f, ";"),
+            Token::Number(n) => write!(f, "{}", n),
+            Token::StringLiteral(s) => write!(f, "\"{}\"", s),
+            Token::Ident(s) => write!(f, "{}", s),
+        }
+    }
 }
 
 /// A single lexer result: either a (Token, byte-range) pair or an error span.
