@@ -1,6 +1,6 @@
 # DSP Primitives
 
-All 16 built-in DSP functions available in `process` blocks. These compile to real-time-safe Rust code.
+All 23 built-in DSP functions available in `process` blocks. These compile to real-time-safe Rust code.
 
 ## Oscillators
 
@@ -9,10 +9,12 @@ Generate audio signals. Return type: `Signal`.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `sine(freq)` | `Frequency → Signal` | Sine wave oscillator |
-| `saw(freq)` | `Frequency → Signal` | Band-limited sawtooth wave |
-| `square(freq)` | `Frequency → Signal` | Band-limited square wave |
-| `triangle(freq)` | `Frequency → Signal` | Band-limited triangle wave |
+| `saw(freq)` | `Frequency → Signal` | Sawtooth wave oscillator |
+| `square(freq)` | `Frequency → Signal` | Square wave oscillator |
+| `triangle(freq)` | `Frequency → Signal` | Triangle wave oscillator |
 | `noise()` | `() → Signal` | White noise generator (no parameters) |
+| `pulse(freq, width)` | `Frequency, Number → Signal` | Pulse wave with variable duty cycle |
+| `lfo(rate)` | `Rate → Signal` | Low-frequency oscillator (sine wave, for modulation) |
 
 ### Usage
 
@@ -23,13 +25,16 @@ let osc = saw(note.pitch)
 // With literal frequency
 let tone = sine(440Hz)
 
-// LFO in effect plugins — use as modulation source
-let lfo = sine(param.rate)
-let mod_gain = 1.0 - param.depth + param.depth * lfo
+// Pulse wave with variable width (0.5 = square, 0.1 = narrow)
+let pw = pulse(note.pitch, param.width)
+
+// LFO for modulation (dedicated primitive, cleaner than sine at sub-audio rates)
+let mod_signal = lfo(param.rate)
+let mod_gain = 1.0 - param.depth + param.depth * mod_signal
 input -> gain(mod_gain) -> output
 ```
 
-Oscillators work in both instrument and effect plugins. Each call site maintains its own phase state. In effect plugins, oscillators are commonly used as LFOs (low-frequency oscillators) for modulation effects like tremolo, vibrato, and chorus.
+Oscillators work in both instrument and effect plugins. Each call site maintains its own phase state. `lfo` is a dedicated modulation primitive — use it instead of `sine` when the intent is modulation rather than audio-rate sound generation.
 
 ## Filters
 
@@ -56,9 +61,10 @@ input -> highpass(200Hz) -> output
 
 // Omitting resonance (uses default 0.707)
 input -> bandpass(1000Hz) -> output
-```
 
-**Note:** Filter tests may exhibit imprecision due to a known biquad state initialization issue. Use relative assertions (`< -6dB`) rather than exact dB values.
+// Notch filter to remove a specific frequency
+input -> notch(60Hz, 0.9) -> output
+```
 
 ## Envelopes
 
@@ -85,6 +91,80 @@ let amp = ar(10ms, 200ms)
 
 Envelopes are driven by MIDI gate state — they respond to `note.gate` automatically.
 
+## Dynamics
+
+Processors for controlling signal level and dynamics. Return type: `Processor`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `compressor(threshold, ratio)` | `Gain, Number → Processor` | Dynamics compressor with envelope follower |
+
+- `threshold`: linear gain value (0.0–1.0), not dB
+- `ratio`: compression ratio (e.g., 4.0 = 4:1)
+- Fixed ~10ms attack and ~100ms release (not user-configurable in this version)
+
+### Usage
+
+```muse
+// Simple compression
+input -> compressor(param.threshold, param.ratio) -> output
+
+// Compressor before output gain
+input -> compressor(0.3, 4.0) -> gain(param.volume) -> output
+```
+
+Each call site maintains its own envelope follower state.
+
+## Modulation
+
+Time-based modulation effects. Return type: `Processor`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `chorus(rate, depth)` | `Rate, Number → Processor` | Chorus effect (modulated delay line) |
+
+- `rate`: LFO frequency in Hz
+- `depth`: modulation depth 0.0–1.0
+
+### Usage
+
+```muse
+// Simple chorus
+input -> chorus(param.rate, param.depth) -> output
+
+// Chorus with gain control
+input -> chorus(1.5, 0.4) -> gain(param.mix) -> output
+```
+
+Each call site maintains its own delay buffer and LFO phase.
+
+## Waveshaping & Distortion
+
+Nonlinear processors for adding harmonics and character. Return type: `Processor`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `tanh()` | `() → Processor` | Soft saturation (hyperbolic tangent) |
+| `fold(amount)` | `Number → Processor` | Wavefolding distortion |
+| `bitcrush(bits)` | `Number → Processor` | Bit depth reduction |
+| `clip(min, max)` | `Number, Number → Processor` | Hard clip signal to range |
+
+### Usage
+
+```muse
+// Soft saturation chain
+input -> gain(param.drive) -> tanh() -> output
+
+// Wavefolder (amount controls fold intensity, 1.0 = mild, 10.0 = aggressive)
+input -> fold(param.drive) -> output
+
+// Bitcrusher (16 = transparent, 4 = crunchy, 1 = extreme)
+input -> bitcrush(param.bits) -> output
+
+// Combined distortion chain
+input -> fold(param.drive) -> bitcrush(param.bits) -> gain(param.mix) -> output
+```
+
 ## Utilities
 
 General-purpose audio processors.
@@ -95,20 +175,12 @@ General-purpose audio processors.
 | `pan(position)` | `Number → Processor` | Processor | Stereo pan: -1.0 (left) to 1.0 (right) |
 | `delay(time)` | `Time → Processor` | Processor | Delay line |
 | `mix(dry, wet)` | `Signal, Signal → Signal` | Signal | Mix two signals (averages them) |
-| `clip(min, max)` | `Number, Number → Processor` | Processor | Hard clip signal to range |
-| `tanh()` | `() → Processor` | Processor | Soft saturation (hyperbolic tangent waveshaper) |
 
 ### Usage
 
 ```muse
 // Gain with param reference
 input -> gain(param.volume) -> output
-
-// Gain with dB literal
-input -> gain(-6dB) -> output
-
-// Soft saturation chain
-input -> gain(param.drive) -> tanh() -> output
 
 // Mixing dry/wet
 let dry = input
@@ -125,9 +197,12 @@ input -> feedback {
 
 | Category | Functions |
 |----------|-----------|
-| Oscillators | `sine`, `saw`, `square`, `triangle`, `noise` |
+| Oscillators | `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo` |
 | Filters | `lowpass`, `highpass`, `bandpass`, `notch` |
 | Envelopes | `adsr`, `ar` |
-| Utilities | `gain`, `pan`, `delay`, `mix`, `clip`, `tanh` |
+| Dynamics | `compressor` |
+| Modulation | `chorus` |
+| Waveshaping | `tanh`, `fold`, `bitcrush`, `clip` |
+| Utilities | `gain`, `pan`, `delay`, `mix` |
 
-**Total: 16 functions** (5 oscillators + 4 filters + 2 envelopes + 6 utilities – note: `noise` is categorized as an oscillator but takes no arguments)
+**Total: 23 functions**

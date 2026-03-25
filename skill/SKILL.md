@@ -28,7 +28,7 @@ Signal chains use `->` to pipe audio left-to-right:
 input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 ```
 
-16 built-in DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`.
+23 built-in DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`.
 
 ## Key Constraints
 
@@ -44,11 +44,11 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 
 ## Known Limitations
 
-- **Filter and multiband tests may fail** due to a pre-existing biquad_state initialization bug. Avoid writing tests that assert on filter output precision. Gain-only and oscillator tests are reliable.
 - **No MIDI test events.** Test blocks cannot inject `note_on`/`note_off` — you cannot test instrument plugins via test blocks. Use `assert output.rms < -120dB` for silence tests on instruments.
 - **macOS only.** The build pipeline (`muse build`) produces macOS CLAP + VST3 bundles. No Linux or Windows support.
 - **No GUI.** Plugins get the host's generic parameter UI. No custom editor/view support.
-- **`tanh` replaces `fold` in the DSP registry.** The grammar docs mention both, but only `tanh()` is registered.
+- **No polyphony.** Instrument plugins are monophonic (one voice). Polyphony is planned.
+- **Avoid Rust reserved words as variable names.** Don't use `mod`, `fn`, `type`, etc. as `let` binding names in process blocks — they'll break the generated Rust code.
 
 ## CLI Quick Reference
 
@@ -135,9 +135,9 @@ If the user's intent is clear from their message, skip the question and route di
 |---|---|
 | `references/language-reference.md` | Complete syntax guide: plugin structure, params, process blocks, signal chains, routing, MIDI, metadata, type system |
 | `references/test-syntax.md` | Test block grammar, signal types, assertion properties, operators, JSON output format |
-| `references/dsp-primitives.md` | All 16 DSP functions by category with signatures and descriptions |
+| `references/dsp-primitives.md` | All 23 DSP functions by category with signatures and descriptions |
 | `references/error-codes.md` | E001–E011 with causes and fix patterns |
 | `references/cli-commands.md` | All 4 CLI commands with flags, exit codes, JSON output schemas |
-| `references/plugin-recipes.md` | 4 annotated example patterns: gain, filter, synth, multiband |
+| `references/plugin-recipes.md` | 9 annotated example patterns: gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth |
 
 </routing>
