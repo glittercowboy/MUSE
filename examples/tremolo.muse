@@ -1,0 +1,46 @@
+// Velvet Tremolo — an amplitude-modulating effect.
+// Depth controls signal attenuation; rate is exposed for host automation.
+
+plugin "Velvet Tremolo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.velvet-tremolo"
+    description "A smooth amplitude tremolo effect"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseVelvetTrm"
+    subcategories   [Fx, Modulation]
+  }
+
+  input  stereo
+  output stereo
+
+  param rate: float = 4.0 in 0.1..20.0 {
+    unit "Hz"
+  }
+
+  param depth: float = 0.5 in 0.0..1.0 {}
+
+  process {
+    input -> gain(param.depth) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    set    param.depth = 0.5
+    assert output.rms < -120dB
+  }
+
+  test "depth modulates signal level" {
+    input  sine 440Hz 1024 samples
+    set    param.depth = 0.5
+    assert output.peak > 0.0
+  }
+}
