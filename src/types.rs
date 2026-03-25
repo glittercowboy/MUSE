@@ -65,6 +65,10 @@ impl DspType {
         if self == DspType::Number && expected.is_numeric_domain() {
             return true;
         }
+        // Envelope is a 0.0–1.0 control signal — usable as a numeric value
+        if self == DspType::Envelope && expected.is_numeric_domain() {
+            return true;
+        }
         false
     }
 

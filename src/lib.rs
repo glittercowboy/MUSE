@@ -5,6 +5,7 @@ pub mod parser;
 pub mod diagnostic;
 pub mod types;
 pub mod dsp;
+pub mod resolve;
 
 // Re-export primary public API
 pub use ast::PluginDef;
