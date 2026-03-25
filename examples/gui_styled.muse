@@ -1,0 +1,52 @@
+// GUI Styled — Tier 3 CSS escape hatch demo.
+// Custom CSS gradients, shadows, and widget styling.
+// Produces a third distinct visual from Tier 1 and Tier 2.
+
+plugin "Styled Demo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.styled-demo"
+    description "A gain effect with custom CSS styling"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseStyledDemo"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  param mix: float = 0.0 in -12.0..12.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#E8A87C"
+    size 800 500
+
+    layout vertical {
+      knob gain { style "vintage" class "hero-knob" }
+      slider mix
+    }
+
+    css ".hero-knob canvas { filter: drop-shadow(0 0 8px var(--accent)); } body { background: linear-gradient(135deg, #1a1a2e, #16213e); }"
+  }
+
+  process {
+    input -> gain(param.gain) -> gain(param.mix) -> output
+  }
+}

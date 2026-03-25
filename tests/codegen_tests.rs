@@ -881,3 +881,186 @@ fn gui_gain_cargo_check() {
 
     assert_cargo_check(&crate_dir);
 }
+
+#[test]
+#[ignore = "requires cargo check — run with --include-ignored"]
+fn gui_layout_cargo_check() {
+    let source = include_str!("../examples/gui_layout.muse");
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-gui-layout-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // ── Verify GUI-specific output structure ──
+    assert!(
+        crate_dir.join("assets/editor.html").exists(),
+        "assets/editor.html missing"
+    );
+
+    // ── Tier 2 structural assertions on HTML ──
+    let html = std::fs::read_to_string(crate_dir.join("assets/editor.html")).unwrap();
+
+    // Must have Tier 2 layout structure
+    assert!(
+        html.contains("class=\"tier2-root\""),
+        "Tier 2 HTML should contain tier2-root container"
+    );
+    assert!(
+        html.contains("layout-vertical"),
+        "Tier 2 HTML should contain layout-vertical class"
+    );
+    assert!(
+        html.contains("layout-horizontal"),
+        "Tier 2 HTML should contain layout-horizontal class"
+    );
+    assert!(
+        html.contains("class=\"panel-title\""),
+        "Tier 2 HTML should contain panel-title elements"
+    );
+    assert!(
+        html.contains("Controls"),
+        "Tier 2 HTML should contain 'Controls' panel title"
+    );
+
+    // Must NOT have Tier 1 flat knob grid in the body (only in CSS as a rule)
+    // The Tier 1 pattern is <div class="knob-grid"> — Tier 2 uses tier2-root instead
+    assert!(
+        !html.contains("<div class=\"knob-grid\">"),
+        "Tier 2 HTML should NOT contain knob-grid div element"
+    );
+
+    // Must reference both params
+    assert!(html.contains("data-param=\"gain\""), "Should reference gain param");
+    assert!(html.contains("data-param=\"mix\""), "Should reference mix param");
+
+    // Label widget present
+    assert!(
+        html.contains("class=\"label-widget\""),
+        "Tier 2 HTML should contain label widget"
+    );
+
+    // ── Editor module assertions ──
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("evaluateJavaScript"),
+        "Editor should contain evaluateJavaScript for Rust→JS sync"
+    );
+    // Editor dimensions should match size 700 450
+    assert!(
+        lib_rs.contains("AtomicU32::new(700)"),
+        "Editor width should be 700"
+    );
+    assert!(
+        lib_rs.contains("AtomicU32::new(450)"),
+        "Editor height should be 450"
+    );
+
+    // ── Full cargo check ──
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+#[ignore = "requires cargo check — run with --include-ignored"]
+fn gui_styled_cargo_check() {
+    let source = include_str!("../examples/gui_styled.muse");
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-gui-styled-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // ── Verify GUI-specific output structure ──
+    assert!(
+        crate_dir.join("assets/editor.html").exists(),
+        "assets/editor.html missing"
+    );
+
+    // ── Tier 3 structural assertions on HTML ──
+    let html = std::fs::read_to_string(crate_dir.join("assets/editor.html")).unwrap();
+
+    // Must have Tier 2 layout structure (Tier 3 builds on Tier 2)
+    assert!(
+        html.contains("class=\"tier2-root\""),
+        "Tier 3 HTML should contain tier2-root container"
+    );
+    assert!(
+        html.contains("layout-vertical"),
+        "Tier 3 HTML should contain layout-vertical class"
+    );
+
+    // Must NOT have Tier 1 flat knob grid in the body
+    assert!(
+        !html.contains("<div class=\"knob-grid\">"),
+        "Tier 3 HTML should NOT contain knob-grid div element"
+    );
+
+    // ── Tier 3: custom CSS injection ──
+    assert!(
+        html.contains("/* --- Custom CSS --- */"),
+        "Tier 3 HTML should contain custom CSS comment marker"
+    );
+    assert!(
+        html.contains("drop-shadow"),
+        "Tier 3 CSS should contain drop-shadow from custom CSS"
+    );
+    assert!(
+        html.contains("linear-gradient"),
+        "Tier 3 CSS should contain linear-gradient from custom CSS"
+    );
+
+    // ── Widget props: class and style ──
+    assert!(
+        html.contains("hero-knob"),
+        "Tier 3 HTML should contain hero-knob class from widget prop"
+    );
+    assert!(
+        html.contains("data-style=\"vintage\""),
+        "Tier 3 HTML should contain vintage data-style from widget prop"
+    );
+
+    // ── Slider widget present ──
+    assert!(
+        html.contains("class=\"slider-cell\""),
+        "Tier 3 HTML should contain slider widget"
+    );
+    assert!(
+        html.contains("id=\"slider-mix\""),
+        "Tier 3 HTML should contain slider for mix param"
+    );
+
+    // Must reference both params
+    assert!(html.contains("data-param=\"gain\""), "Should reference gain param");
+    assert!(html.contains("data-param=\"mix\""), "Should reference mix param");
+
+    // ── Editor module assertions ──
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("evaluateJavaScript"),
+        "Editor should contain evaluateJavaScript for Rust→JS sync"
+    );
+    // Editor dimensions should match size 800 500
+    assert!(
+        lib_rs.contains("AtomicU32::new(800)"),
+        "Editor width should be 800"
+    );
+    assert!(
+        lib_rs.contains("AtomicU32::new(500)"),
+        "Editor height should be 500"
+    );
+
+    // ── Full cargo check ──
+    assert_cargo_check(&crate_dir);
+}

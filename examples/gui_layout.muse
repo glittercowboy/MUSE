@@ -1,0 +1,57 @@
+// GUI Layout — Tier 2 structured layout demo.
+// Explicit layout with panels and positioned widgets.
+// Produces visually distinct HTML from Tier 1 auto-layout.
+
+plugin "Layout Demo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.layout-demo"
+    description "A gain effect with explicit layout structure"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseLayoutDemo"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  param mix: float = 0.0 in -12.0..12.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#E8A87C"
+    size 700 450
+
+    layout vertical {
+      panel "Controls" {
+        layout horizontal {
+          knob gain
+          knob mix
+        }
+      }
+      panel "Info" {
+        label "Layout Demo — Muse Audio"
+      }
+    }
+  }
+
+  process {
+    input -> gain(param.gain) -> gain(param.mix) -> output
+  }
+}
