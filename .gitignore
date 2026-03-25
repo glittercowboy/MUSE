@@ -28,3 +28,8 @@ coverage/
 .cache/
 tmp/
 .bg-shell/
+
+# Build artifacts
+*.clap/
+*.vst3/
+warm-gain/
