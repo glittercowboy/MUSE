@@ -19,6 +19,11 @@ plugin "Warm Gain" {
     unit "dB"
   }
 
+  gui {
+    theme dark
+    accent "#E8A87C"
+  }
+
   process {
     input -> gain(param.gain) -> output
   }
@@ -31,7 +36,7 @@ plugin "Warm Gain" {
 }
 ```
 
-Run `muse build gain.muse` and get a native VST3 + CLAP binary that loads in Ableton, Bitwig, Reaper — any DAW. One file in, real plugin out.
+Run `muse build gain.muse` and get a native VST3 + CLAP binary with a custom GUI that loads in Ableton, Bitwig, Reaper — any DAW. One file in, real plugin out.
 
 ## Why
 
@@ -76,6 +81,32 @@ process {
 
 The code *is* the signal flow diagram.
 
+## Custom GUI
+
+Add a `gui { }` block and the plugin gets a web-view editor rendered in macOS WebKit:
+
+```muse
+gui {
+  theme dark
+  accent "#7ECCE8"
+  size 800 550
+
+  layout vertical {
+    panel "Analyzer" {
+      spectrum
+    }
+    panel "Controls" {
+      layout horizontal {
+        xy_pad freq resonance
+        knob gain
+      }
+    }
+  }
+}
+```
+
+Three tiers: auto-generated knobs from just `theme` and `accent`, explicit layout with panels and widgets, or full CSS escape hatch for unlimited visual control. Preview with `muse preview` before building.
+
 ## Plugins That Test Themselves
 
 Every Muse plugin can prove it works. Inject MIDI notes, feed real audio through the compiled DSP, verify pitch with FFT, check envelope shapes over time, and assert no corrupted output:
@@ -107,6 +138,9 @@ cargo build --release
 # Compile, run audio tests
 ./target/release/muse test examples/gain.muse --format json
 
+# Preview GUI in a standalone window
+./target/release/muse preview examples/gui_gain.muse
+
 # Build VST3 + CLAP binaries
 ./target/release/muse build examples/gain.muse --output-dir ./build
 
@@ -136,7 +170,7 @@ lowpass(500Hz)  // correct
 
 ## Examples
 
-Twelve working plugins in [`examples/`](examples/):
+Eighteen working plugins in [`examples/`](examples/):
 
 | Plugin | What it does |
 |--------|-------------|
@@ -152,6 +186,12 @@ Twelve working plugins in [`examples/`](examples/):
 | [poly_synth.muse](examples/poly_synth.muse) | 8-voice polyphonic synth |
 | [mpe_synth.muse](examples/mpe_synth.muse) | MPE-enabled polyphonic synth |
 | [unison_synth.muse](examples/unison_synth.muse) | 3-voice unison with detuning |
+| [preset_gain.muse](examples/preset_gain.muse) | Gain with factory presets |
+| [gui_gain.muse](examples/gui_gain.muse) | Gain with dark-themed web view GUI |
+| [gui_layout.muse](examples/gui_layout.muse) | Tier 2 explicit layout with panels |
+| [gui_spectrum.muse](examples/gui_spectrum.muse) | Spectrum analyzer + XY pad |
+| [gui_styled.muse](examples/gui_styled.muse) | Tier 3 CSS escape hatch demo |
+| [gui_compressor.muse](examples/gui_compressor.muse) | Compressor with custom GUI |
 
 Every example compiles to a real plugin binary. Every example has test blocks that pass.
 
@@ -162,21 +202,24 @@ Every example compiles to a real plugin binary. Every example has test blocks th
   → Lexer (logos) → Parser (chumsky) → Typed AST
   → Semantic resolver (type checking, function validation)
   → Code generator → standalone Rust/nih-plug crate
+    → DSP: allocation-free process loop
+    → GUI: HTML/CSS/JS in WebKit web view
+    → Tests: #[test] functions with real audio
   → cargo build --release → native binary
   → Bundle assembly → .clap + .vst3
 ```
 
 The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-260 tests. Zero clippy warnings.
+383 tests. Zero clippy warnings.
 
 ## AI Skill File
 
-Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write plugins autonomously — language reference, DSP primitive docs, plugin recipes, error recovery patterns, and step-by-step workflows. Give it to Claude and ask for a plugin.
+Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write plugins autonomously — language reference, DSP primitive docs, GUI block documentation, plugin recipes, error recovery patterns, and step-by-step workflows. Give it to Claude and ask for a plugin.
 
 ## What's Next
 
-Declarative GUI system (web view rendering), expanded test assertions (FFT, MIDI injection), presets, cross-platform builds.
+Cross-platform builds (Windows/Linux), expanded DSP primitives (delay lines, EQ shelves, reverb), hot reload, package system.
 
 ## Requirements
 

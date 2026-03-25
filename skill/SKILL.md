@@ -53,6 +53,7 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 - **macOS only.** The build pipeline (`muse build`) produces macOS CLAP + VST3 bundles. No Linux or Windows support.
 - **Polyphony is per-voice mono.** Each voice outputs mono, summed to the output bus. No per-voice stereo panning yet.
 - **Avoid Rust reserved words as variable names.** Don't use `mod`, `fn`, `type`, etc. as `let` binding names in process blocks — they'll break the generated Rust code.
+- **GUI editor crashes in VST3 hosts.** The web view editor (`gui { }` block) works in `muse preview` standalone mode but crashes when opened inside Ableton Live's VST3 host. Use `muse preview` to verify GUI appearance. Headless plugins (without `gui` block) work fine in all DAWs.
 
 ## CLI Quick Reference
 
