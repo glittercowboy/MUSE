@@ -282,6 +282,21 @@ fn codegen_synth_has_instrument_struct_fields() {
 }
 
 #[test]
+fn codegen_synth_has_midi_note_event_handling() {
+    let source = include_str!("../examples/synth.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(lib_rs.contains("NoteEvent::NoteOn"), "Missing NoteOn match arm");
+    assert!(lib_rs.contains("NoteEvent::NoteOff"), "Missing NoteOff match arm");
+    assert!(lib_rs.contains("process_osc_saw"), "Missing process_osc_saw call");
+    assert!(lib_rs.contains("process_osc_square"), "Missing process_osc_square call");
+    assert!(lib_rs.contains("process_adsr"), "Missing process_adsr call");
+    assert!(lib_rs.contains("MidiConfig::Basic"), "Missing MidiConfig::Basic");
+    assert!(lib_rs.contains("ProcessStatus::KeepAlive"), "Missing ProcessStatus::KeepAlive");
+    assert!(lib_rs.contains("main_input_channels: None"), "Missing main_input_channels: None");
+}
+
+#[test]
 fn codegen_effect_unchanged_after_instrument_mode() {
     // Ensure gain.muse still generates identical effect-mode code
     let source = include_str!("../examples/gain.muse");

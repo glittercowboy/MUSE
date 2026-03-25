@@ -635,6 +635,30 @@ fn compile_check_catches_routing_errors() {
 // ── compile() pipeline integration ───────────────────────────
 
 #[test]
+fn compile_synth_pipeline() {
+    let source = std::fs::read_to_string("examples/synth.muse")
+        .expect("should read synth.muse");
+
+    let tmp = std::env::temp_dir().join("muse-compile-test-synth-pipeline");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let result = muse_lang::compile(&source, "synth.muse", &tmp);
+    assert!(result.is_ok(), "compile() should succeed for synth.muse: {:?}", result.err());
+
+    let crate_dir = result.unwrap();
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml should exist");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs should exist");
+
+    // Verify the generated code contains instrument-specific patterns
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("MidiConfig::Basic"), "compile() output should have MidiConfig::Basic");
+    assert!(lib_rs.contains("OscState"), "compile() output should have OscState");
+    assert!(lib_rs.contains("AdsrState"), "compile() output should have AdsrState");
+}
+
+#[test]
 fn compile_function_produces_output() {
     let source = std::fs::read_to_string("examples/gain.muse")
         .expect("should read gain.muse");
