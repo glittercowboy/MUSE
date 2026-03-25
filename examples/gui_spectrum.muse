@@ -1,0 +1,61 @@
+// GUI Spectrum — Advanced widget demo.
+// Demonstrates spectrum analyzer, xy_pad, and standard knobs
+// in a Tier 2 layout.
+
+plugin "Spectrum Demo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.spectrum-demo"
+    description "An effect with spectrum analyzer and XY pad"
+    features    [audio_effect, stereo, analyzer]
+  }
+
+  vst3 {
+    id              "MuseSpecDem01"
+    subcategories   [Fx, Analyzer]
+  }
+
+  input  stereo
+  output stereo
+
+  param freq: float = 1000.0 in 20.0..20000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  param resonance: float = 0.707 in 0.1..10.0 {
+    smoothing logarithmic 50ms
+  }
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#7ECCE8"
+    size 800 550
+
+    layout vertical {
+      panel "Analyzer" {
+        spectrum
+      }
+      panel "Controls" {
+        layout horizontal {
+          xy_pad freq resonance
+          knob gain
+        }
+      }
+    }
+  }
+
+  process {
+    input -> lowpass(param.freq, param.resonance) -> gain(param.gain) -> output
+  }
+}

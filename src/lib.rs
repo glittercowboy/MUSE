@@ -313,6 +313,47 @@ pub fn codesign_bundle(bundle_path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse and resolve a `.muse` source file and return the GUI editor HTML.
+///
+/// Runs the pipeline through parse → resolve → `generate_editor_html()` without
+/// performing full Rust code generation. Useful for previewing the GUI layout
+/// in a standalone viewer.
+///
+/// Returns `Ok(html_string)` on success, or `Err(diagnostics)` if parse or
+/// resolve fails. Returns `Err` with a single diagnostic if the source has no
+/// `gui` block.
+pub fn preview_html(source: &str, _filename: &str) -> Result<String, Vec<Diagnostic>> {
+    let (ast, parse_diags) = parse_to_diagnostics(source);
+
+    if !parse_diags.is_empty() {
+        return Err(parse_diags);
+    }
+
+    let Some(plugin) = ast else {
+        return Err(vec![Diagnostic::error(
+            "E001",
+            span::Span::new(0, source.len()),
+            "Failed to produce AST from source",
+        )]);
+    };
+
+    // Check for gui block before resolve (fast failure path)
+    if codegen::gui::find_gui_block(&plugin).is_none() {
+        return Err(vec![Diagnostic::error(
+            "E010",
+            span::Span::new(0, source.len()),
+            "No gui block found — nothing to preview",
+        )]);
+    }
+
+    let registry = dsp::builtin_registry();
+    let _resolved = resolve::resolve_plugin(&plugin, &registry)?;
+
+    // Generate the editor HTML directly from the AST
+    let html = codegen::gui::generate_editor_html(&plugin);
+    Ok(html)
+}
+
 /// Convenience function: parse source and emit diagnostics.
 ///
 /// - If `json_output` is true, prints JSON diagnostics to stdout.

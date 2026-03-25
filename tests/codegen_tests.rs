@@ -1064,3 +1064,85 @@ fn gui_styled_cargo_check() {
     // ── Full cargo check ──
     assert_cargo_check(&crate_dir);
 }
+
+#[test]
+#[ignore = "requires cargo check — run with --include-ignored"]
+fn gui_spectrum_cargo_check() {
+    let source = include_str!("../examples/gui_spectrum.muse");
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-gui-spectrum-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // ── Verify GUI-specific output structure ──
+    assert!(
+        crate_dir.join("assets/editor.html").exists(),
+        "assets/editor.html missing"
+    );
+
+    // ── HTML structural assertions ──
+    let html = std::fs::read_to_string(crate_dir.join("assets/editor.html")).unwrap();
+
+    // Tier 2 layout structure
+    assert!(
+        html.contains("class=\"tier2-root\""),
+        "HTML should contain tier2-root container"
+    );
+
+    // Spectrum widget present
+    assert!(
+        html.contains("spectrum-display"),
+        "HTML should contain spectrum-display element"
+    );
+
+    // XY pad widget present
+    assert!(
+        html.contains("xy-pad"),
+        "HTML should contain xy-pad element"
+    );
+    assert!(
+        html.contains("data-param-x=\"freq\""),
+        "XY pad should bind X axis to freq param"
+    );
+    assert!(
+        html.contains("data-param-y=\"resonance\""),
+        "XY pad should bind Y axis to resonance param"
+    );
+
+    // Standard knob present
+    assert!(
+        html.contains("data-param=\"gain\""),
+        "HTML should contain gain knob"
+    );
+
+    // JS initialization present
+    assert!(
+        html.contains("MuseSpectrum"),
+        "HTML should contain MuseSpectrum JS class"
+    );
+    assert!(
+        html.contains("MuseXyPad"),
+        "HTML should contain MuseXyPad JS class"
+    );
+
+    // Editor dimensions from gui block (800x550)
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("AtomicU32::new(800)"),
+        "Editor width should be 800"
+    );
+    assert!(
+        lib_rs.contains("AtomicU32::new(550)"),
+        "Editor height should be 550"
+    );
+
+    // ── Full cargo check ──
+    assert_cargo_check(&crate_dir);
+}

@@ -5,6 +5,7 @@
 //!   muse build <file> [--output-dir <dir>] [--format json]
 //!   muse check <file> [--format json]
 //!   muse test <file> [--output-dir <dir>] [--format json]
+//!   muse preview <file> [--format json]
 //!
 //! Exit codes:
 //!   0 — success
@@ -15,7 +16,7 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
+use muse_lang::{compile, compile_check, preview_html, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -30,6 +31,7 @@ fn main() {
         "build" => cmd_build(&args[2..]),
         "check" => cmd_check(&args[2..]),
         "test" => cmd_test(&args[2..]),
+        "preview" => cmd_preview(&args[2..]),
         "--help" | "-h" | "help" => {
             print_usage();
             process::exit(0);
@@ -904,18 +906,187 @@ fn print_human_results(results: &TestRunResults) {
     eprintln!("  {} passed, {} failed, {} total", results.passed, results.failed, total);
 }
 
+// ── muse preview ─────────────────────────────────────────────────────────────
+
+/// Parsed CLI options for the preview subcommand.
+struct PreviewOpts {
+    file: PathBuf,
+    json_format: bool,
+}
+
+fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
+    if args.is_empty() {
+        return Err("muse preview: missing <file> argument".into());
+    }
+
+    let mut file: Option<PathBuf> = None;
+    let mut json_format = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--format requires a value".into());
+                }
+                match args[i].as_str() {
+                    "json" => json_format = true,
+                    other => return Err(format!("unknown format '{other}', expected 'json'")),
+                }
+            }
+            arg if arg.starts_with('-') => {
+                return Err(format!("unknown option '{arg}'"));
+            }
+            _ => {
+                if file.is_some() {
+                    return Err(format!("unexpected argument '{}'", args[i]));
+                }
+                file = Some(PathBuf::from(&args[i]));
+            }
+        }
+        i += 1;
+    }
+
+    let file = file.ok_or("muse preview: missing <file> argument")?;
+
+    Ok(PreviewOpts { file, json_format })
+}
+
+#[cfg(target_os = "macos")]
+fn cmd_preview(args: &[String]) {
+    use objc2::{MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{NSApplication, NSWindow, NSWindowStyleMask, NSBackingStoreType};
+    use objc2_foundation::{NSRect, NSPoint, NSSize, NSString};
+    use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
+
+    let opts = match parse_preview_args(args) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("muse: {e}");
+            process::exit(2);
+        }
+    };
+
+    let source = match std::fs::read_to_string(&opts.file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("muse: cannot read '{}': {e}", opts.file.display());
+            process::exit(2);
+        }
+    };
+
+    let filename = opts.file.display().to_string();
+
+    let html = match preview_html(&source, &filename) {
+        Ok(h) => h,
+        Err(diags) => {
+            if opts.json_format {
+                println!("{}", diagnostics_to_json(&diags));
+            } else {
+                render_ariadne(&diags, &source, &filename);
+            }
+            process::exit(1);
+        }
+    };
+
+    // Extract GUI size from AST for window dimensions
+    let (width, height) = extract_gui_size(&source);
+
+    // ── Native macOS window with WKWebView ──
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+
+    let app = NSApplication::sharedApplication(mtm);
+
+    let style = NSWindowStyleMask::Titled
+        | NSWindowStyleMask::Closable
+        | NSWindowStyleMask::Miniaturizable;
+
+    let frame = NSRect::new(
+        NSPoint::new(200.0, 200.0),
+        NSSize::new(width as f64, height as f64),
+    );
+
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            NSWindow::alloc(mtm),
+            frame,
+            style,
+            NSBackingStoreType::Buffered,
+            false,
+        )
+    };
+
+    let plugin_name = opts.file.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Muse Preview".to_string());
+    let title = NSString::from_str(&format!("{plugin_name} — Muse Preview"));
+    window.setTitle(&title);
+
+    let config = unsafe { WKWebViewConfiguration::new(mtm) };
+    let webview_frame = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(width as f64, height as f64),
+    );
+    let webview = unsafe {
+        WKWebView::initWithFrame_configuration(
+            WKWebView::alloc(mtm),
+            webview_frame,
+            &config,
+        )
+    };
+
+    // Load the HTML string into the webview
+    let html_ns = NSString::from_str(&html);
+    let base_url: Option<&objc2_foundation::NSURL> = None;
+    unsafe { webview.loadHTMLString_baseURL(&html_ns, base_url) };
+
+    // WKWebView → NSView via into_super (WKWebView > NSView > NSResponder > NSObject)
+    let webview_view: objc2::rc::Retained<objc2_app_kit::NSView> =
+        objc2::rc::Retained::into_super(webview);
+    window.setContentView(Some(&webview_view));
+    window.center();
+    window.makeKeyAndOrderFront(None);
+
+    app.run();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cmd_preview(_args: &[String]) {
+    eprintln!("muse: preview is only supported on macOS");
+    process::exit(2);
+}
+
+/// Extract GUI size from source by parsing the AST.
+/// Returns (width, height), defaulting to (600, 400).
+fn extract_gui_size(source: &str) -> (u32, u32) {
+    let (ast, errors) = muse_lang::parse(source);
+    if !errors.is_empty() {
+        return (600, 400);
+    }
+    let Some(plugin) = ast else {
+        return (600, 400);
+    };
+    match muse_lang::codegen::gui::find_gui_block(&plugin) {
+        Some(gui) => muse_lang::codegen::gui::gui_size(gui),
+        None => (600, 400),
+    }
+}
+
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]");
     eprintln!("  muse build <file> [--output-dir <dir>] [--format json]");
     eprintln!("  muse check <file> [--format json]");
     eprintln!("  muse test <file> [--output-dir <dir>] [--format json]");
+    eprintln!("  muse preview <file> [--format json]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compile    Parse, resolve, and generate a Rust/nih-plug crate from a .muse file");
     eprintln!("  build      Compile, build, bundle (CLAP + VST3), and codesign a .muse plugin");
     eprintln!("  check      Parse and resolve a .muse file, reporting any errors");
     eprintln!("  test       Compile and run in-language test blocks, reporting pass/fail results");
+    eprintln!("  preview    Open a native preview window showing the plugin GUI (macOS only)");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --output-dir <dir>  Directory to place generated crate/bundles (default: current dir)");
