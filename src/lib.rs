@@ -6,6 +6,7 @@ pub mod diagnostic;
 pub mod types;
 pub mod dsp;
 pub mod resolve;
+pub mod codegen;
 
 // Re-export primary public API
 pub use ast::PluginDef;
@@ -14,6 +15,7 @@ pub use parser::{parse, parse_to_diagnostics};
 pub use resolve::{ResolvedPlugin, resolve_plugin};
 pub use dsp::{DspRegistry, builtin_registry};
 pub use types::DspType;
+pub use codegen::generate_plugin;
 
 /// Convenience function: parse source and emit diagnostics.
 ///
