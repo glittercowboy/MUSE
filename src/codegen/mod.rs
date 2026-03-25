@@ -70,7 +70,8 @@ pub fn generate_plugin(
     let mut editor_html: Option<String> = None;
     if let Some(gui_block) = gui::find_gui_block(plugin) {
         let html = gui::generate_editor_html(plugin);
-        let editor_module = editor::generate_editor_module(plugin, gui_block);
+        let (gui_width, gui_height) = gui::gui_size(gui_block);
+        let editor_module = editor::generate_editor_module(plugin, gui_block, gui_width, gui_height);
         lib_rs.push_str(&editor_module);
         editor_html = Some(html);
     }
