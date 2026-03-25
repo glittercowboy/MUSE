@@ -116,3 +116,27 @@ fn test_codegen_generate_plugin_returns_path() {
     let crate_dir = generate_from_source(source, &tmp);
     assert_eq!(crate_dir, tmp);
 }
+
+#[test]
+fn test_filter_muse_codegen_cargo_check() {
+    let source = include_str!("../examples/filter.muse");
+
+    // Use a stable temp directory so cargo can cache between runs
+    let tmp = std::env::temp_dir().join("muse-codegen-test-filter");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // Verify generated files exist
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    // Print generated code for debugging
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    eprintln!("=== Generated filter src/lib.rs ===\n{}\n=== END ===", lib_rs);
+
+    // The real proof: cargo check against nih-plug
+    assert_cargo_check(&crate_dir);
+}

@@ -1,9 +1,12 @@
 //! Generates the Plugin struct, Plugin/ClapPlugin/Vst3Plugin trait impls, and export macros.
 
+use std::collections::HashSet;
+
 use crate::ast::{
     ClapItem, ChannelSpec, FormatBlock, IoDirection, MetadataKey, MetadataValue,
     PluginDef, PluginItem, Vst3Item,
 };
+use crate::dsp::primitives::{DspPrimitive, FilterKind};
 
 /// Info extracted from the plugin AST needed for code generation.
 struct PluginInfo {
@@ -31,27 +34,49 @@ struct Vst3Info {
 }
 
 /// Generate the complete Plugin struct, trait impls, and export macros.
-pub fn generate_plugin_struct(plugin: &PluginDef) -> String {
+///
+/// `used_primitives` controls which DSP state fields are added to the struct
+/// (e.g., biquad filter state for lowpass).
+pub fn generate_plugin_struct(plugin: &PluginDef, used_primitives: &HashSet<DspPrimitive>) -> String {
     let info = extract_plugin_info(plugin);
     let clap = extract_clap_info(plugin);
     let vst3 = extract_vst3_info(plugin);
 
+    let needs_biquad = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Filter(FilterKind::Lowpass))
+    });
+    let num_channels = info.output_channels.max(info.input_channels) as usize;
+
     let mut out = String::new();
 
     // Plugin struct
-    out.push_str(&format!(
-        "struct {} {{\n    params: Arc<PluginParams>,\n}}\n\n",
-        info.struct_name
-    ));
+    out.push_str(&format!("struct {} {{\n", info.struct_name));
+    out.push_str("    params: Arc<PluginParams>,\n");
+    if needs_biquad {
+        out.push_str(&format!(
+            "    biquad_state: [BiquadState; {}],\n",
+            num_channels
+        ));
+        out.push_str("    sample_rate: f32,\n");
+    }
+    out.push_str("}\n\n");
 
     // Default impl
     out.push_str(&format!(
-        "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n            params: Arc::new(PluginParams::default()),\n        }}\n    }}\n}}\n\n",
+        "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n            params: Arc::new(PluginParams::default()),\n",
         info.struct_name
     ));
+    if needs_biquad {
+        out.push_str(&format!(
+            "            biquad_state: [BiquadState::default(); {}],\n",
+            num_channels
+        ));
+        out.push_str("            sample_rate: 44100.0,\n");
+    }
+    out.push_str("        }\n    }\n}\n\n");
 
     // Plugin trait impl
-    out.push_str(&generate_plugin_trait(&info));
+    out.push_str(&generate_plugin_trait(&info, needs_biquad));
 
     // ClapPlugin trait impl + export macro
     if let Some(ref clap) = clap {
@@ -163,10 +188,27 @@ fn extract_vst3_info(plugin: &PluginDef) -> Option<Vst3Info> {
     None
 }
 
-fn generate_plugin_trait(info: &PluginInfo) -> String {
+fn generate_plugin_trait(info: &PluginInfo, needs_biquad: bool) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
     let out_ch = info.output_channels;
+
+    let initialize_fn = if needs_biquad {
+        r#"
+    fn initialize(
+        &mut self,
+        _audio_io_layout: &AudioIOLayout,
+        buffer_config: &BufferConfig,
+        _context: &mut impl InitContext<Self>,
+    ) -> bool {
+        self.sample_rate = buffer_config.sample_rate;
+        true
+    }
+"#
+        .to_string()
+    } else {
+        String::new()
+    };
 
     format!(
         r#"impl Plugin for {s} {{
@@ -193,7 +235,7 @@ fn generate_plugin_trait(info: &PluginInfo) -> String {
     fn params(&self) -> Arc<dyn Params> {{
         self.params.clone()
     }}
-
+{initialize_fn}
     fn process(
         &mut self,
         buffer: &mut Buffer,
@@ -266,6 +308,7 @@ fn map_clap_feature(feature: &str) -> String {
         "mono" => "ClapFeature::Mono".to_string(),
         "surround" => "ClapFeature::Surround".to_string(),
         "ambisonic" => "ClapFeature::Ambisonic".to_string(),
+        "filter" => "ClapFeature::Filter".to_string(),
         other => format!("ClapFeature::Custom(\"{}\")", other),
     }
 }

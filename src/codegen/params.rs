@@ -1,8 +1,9 @@
-//! Generates the `#[derive(Params)]` struct and its `Default` impl.
+//! Generates the `#[derive(Params)]` struct, its `Default` impl,
+//! and any enum types needed for `EnumParam` fields.
 
 use crate::ast::{ParamDef, ParamOption, ParamType, PluginDef, PluginItem, SmoothingKind};
 
-/// Generate the full `PluginParams` struct with `#[derive(Params)]` and `Default` impl.
+/// Generate all enum type definitions and the `PluginParams` struct with `Default` impl.
 pub fn generate_params(plugin: &PluginDef) -> String {
     let params = collect_params(plugin);
     if params.is_empty() {
@@ -10,6 +11,14 @@ pub fn generate_params(plugin: &PluginDef) -> String {
     }
 
     let mut out = String::new();
+
+    // Emit enum types first (before the Params struct that references them)
+    for p in &params {
+        if let ParamType::Enum(variants) = &p.param_type {
+            out.push_str(&generate_enum_type(&p.name, variants));
+            out.push('\n');
+        }
+    }
 
     // Struct definition
     out.push_str("#[derive(Params)]\nstruct PluginParams {\n");
@@ -30,6 +39,30 @@ pub fn generate_params(plugin: &PluginDef) -> String {
     out.push_str("    }\n");
     out.push_str("}\n");
 
+    out
+}
+
+/// Generate a `#[derive(Enum, PartialEq, Eq, Clone, Copy, Debug)]` enum type.
+///
+/// For `param mode: enum [lowpass, highpass, bandpass, notch]` generates:
+/// ```ignore
+/// #[derive(Enum, PartialEq, Eq, Clone, Copy, Debug)]
+/// enum Mode {
+///     Lowpass,
+///     Highpass,
+///     Bandpass,
+///     Notch,
+/// }
+/// ```
+fn generate_enum_type(param_name: &str, variants: &[String]) -> String {
+    let type_name = capitalize(param_name);
+    let mut out = String::new();
+    out.push_str("#[derive(Enum, PartialEq, Eq, Clone, Copy, Debug)]\n");
+    out.push_str(&format!("enum {} {{\n", type_name));
+    for v in variants {
+        out.push_str(&format!("    {},\n", capitalize(v)));
+    }
+    out.push_str("}\n");
     out
 }
 
@@ -54,12 +87,12 @@ fn generate_empty_params() -> String {
 }
 
 /// Map a ParamDef to its Rust field type string.
-fn rust_param_type(param: &ParamDef) -> &'static str {
+fn rust_param_type(param: &ParamDef) -> String {
     match &param.param_type {
-        ParamType::Float => "FloatParam",
-        ParamType::Int => "IntParam",
-        ParamType::Bool => "BoolParam",
-        ParamType::Enum(_) => "FloatParam", // TODO: EnumParam in T02
+        ParamType::Float => "FloatParam".to_string(),
+        ParamType::Int => "IntParam".to_string(),
+        ParamType::Bool => "BoolParam".to_string(),
+        ParamType::Enum(_) => format!("EnumParam<{}>", capitalize(&param.name)),
     }
 }
 
@@ -68,6 +101,30 @@ fn is_db_param(param: &ParamDef) -> bool {
     param.options.iter().any(|(opt, _)| {
         matches!(opt, ParamOption::Unit(u) if u.eq_ignore_ascii_case("db"))
     })
+}
+
+/// Check if this parameter has a "Hz" unit — triggers log-skewed frequency range.
+fn is_hz_param(param: &ParamDef) -> bool {
+    param.options.iter().any(|(opt, _)| {
+        matches!(opt, ParamOption::Unit(u) if u.eq_ignore_ascii_case("hz"))
+    })
+}
+
+/// Check if this parameter has a "percentage" display format.
+fn is_percentage_display(param: &ParamDef) -> bool {
+    param.options.iter().any(|(opt, _)| {
+        matches!(opt, ParamOption::Display(d) if d.eq_ignore_ascii_case("percentage"))
+    })
+}
+
+/// Get the unit string for a parameter, if any.
+fn get_unit(param: &ParamDef) -> Option<&str> {
+    for (opt, _) in &param.options {
+        if let ParamOption::Unit(u) = opt {
+            return Some(u.as_str());
+        }
+    }
+    None
 }
 
 /// Extract the smoothing option if present.
@@ -135,6 +192,10 @@ fn generate_param_default(param: &ParamDef) -> String {
         ParamType::Float => {
             if is_db_param(param) {
                 generate_db_gain_param(name, &display_name, default_val, min, max, param)
+            } else if is_hz_param(param) {
+                generate_hz_param(name, &display_name, default_val, min, max, param)
+            } else if is_percentage_display(param) {
+                generate_percentage_param(name, &display_name, default_val, min, max, param)
             } else {
                 generate_float_param(name, &display_name, default_val, min, max, param)
             }
@@ -162,11 +223,40 @@ fn generate_param_default(param: &ParamDef) -> String {
                 "            {name}: BoolParam::new(\n                \"{display_name}\",\n                {default_bool},\n            ),\n",
             )
         }
-        ParamType::Enum(_) => {
-            // Placeholder — T02 handles enum params
-            format!("            {name}: todo!(\"enum param\"),\n")
+        ParamType::Enum(variants) => {
+            generate_enum_param_default(name, &display_name, variants, param)
         }
     }
+}
+
+/// Generate an EnumParam default: `EnumParam::new("Mode", Mode::Lowpass)`.
+fn generate_enum_param_default(
+    name: &str,
+    display_name: &str,
+    variants: &[String],
+    param: &ParamDef,
+) -> String {
+    let type_name = capitalize(name);
+
+    // Find the default variant from the param's default expression (Expr::Ident("lowpass"))
+    let default_variant = param
+        .default
+        .as_ref()
+        .and_then(|(expr, _)| {
+            if let crate::ast::Expr::Ident(id) = expr {
+                Some(capitalize(id))
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            // Fallback to first variant
+            variants.first().map(|v| capitalize(v)).unwrap_or_else(|| "Default".to_string())
+        });
+
+    format!(
+        "            {name}: EnumParam::new(\n                \"{display_name}\",\n                {type_name}::{default_variant},\n            ),\n",
+    )
 }
 
 /// Generate a dB-gain parameter using nih-plug's gain idiom:
@@ -216,6 +306,57 @@ fn generate_float_param(
 ) -> String {
     let mut s = format!(
         "            {name}: FloatParam::new(\n                \"{display_name}\",\n                {default_val:.1},\n                FloatRange::Linear {{ min: {min:.1}, max: {max:.1} }},\n            )",
+    );
+    if let Some(unit) = get_unit(param) {
+        s.push_str(&format!("\n            .with_unit(\" {}\")", unit));
+    }
+    if let Some((kind, ms)) = get_smoothing(param) {
+        s.push_str(&format!(
+            "\n            .with_smoother(SmoothingStyle::{}({:.1}))",
+            smoothing_style(kind),
+            ms
+        ));
+    }
+    s.push_str(",\n");
+    s
+}
+
+/// Generate a Hz-frequency parameter with logarithmic skewing.
+fn generate_hz_param(
+    name: &str,
+    display_name: &str,
+    default_val: f64,
+    min: f64,
+    max: f64,
+    param: &ParamDef,
+) -> String {
+    let mut s = format!(
+        "            {name}: FloatParam::new(\n                \"{display_name}\",\n                {default_val:.1},\n                FloatRange::Skewed {{\n                    min: {min:.1},\n                    max: {max:.1},\n                    factor: FloatRange::skew_factor(-2.5),\n                }},\n            )\n            .with_unit(\" Hz\")",
+    );
+    if let Some((kind, ms)) = get_smoothing(param) {
+        s.push_str(&format!(
+            "\n            .with_smoother(SmoothingStyle::{}({:.1}))",
+            smoothing_style(kind),
+            ms
+        ));
+    }
+    s.push_str(",\n");
+    s
+}
+
+/// Generate a percentage-display parameter with Linear range and "%" unit.
+fn generate_percentage_param(
+    name: &str,
+    display_name: &str,
+    default_val: f64,
+    min: f64,
+    max: f64,
+    param: &ParamDef,
+) -> String {
+    // Display as percentage: value is 0..1, display multiplied by 100 with "%" unit.
+    // Use value_to_string/string_to_value for the 100x conversion.
+    let mut s = format!(
+        "            {name}: FloatParam::new(\n                \"{display_name}\",\n                {default_val:.1},\n                FloatRange::Linear {{ min: {min:.1}, max: {max:.1} }},\n            )\n            .with_unit(\"%\")\n            .with_value_to_string(formatters::v2s_f32_percentage(1))\n            .with_string_to_value(formatters::s2v_f32_percentage())",
     );
     if let Some((kind, ms)) = get_smoothing(param) {
         s.push_str(&format!(

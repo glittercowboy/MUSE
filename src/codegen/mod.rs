@@ -9,13 +9,11 @@ pub mod params;
 pub mod plugin;
 pub mod process;
 
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ast::PluginDef;
 use crate::diagnostic::Diagnostic;
-use crate::dsp::primitives::DspPrimitive;
 use crate::resolve::ResolvedPlugin;
 use crate::span::Span;
 
@@ -44,13 +42,15 @@ pub fn generate_plugin(
     // Generate all code fragments
     let cargo_toml = cargo::generate_cargo_toml(plugin);
     let params_code = params::generate_params(plugin);
-    let plugin_code = plugin::generate_plugin_struct(plugin);
-    let process_body = process::generate_process(plugin);
 
-    // Collect used DSP primitives for helper generation
-    let mut used_primitives = HashSet::new();
-    used_primitives.insert(DspPrimitive::Gain); // gain.muse uses Gain
+    // Generate process body — also collects which DSP primitives are used
+    let (process_body, used_primitives) = process::generate_process(plugin);
+
+    // Generate DSP helpers based on which primitives are actually used
     let dsp_helpers = dsp::generate_dsp_helpers(&used_primitives);
+
+    // Generate plugin struct with DSP state fields based on used primitives
+    let plugin_code = plugin::generate_plugin_struct(plugin, &used_primitives);
 
     // Replace the process body placeholder in the plugin code
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
