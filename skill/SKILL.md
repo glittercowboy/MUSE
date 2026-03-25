@@ -133,7 +133,7 @@ If the user's intent is clear from their message, skip the question and route di
 | Create new plugin from description | `workflows/create-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/test-syntax.md`, `references/plugin-recipes.md` |
 | Fix compiler/test errors | `workflows/debug-errors.md` | `references/error-codes.md`, `references/cli-commands.md` |
 | Add features to existing plugin | `workflows/extend-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/test-syntax.md` |
-| Create plugin with custom GUI | `workflows/create-gui-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/plugin-recipes.md` |
+| Create plugin with custom GUI | `workflows/create-gui-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/test-syntax.md`, `references/cli-commands.md`, `references/error-codes.md`, `references/plugin-recipes.md` |
 
 ## Reference Files
 
