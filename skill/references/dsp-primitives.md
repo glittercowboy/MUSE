@@ -175,6 +175,7 @@ General-purpose audio processors.
 | `pan(position)` | `Number → Processor` | Processor | Stereo pan: -1.0 (left) to 1.0 (right) |
 | `delay(time)` | `Time → Processor` | Processor | Delay line |
 | `mix(dry, wet)` | `Signal, Signal → Signal` | Signal | Mix two signals (averages them) |
+| `semitones_to_ratio(semitones)` | `Number → Number` | Number | Convert semitones to frequency ratio (2^(st/12)) |
 
 ### Usage
 
@@ -191,6 +192,10 @@ mix(dry, wet) -> gain(param.mix) -> output
 input -> feedback {
   delay(100ms) -> lowpass(2000Hz) -> gain(0.7)
 } -> output
+
+// MPE pitch bend: convert semitones to frequency ratio
+let bent_freq = note.pitch * semitones_to_ratio(note.bend)
+let osc = saw(bent_freq)
 ```
 
 ## Quick Reference Table
@@ -203,6 +208,6 @@ input -> feedback {
 | Dynamics | `compressor` |
 | Modulation | `chorus` |
 | Waveshaping | `tanh`, `fold`, `bitcrush`, `clip` |
-| Utilities | `gain`, `pan`, `delay`, `mix` |
+| Utilities | `gain`, `pan`, `delay`, `mix`, `semitones_to_ratio` |
 
-**Total: 23 functions**
+**Total: 24 functions**

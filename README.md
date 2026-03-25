@@ -117,14 +117,14 @@ cp -R "./build/Warm Gain.clap" ~/Library/Audio/Plug-Ins/CLAP/
 
 ## Built-in DSP
 
-23 primitives — oscillators, filters, envelopes, dynamics, modulation, and utilities:
+24 primitives — oscillators, filters, envelopes, dynamics, modulation, and utilities:
 
 ```
 sine  saw  square  triangle  noise  pulse  lfo
 lowpass  highpass  bandpass  notch
 adsr  ar
 gain  pan  delay  mix  clip  tanh  fold  bitcrush
-chorus  compressor
+chorus  compressor  semitones_to_ratio
 ```
 
 Numbers carry domain types. The compiler won't let you pass milliseconds where Hertz belong:

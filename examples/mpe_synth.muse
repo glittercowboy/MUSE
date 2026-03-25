@@ -70,7 +70,8 @@ plugin "MPE Synth" {
 
   process {
     let env = adsr(param.attack, param.decay, param.sustain, param.release)
-    let osc = saw(note.pitch)
+    let bent_freq = note.pitch * semitones_to_ratio(note.bend)
+    let osc = saw(bent_freq)
     let pressure_gain = note.pressure * 0.5 + 0.5
     osc -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(pressure_gain) -> gain(param.volume) -> output
   }

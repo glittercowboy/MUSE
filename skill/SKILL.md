@@ -30,7 +30,7 @@ Signal chains use `->` to pipe audio left-to-right:
 input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 ```
 
-23 built-in DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`.
+24 built-in DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`, `semitones_to_ratio`.
 
 ## Key Constraints
 
@@ -139,7 +139,7 @@ If the user's intent is clear from their message, skip the question and route di
 |---|---|
 | `references/language-reference.md` | Complete syntax guide: plugin structure, params, process blocks, signal chains, routing, MIDI, metadata, type system |
 | `references/test-syntax.md` | Test block grammar, signal types, assertion properties, operators, JSON output format |
-| `references/dsp-primitives.md` | All 23 DSP functions by category with signatures and descriptions |
+| `references/dsp-primitives.md` | All 24 DSP functions by category with signatures and descriptions |
 | `references/error-codes.md` | E001–E011 with causes and fix patterns |
 | `references/cli-commands.md` | All 4 CLI commands with flags, exit codes, JSON output schemas |
 | `references/plugin-recipes.md` | 9 annotated example patterns: gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth |

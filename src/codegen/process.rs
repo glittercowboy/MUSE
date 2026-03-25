@@ -773,6 +773,11 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         return generate_compressor_call_with_input("*sample", args, ctx)
                     }
                     "adsr" => return generate_adsr_call(args, ctx),
+                    "semitones_to_ratio" => {
+                        ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
+                        let semitones = generate_expr(&args[0].0, ctx);
+                        return format!("2.0_f32.powf({} / 12.0)", semitones);
+                    }
                     _ => {}
                 }
             }

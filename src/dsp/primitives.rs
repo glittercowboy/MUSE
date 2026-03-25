@@ -52,6 +52,7 @@ pub enum DspPrimitive {
     Lfo,
     Pulse,
     Chorus,
+    SemitonesToRatio,
     Compressor,
 }
 
@@ -224,6 +225,13 @@ pub fn builtin_registry() -> DspRegistry {
             ],
             return_type: DspType::Processor,
             primitive: DspPrimitive::Chorus,
+        },
+        // semitones_to_ratio(semitones: Number) → Number — convert semitones to frequency ratio
+        DspFunction {
+            name: "semitones_to_ratio".into(),
+            params: vec![param("semitones", DspType::Number)],
+            return_type: DspType::Number,
+            primitive: DspPrimitive::SemitonesToRatio,
         },
         // compressor(threshold: Gain, ratio: Number) → Processor — dynamics compressor
         DspFunction {
