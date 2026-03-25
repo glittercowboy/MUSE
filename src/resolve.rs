@@ -61,6 +61,10 @@ struct Resolver<'a> {
     params: HashMap<String, ParamType>,
     /// Whether the plugin has MIDI note handlers (enables note.X resolution)
     has_midi_note: bool,
+    /// Whether the plugin has any MIDI declaration at all (instrument mode)
+    has_midi_decl: bool,
+    /// Whether a voice declaration was seen already
+    seen_voice_decl: bool,
     /// let-binding scope: name → resolved DspType
     scope: HashMap<String, DspType>,
     /// Span → DspType map (the output)
@@ -79,6 +83,8 @@ impl<'a> Resolver<'a> {
             registry,
             params: HashMap::new(),
             has_midi_note: false,
+            has_midi_decl: false,
+            seen_voice_decl: false,
             scope: HashMap::new(),
             type_map: HashMap::new(),
             diagnostics: Vec::new(),
@@ -101,6 +107,7 @@ impl<'a> Resolver<'a> {
                         .insert(param_def.name.clone(), param_def.param_type.clone());
                 }
                 PluginItem::MidiDecl(midi_decl) => {
+                    self.has_midi_decl = true;
                     for (midi_item, _) in &midi_decl.items {
                         if matches!(midi_item, MidiItem::NoteHandler(_)) {
                             self.has_midi_note = true;
@@ -111,7 +118,14 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Phase 2: resolve MIDI handlers first (they define note bindings)
+        // Phase 2: validate plugin-level declarations that depend on full plugin context
+        for (item, _span) in &plugin.items {
+            if let PluginItem::VoiceDecl(voice) = item {
+                self.validate_voice_decl(voice);
+            }
+        }
+
+        // Phase 3: resolve MIDI handlers first (they define note bindings)
         for (item, _span) in &plugin.items {
             if let PluginItem::MidiDecl(midi_decl) = item {
                 for (midi_item, _) in &midi_decl.items {
@@ -127,11 +141,48 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Phase 3: resolve process blocks
+        // Phase 4: resolve process blocks
         for (item, _span) in &plugin.items {
             if let PluginItem::ProcessBlock(block) = item {
                 self.resolve_statements(&block.body);
             }
+        }
+    }
+
+    fn validate_voice_decl(&mut self, voice: &VoiceConfig) {
+        if self.seen_voice_decl {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    voice.span,
+                    "duplicate voices declaration — only one `voices` declaration is allowed",
+                )
+                .with_suggestion("Remove the extra `voices` declaration from the plugin body."),
+            );
+            return;
+        }
+        self.seen_voice_decl = true;
+
+        if !self.has_midi_decl {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    voice.span,
+                    "voices declaration requires a midi block — polyphony is only valid for instruments",
+                )
+                .with_suggestion("Add a midi block or remove the `voices` declaration."),
+            );
+        }
+
+        if !(1..=128).contains(&voice.count) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    voice.span,
+                    format!("voice count must be between 1 and 128, got {}", voice.count),
+                )
+                .with_suggestion("Choose a voice count in the range 1..=128."),
+            );
         }
     }
 

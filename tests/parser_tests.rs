@@ -307,6 +307,57 @@ fn parse_chained_field_access() {
     }
 }
 
+#[test]
+fn parse_voices_declaration() {
+    let source = r#"plugin "Test" {
+  midi {
+    note {
+      let f = note.pitch
+    }
+  }
+  voices 8
+  process {
+    sine(440Hz) -> output
+  }
+}"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let voice = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::VoiceDecl(v) = item { Some(v) } else { None }
+    }).unwrap();
+
+    assert_eq!(voice.count, 8);
+}
+
+#[test]
+fn parse_voices_in_full_synth() {
+    let source = r#"plugin "Poly Synth" {
+  vendor "Muse Audio"
+  version "0.1.0"
+  input mono
+  output stereo
+  midi {
+    note {
+      let f = note.pitch
+    }
+  }
+  voices 8
+  param gain: float = 0.5 in 0.0..1.0
+  process {
+    sine(note.pitch) -> gain(param.gain) -> output
+  }
+}"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    assert!(plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::MidiDecl(_))));
+    assert!(plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::VoiceDecl(_))));
+    assert!(plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::ProcessBlock(_))));
+}
+
 // ── Parameter declaration tests ──────────────────────────────
 
 fn parse_param(param_source: &str) -> ParamDef {

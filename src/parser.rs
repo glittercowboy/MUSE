@@ -1125,6 +1125,26 @@ where
         })
 }
 
+// ── Voice declaration parser ─────────────────────────────────
+
+fn voice_config_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    just(Token::Voice)
+        .ignore_then(select! { Token::Number(n) => n }.filter(|n: &String| !n.contains('.')))
+        .map_with(|count, e| {
+            (
+                PluginItem::VoiceDecl(VoiceConfig {
+                    count: count.parse::<u32>().unwrap_or(0),
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1138,6 +1158,7 @@ where
         io_decl_parser(),
         param_decl_parser(),
         midi_decl_parser(),
+        voice_config_parser(),
         process_block_parser(),
         test_block_parser(),
     ))

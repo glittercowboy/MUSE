@@ -26,6 +26,7 @@ pub enum PluginItem {
     IoDecl(IoDecl),
     ParamDecl(Box<ParamDef>),
     MidiDecl(MidiDecl),
+    VoiceDecl(VoiceConfig),
     ProcessBlock(ProcessBlock),
     TestBlock(TestBlock),
 }
@@ -126,6 +127,13 @@ pub struct MidiDecl {
 pub enum MidiItem {
     NoteHandler(Vec<Spanned<Statement>>),
     CcHandler { cc_number: u32, body: Vec<Spanned<Statement>> },
+}
+
+/// `voices 8`
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceConfig {
+    pub count: u32,
+    pub span: Span,
 }
 
 // ── Parameters ───────────────────────────────────────────────

@@ -94,7 +94,7 @@ pub enum Token {
     Utility,
 
     // ── Reserved keywords ────────────────────────────────────
-    #[token("voice")]
+    #[token("voices")]
     Voice,
     #[token("poly")]
     Poly,
@@ -265,7 +265,7 @@ impl fmt::Display for Token {
             Token::Instrument => write!(f, "instrument"),
             Token::Analyzer => write!(f, "analyzer"),
             Token::Utility => write!(f, "utility"),
-            Token::Voice => write!(f, "voice"),
+            Token::Voice => write!(f, "voices"),
             Token::Poly => write!(f, "poly"),
             Token::Sample => write!(f, "sample"),
             Token::Import => write!(f, "import"),

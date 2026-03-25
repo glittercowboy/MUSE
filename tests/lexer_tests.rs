@@ -297,7 +297,7 @@ fn test_only_comments() {
 
 #[test]
 fn test_all_reserved_keywords() {
-    let tokens = lex_ok("voice poly sample import test feedback split merge bus");
+    let tokens = lex_ok("voices poly sample import test feedback split merge bus");
     assert_eq!(
         tokens,
         vec![

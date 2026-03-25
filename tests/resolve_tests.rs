@@ -81,6 +81,100 @@ fn synth_muse_resolves_without_errors() {
     assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
 }
 
+#[test]
+fn voices_without_midi_is_error() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output mono
+  voices 8
+  process {
+    input -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e010 = find_error(&diags, "E010");
+    assert!(
+        e010.message.contains("requires a midi block"),
+        "Expected midi requirement error, got: {}",
+        e010.message
+    );
+}
+
+#[test]
+fn voices_with_midi_is_ok() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output stereo
+  midi {
+    note {
+      let f = note.pitch
+    }
+  }
+  voices 8
+  process {
+    sine(note.pitch) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn voices_out_of_range_is_error() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output stereo
+  midi {
+    note {
+      let f = note.pitch
+    }
+  }
+  voices 129
+  process {
+    sine(note.pitch) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e010 = find_error(&diags, "E010");
+    assert!(
+        e010.message.contains("between 1 and 128"),
+        "Expected range error, got: {}",
+        e010.message
+    );
+}
+
+#[test]
+fn duplicate_voices_is_error() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output stereo
+  midi {
+    note {
+      let f = note.pitch
+    }
+  }
+  voices 8
+  voices 4
+  process {
+    sine(note.pitch) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e010 = find_error(&diags, "E010");
+    assert!(
+        e010.message.contains("duplicate voices declaration"),
+        "Expected duplicate voice declaration error, got: {}",
+        e010.message
+    );
+}
+
 // ── E003: Unknown function ───────────────────────────────────
 
 #[test]
