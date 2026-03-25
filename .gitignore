@@ -1,6 +1,7 @@
 
 # ── GSD baseline (auto-generated) ──
 .gsd
+.ideas/
 .DS_Store
 Thumbs.db
 *.swp

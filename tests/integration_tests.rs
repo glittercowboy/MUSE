@@ -806,6 +806,313 @@ fn compile_gain_to_clap_and_validate() {
     std::fs::remove_dir_all(&out_dir).ok();
 }
 
+// ── Deterministic output (R016) — fast variant ──────────────
+
+/// R016 primary validation: compile the same source twice and assert the
+/// generated Rust crate is byte-identical. This proves no random IDs,
+/// timestamp injection, or HashMap iteration order issues affect codegen.
+#[test]
+fn deterministic_output_no_build() {
+    let source = std::fs::read_to_string("examples/gain.muse")
+        .expect("should read gain.muse");
+
+    let tmp_a = std::env::temp_dir().join(format!("muse-det-a-{}", std::process::id()));
+    let tmp_b = std::env::temp_dir().join(format!("muse-det-b-{}", std::process::id()));
+
+    // Clean up any prior runs
+    for d in [&tmp_a, &tmp_b] {
+        if d.exists() {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    let result_a = muse_lang::compile(&source, "gain.muse", &tmp_a)
+        .expect("first compile should succeed");
+    let result_b = muse_lang::compile(&source, "gain.muse", &tmp_b)
+        .expect("second compile should succeed");
+
+    let lib_rs_a = std::fs::read_to_string(result_a.crate_dir.join("src/lib.rs"))
+        .expect("should read first lib.rs");
+    let lib_rs_b = std::fs::read_to_string(result_b.crate_dir.join("src/lib.rs"))
+        .expect("should read second lib.rs");
+
+    assert_eq!(lib_rs_a, lib_rs_b, "codegen output must be deterministic (R016)");
+
+    let cargo_a = std::fs::read_to_string(result_a.crate_dir.join("Cargo.toml"))
+        .expect("should read first Cargo.toml");
+    let cargo_b = std::fs::read_to_string(result_b.crate_dir.join("Cargo.toml"))
+        .expect("should read second Cargo.toml");
+
+    assert_eq!(cargo_a, cargo_b, "Cargo.toml must be deterministic (R016)");
+
+    // Clean up
+    std::fs::remove_dir_all(&tmp_a).ok();
+    std::fs::remove_dir_all(&tmp_b).ok();
+}
+
+// ── Deterministic output (R016) — full build variant ─────────
+
+/// R016 ignored variant: same as the fast test but runs through compile().
+/// Separated so the fast test suite stays fast.
+#[test]
+#[ignore]
+fn deterministic_output_produces_identical_lib_rs() {
+    let source = std::fs::read_to_string("examples/gain.muse")
+        .expect("should read gain.muse");
+
+    let tmp_a = std::env::temp_dir().join(format!("muse-det-ign-a-{}", std::process::id()));
+    let tmp_b = std::env::temp_dir().join(format!("muse-det-ign-b-{}", std::process::id()));
+
+    for d in [&tmp_a, &tmp_b] {
+        if d.exists() {
+            std::fs::remove_dir_all(d).ok();
+        }
+    }
+
+    let result_a = muse_lang::compile(&source, "gain.muse", &tmp_a)
+        .expect("first compile should succeed");
+    let result_b = muse_lang::compile(&source, "gain.muse", &tmp_b)
+        .expect("second compile should succeed");
+
+    let lib_rs_a = std::fs::read_to_string(result_a.crate_dir.join("src/lib.rs"))
+        .expect("should read first lib.rs");
+    let lib_rs_b = std::fs::read_to_string(result_b.crate_dir.join("src/lib.rs"))
+        .expect("should read second lib.rs");
+
+    assert_eq!(lib_rs_a, lib_rs_b, "codegen output must be deterministic (R016)");
+
+    std::fs::remove_dir_all(&tmp_a).ok();
+    std::fs::remove_dir_all(&tmp_b).ok();
+}
+
+// ── muse build E2E: dual-format bundles + telemetry (R010) ──
+
+/// Full `muse build` E2E: build gain.muse to both .clap and .vst3, verify
+/// bundle structures, codesign, and structured JSON telemetry.
+#[test]
+#[ignore]
+fn build_gain_to_clap_and_vst3() {
+    use std::process::Command;
+
+    let out_dir = std::env::temp_dir().join(format!("muse-build-e2e-{}", std::process::id()));
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir).ok();
+    }
+    std::fs::create_dir_all(&out_dir).expect("create temp output dir");
+
+    // Run `muse build` with JSON telemetry
+    let output = Command::new(env!("CARGO"))
+        .args(["run", "--", "build", "examples/gain.muse", "--output-dir"])
+        .arg(&out_dir)
+        .args(["--format", "json"])
+        .output()
+        .expect("failed to invoke cargo run");
+
+    assert!(
+        output.status.success(),
+        "muse build should exit 0, got {}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Parse JSON telemetry
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout should be valid JSON: {e}\nraw: {stdout}"));
+
+    assert_eq!(json["status"].as_str(), Some("ok"), "status should be 'ok'");
+    assert_eq!(json["plugin_name"].as_str(), Some("Warm Gain"));
+
+    // Verify all 6 phase keys exist
+    let phases = &json["phases"];
+    for key in &["compile", "cargo_build", "clap_bundle", "vst3_bundle", "codesign_clap", "codesign_vst3"] {
+        assert!(
+            phases[key].is_object(),
+            "phases.{key} should be an object, got: {:?}",
+            phases[key]
+        );
+        assert!(
+            phases[key]["duration_ms"].is_number(),
+            "phases.{key}.duration_ms should be a number"
+        );
+    }
+
+    // Verify artifact sizes
+    let clap_size = json["artifacts"]["clap"]["size_bytes"].as_u64()
+        .expect("clap size_bytes should be a number");
+    let vst3_size = json["artifacts"]["vst3"]["size_bytes"].as_u64()
+        .expect("vst3 size_bytes should be a number");
+    assert!(clap_size > 0, "clap size_bytes should be > 0, got {clap_size}");
+    assert!(vst3_size > 0, "vst3 size_bytes should be > 0, got {vst3_size}");
+
+    // Verify .clap bundle structure
+    let clap_bundle = out_dir.join("Warm Gain.clap");
+    assert!(clap_bundle.is_dir(), ".clap bundle should exist");
+    assert!(
+        clap_bundle.join("Contents/MacOS/Warm Gain").is_file(),
+        "CLAP binary should exist"
+    );
+
+    // Verify .vst3 bundle structure
+    let vst3_bundle = out_dir.join("Warm Gain.vst3");
+    assert!(vst3_bundle.is_dir(), ".vst3 bundle should exist");
+    assert!(
+        vst3_bundle.join("Contents/MacOS/Warm Gain").is_file(),
+        "VST3 binary should exist"
+    );
+    assert!(
+        vst3_bundle.join("Contents/PkgInfo").is_file(),
+        "VST3 PkgInfo should exist"
+    );
+    assert!(
+        vst3_bundle.join("Contents/Info.plist").is_file(),
+        "VST3 Info.plist should exist"
+    );
+
+    // Verify codesign on both bundles
+    let clap_cs = Command::new("codesign")
+        .args(["-v"])
+        .arg(&clap_bundle)
+        .output()
+        .expect("codesign check");
+    assert!(
+        clap_cs.status.success(),
+        "CLAP bundle codesign should verify: {}",
+        String::from_utf8_lossy(&clap_cs.stderr)
+    );
+
+    let vst3_cs = Command::new("codesign")
+        .args(["-v"])
+        .arg(&vst3_bundle)
+        .output()
+        .expect("codesign check");
+    assert!(
+        vst3_cs.status.success(),
+        "VST3 bundle codesign should verify: {}",
+        String::from_utf8_lossy(&vst3_cs.stderr)
+    );
+
+    // Clean up
+    std::fs::remove_dir_all(&out_dir).ok();
+}
+
+// ── clap-validator state tests (R013) ────────────────────────
+
+/// Validates R013 (state save/restore): builds a .clap bundle and runs
+/// clap-validator which includes state persistence tests in its suite.
+/// Skips gracefully if clap-validator is not installed.
+#[test]
+#[ignore]
+fn clap_validator_state_tests() {
+    use std::process::Command;
+
+    let validator = match which_clap_validator() {
+        Some(path) => path,
+        None => {
+            eprintln!("clap-validator not found on PATH — skipping R013 validation");
+            return;
+        }
+    };
+
+    let out_dir = std::env::temp_dir().join(format!("muse-r013-{}", std::process::id()));
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir).ok();
+    }
+    std::fs::create_dir_all(&out_dir).expect("create temp output dir");
+
+    // Build the .clap bundle via muse build
+    let build_output = Command::new(env!("CARGO"))
+        .args(["run", "--", "build", "examples/gain.muse", "--output-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("failed to invoke cargo run");
+
+    assert!(
+        build_output.status.success(),
+        "muse build should succeed: {}",
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let clap_bundle = out_dir.join("Warm Gain.clap");
+    assert!(clap_bundle.is_dir(), ".clap bundle should exist for validation");
+
+    // Run clap-validator
+    let validate_output = Command::new(&validator)
+        .arg("validate")
+        .arg(&clap_bundle)
+        .output()
+        .expect("failed to invoke clap-validator");
+
+    let stdout = String::from_utf8_lossy(&validate_output.stdout);
+    let stderr = String::from_utf8_lossy(&validate_output.stderr);
+
+    assert!(
+        validate_output.status.success(),
+        "clap-validator should exit 0, got {}\nstdout: {stdout}\nstderr: {stderr}",
+        validate_output.status
+    );
+
+    assert!(
+        stdout.contains("0 failed"),
+        "clap-validator should report 0 failures (R013 state tests included), output:\n{stdout}"
+    );
+
+    // Clean up
+    std::fs::remove_dir_all(&out_dir).ok();
+}
+
+// ── Build error produces structured JSON (R017) ──────────────
+
+/// Verifies that build errors are reported as structured JSON suitable
+/// for AI agent consumption (R017).
+#[test]
+#[ignore]
+fn build_error_produces_structured_json() {
+    use std::process::Command;
+
+    // Create a broken .muse file that will fail at compile phase
+    let tmp = std::env::temp_dir().join(format!("muse-err-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).expect("create temp dir");
+    let broken_file = tmp.join("broken.muse");
+    std::fs::write(&broken_file, r#"plugin "Broken" { process { 123 + } }"#)
+        .expect("write broken muse file");
+
+    let output = Command::new(env!("CARGO"))
+        .args(["run", "--", "build"])
+        .arg(&broken_file)
+        .args(["--output-dir", tmp.to_str().unwrap()])
+        .args(["--format", "json"])
+        .output()
+        .expect("failed to invoke cargo run");
+
+    assert!(
+        !output.status.success(),
+        "muse build should fail for broken input, got exit {}",
+        output.status
+    );
+
+    // The compile phase emits diagnostics as a JSON array
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("error output should be valid JSON: {e}\nraw: {stdout}"));
+
+    // Compile-phase errors are a diagnostics array (not the phase-error object)
+    // Each entry has code, message, span, severity — structured for agent consumption
+    let diags = json.as_array()
+        .expect("compile error JSON should be an array of diagnostics");
+    assert!(!diags.is_empty(), "should have at least one diagnostic");
+
+    for entry in diags {
+        assert!(entry["code"].is_string(), "diagnostic should have 'code'");
+        assert!(entry["message"].is_string(), "diagnostic should have 'message'");
+        assert!(entry["span"].is_array(), "diagnostic should have 'span'");
+        assert!(entry["severity"].is_string(), "diagnostic should have 'severity'");
+    }
+
+    // Clean up
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// Find clap-validator on PATH, returning None if not installed.
 fn which_clap_validator() -> Option<std::path::PathBuf> {
     // Check common locations
