@@ -3,6 +3,8 @@ pub mod span;
 pub mod ast;
 pub mod parser;
 pub mod diagnostic;
+pub mod types;
+pub mod dsp;
 
 // Re-export primary public API
 pub use ast::PluginDef;
