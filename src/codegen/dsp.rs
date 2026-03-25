@@ -16,14 +16,34 @@ use crate::dsp::primitives::{DspPrimitive, FilterKind};
 pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
     let mut out = String::new();
 
-    let needs_biquad = used_primitives.iter().any(|p| {
+    let needs_lowpass = used_primitives.iter().any(|p| {
         matches!(p, DspPrimitive::Filter(FilterKind::Lowpass))
     });
+    let needs_bandpass = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Filter(FilterKind::Bandpass))
+    });
+    let needs_highpass = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Filter(FilterKind::Highpass))
+    });
+    let needs_any_biquad = needs_lowpass || needs_bandpass || needs_highpass;
 
-    if needs_biquad {
+    if needs_any_biquad {
         out.push_str(&generate_biquad_state());
         out.push('\n');
+    }
+
+    if needs_lowpass {
         out.push_str(&generate_process_biquad());
+        out.push('\n');
+    }
+
+    if needs_bandpass {
+        out.push_str(&generate_process_biquad_bandpass());
+        out.push('\n');
+    }
+
+    if needs_highpass {
+        out.push_str(&generate_process_biquad_highpass());
         out.push('\n');
     }
 
@@ -83,6 +103,76 @@ fn process_biquad(state: &mut BiquadState, input: f32, cutoff: f32, resonance: f
     let a2 = a2 / a0;
 
     // Direct Form I
+    let output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2;
+
+    state.x2 = state.x1;
+    state.x1 = input;
+    state.y2 = state.y1;
+    state.y1 = output;
+
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_biquad_bandpass function using the Audio EQ Cookbook BPF formula.
+fn generate_process_biquad_bandpass() -> String {
+    r#"/// Process a single sample through a bandpass biquad filter (constant skirt gain).
+fn process_biquad_bandpass(state: &mut BiquadState, input: f32, cutoff: f32, resonance: f32, sample_rate: f32) -> f32 {
+    let omega = 2.0 * std::f32::consts::PI * cutoff / sample_rate;
+    let sin_omega = omega.sin();
+    let cos_omega = omega.cos();
+    let alpha = sin_omega / (2.0 * (resonance + 0.001));
+
+    let b0 = alpha;
+    let b1 = 0.0_f32;
+    let b2 = -alpha;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_omega;
+    let a2 = 1.0 - alpha;
+
+    let b0 = b0 / a0;
+    let b1 = b1 / a0;
+    let b2 = b2 / a0;
+    let a1 = a1 / a0;
+    let a2 = a2 / a0;
+
+    let output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2;
+
+    state.x2 = state.x1;
+    state.x1 = input;
+    state.y2 = state.y1;
+    state.y1 = output;
+
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_biquad_highpass function using the Audio EQ Cookbook HPF formula.
+fn generate_process_biquad_highpass() -> String {
+    r#"/// Process a single sample through a highpass biquad filter.
+fn process_biquad_highpass(state: &mut BiquadState, input: f32, cutoff: f32, resonance: f32, sample_rate: f32) -> f32 {
+    let omega = 2.0 * std::f32::consts::PI * cutoff / sample_rate;
+    let sin_omega = omega.sin();
+    let cos_omega = omega.cos();
+    let alpha = sin_omega / (2.0 * (resonance + 0.001));
+
+    let b0 = (1.0 + cos_omega) / 2.0;
+    let b1 = -(1.0 + cos_omega);
+    let b2 = (1.0 + cos_omega) / 2.0;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_omega;
+    let a2 = 1.0 - alpha;
+
+    let b0 = b0 / a0;
+    let b1 = b1 / a0;
+    let b2 = b2 / a0;
+    let a1 = a1 / a0;
+    let a2 = a2 / a0;
+
     let output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2;
 
     state.x2 = state.x1;

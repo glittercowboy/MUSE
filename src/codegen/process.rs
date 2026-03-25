@@ -5,20 +5,36 @@
 //! - Let bindings: `let filtered = input -> lowpass(param.cutoff, param.resonance)`
 //! - If-expressions: `if param.drive > 0.0 { ... } else { ... }`
 //! - Multi-DSP chains: lowpass, gain, tanh, mix
+//! - Split/merge parallel routing: `split { branch1; branch2 } -> merge`
 
 use std::collections::HashSet;
 
 use crate::ast::{BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp};
 use crate::dsp::primitives::DspPrimitive;
 
+/// Information collected during process generation that downstream codegen needs.
+pub struct ProcessInfo {
+    /// DSP primitives used (for state struct generation and DSP helpers).
+    pub used_primitives: HashSet<DspPrimitive>,
+    /// Per-branch filter uses: (split_id, branch_idx, FilterKind).
+    /// Used by plugin.rs to generate per-branch biquad state fields.
+    pub branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
+    /// Whether any code needs per-channel indexing (e.g. filter state).
+    pub needs_channel_idx: bool,
+}
+
 /// Generate the process() body (the code that replaces `{PROCESS_BODY}` in the Plugin trait).
 ///
 /// Also collects which DSP primitives are used so the caller can generate
 /// appropriate state structs and helper functions.
-pub fn generate_process(plugin: &PluginDef) -> (String, HashSet<DspPrimitive>) {
+pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
     let process_block = match find_process_block(plugin) {
         Some(pb) => pb,
-        None => return ("        ProcessStatus::Normal".to_string(), HashSet::new()),
+        None => return ("        ProcessStatus::Normal".to_string(), ProcessInfo {
+            used_primitives: HashSet::new(),
+            branch_filters: Vec::new(),
+            needs_channel_idx: false,
+        }),
     };
 
     let mut ctx = ProcessContext::new();
@@ -65,7 +81,12 @@ pub fn generate_process(plugin: &PluginDef) -> (String, HashSet<DspPrimitive>) {
     out.push_str("        }\n");
     out.push_str("        ProcessStatus::Normal");
 
-    (out, ctx.used_primitives)
+    let info = ProcessInfo {
+        used_primitives: ctx.used_primitives,
+        branch_filters: ctx.branch_filters,
+        needs_channel_idx,
+    };
+    (out, info)
 }
 
 /// Find the process block in the plugin's items.
@@ -84,6 +105,19 @@ struct ProcessContext {
     smoothed_params: Vec<String>,
     /// DSP primitives used (for state struct generation).
     used_primitives: HashSet<DspPrimitive>,
+    /// Lines emitted as side-effects during expression generation (e.g. split branch processing).
+    /// Drained into the statement output by generate_statement.
+    pending_lines: Vec<String>,
+    /// Names of the last split's branch result variables — consumed by merge.
+    split_branch_vars: Vec<String>,
+    /// Counter for generating unique split IDs when multiple splits exist.
+    split_counter: usize,
+    /// Current branch context: Some((split_id, branch_idx)) when inside a split branch.
+    /// Controls per-branch state field naming in biquad calls.
+    current_branch: Option<(usize, usize)>,
+    /// Records (split_id, branch_idx, FilterKind) for all filter uses inside branches.
+    /// Used by plugin.rs to generate per-branch state fields.
+    branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
 }
 
 impl ProcessContext {
@@ -91,6 +125,11 @@ impl ProcessContext {
         Self {
             smoothed_params: Vec::new(),
             used_primitives: HashSet::new(),
+            pending_lines: Vec::new(),
+            split_branch_vars: Vec::new(),
+            split_counter: 0,
+            current_branch: None,
+            branch_filters: Vec::new(),
         }
     }
 
@@ -99,6 +138,11 @@ impl ProcessContext {
         if !self.smoothed_params.contains(&name.to_string()) {
             self.smoothed_params.push(name.to_string());
         }
+    }
+
+    /// Drain pending side-effect lines into a target vec.
+    fn drain_pending(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_lines)
     }
 }
 
@@ -114,28 +158,40 @@ fn generate_statement(
     match stmt {
         Statement::Let { name, value } => {
             let expr_code = generate_chain_value(&value.0, ctx);
-            vec![format!("let {} = {};", name, expr_code)]
+            let mut lines = ctx.drain_pending();
+            lines.push(format!("let {} = {};", name, expr_code));
+            lines
         }
         Statement::Expr(expr) => {
             // Check if this is a chain ending in `output` — that's a write to the output buffer
             if let Some(source) = extract_output_chain(&expr.0, ctx) {
-                vec![format!("*sample = {};", source)]
+                let mut lines = ctx.drain_pending();
+                lines.push(format!("*sample = {};", source));
+                lines
             } else if is_last_in_block {
                 // Last expression in block — might still need to become an output write
                 let code = generate_chain_value(&expr.0, ctx);
-                vec![format!("{};", code)]
+                let mut lines = ctx.drain_pending();
+                lines.push(format!("{};", code));
+                lines
             } else {
                 let code = generate_chain_value(&expr.0, ctx);
-                vec![format!("{};", code)]
+                let mut lines = ctx.drain_pending();
+                lines.push(format!("{};", code));
+                lines
             }
         }
         Statement::Assign { target, value } => {
             let expr_code = generate_chain_value(&value.0, ctx);
-            vec![format!("{} = {};", target, expr_code)]
+            let mut lines = ctx.drain_pending();
+            lines.push(format!("{} = {};", target, expr_code));
+            lines
         }
         Statement::Return(expr) => {
             let expr_code = generate_chain_value(&expr.0, ctx);
-            vec![format!("return {};", expr_code)]
+            let mut lines = ctx.drain_pending();
+            lines.push(format!("return {};", expr_code));
+            lines
         }
     }
 }
@@ -162,6 +218,24 @@ fn generate_chain_value(expr: &Expr, ctx: &mut ProcessContext) -> String {
         if matches!(&right.0, Expr::Ident(name) if name == "output") {
             return generate_chain_value(&left.0, ctx);
         }
+        // Check if right is Merge — sum the split branch variables
+        if matches!(&right.0, Expr::Merge) {
+            // The left side should have been a split (or chain ending in split)
+            // which populated split_branch_vars. Just evaluate the left to trigger that.
+            let _left_val = generate_chain_value(&left.0, ctx);
+            // Sum all branch result variables
+            if ctx.split_branch_vars.is_empty() {
+                return "0.0_f32".to_string();
+            }
+            let sum_expr = format!("({})", ctx.split_branch_vars.join(" + "));
+            ctx.split_branch_vars.clear();
+            return sum_expr;
+        }
+        // Check if right is Split — generate parallel branches
+        if let Expr::Split { branches } = &right.0 {
+            let input_code = generate_chain_value(&left.0, ctx);
+            return generate_split_branches(&input_code, branches, ctx);
+        }
         let input_code = generate_chain_value(&left.0, ctx);
         return generate_dsp_call_with_input(&right.0, &input_code, ctx);
     }
@@ -180,21 +254,9 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                     let amount = generate_expr_as_param(&args[0].0, ctx);
                     format!("{} * {}", input_code, amount)
                 }
-                "lowpass" => {
-                    ctx.used_primitives.insert(DspPrimitive::Filter(
-                        crate::dsp::primitives::FilterKind::Lowpass,
-                    ));
-                    let cutoff = generate_expr_as_param(&args[0].0, ctx);
-                    let resonance = if args.len() > 1 {
-                        generate_expr_as_param(&args[1].0, ctx)
-                    } else {
-                        "0.707".to_string()
-                    };
-                    format!(
-                        "process_biquad(&mut self.biquad_state[channel_idx], {}, {}, {}, self.sample_rate)",
-                        input_code, cutoff, resonance
-                    )
-                }
+                "lowpass" => generate_filter_call(input_code, "lowpass", args, ctx),
+                "bandpass" => generate_filter_call(input_code, "bandpass", args, ctx),
+                "highpass" => generate_filter_call(input_code, "highpass", args, ctx),
                 "tanh" => {
                     ctx.used_primitives.insert(DspPrimitive::Tanh);
                     format!("({}).tanh()", input_code)
@@ -214,6 +276,130 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
     }
     // Not a function call — might be just an ident
     generate_expr(expr, ctx)
+}
+
+/// Generate a biquad filter call (lowpass, bandpass, highpass) with branch-aware state naming.
+fn generate_filter_call(
+    input_code: &str,
+    filter_name: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    let filter_kind = match filter_name {
+        "lowpass" => crate::dsp::primitives::FilterKind::Lowpass,
+        "bandpass" => crate::dsp::primitives::FilterKind::Bandpass,
+        "highpass" => crate::dsp::primitives::FilterKind::Highpass,
+        _ => crate::dsp::primitives::FilterKind::Lowpass,
+    };
+    ctx.used_primitives.insert(DspPrimitive::Filter(filter_kind));
+
+    let cutoff = generate_expr_as_param(&args[0].0, ctx);
+    let resonance = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.707".to_string()
+    };
+
+    // Determine the state field name based on branch context
+    let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
+        ctx.branch_filters.push((split_id, branch_idx, filter_kind));
+        format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
+    } else {
+        "self.biquad_state[channel_idx]".to_string()
+    };
+
+    // Use filter-type-specific function for the correct coefficient formula
+    let fn_name = match filter_name {
+        "bandpass" => "process_biquad_bandpass",
+        "highpass" => "process_biquad_highpass",
+        _ => "process_biquad",
+    };
+
+    format!(
+        "{}(&mut {}, {}, {}, {}, self.sample_rate)",
+        fn_name, state_field, input_code, cutoff, resonance
+    )
+}
+
+/// Generate code for parallel split branches.
+///
+/// Emits per-branch variable declarations and processing chains into pending_lines,
+/// then stores the branch result variable names for merge to consume.
+fn generate_split_branches(
+    input_code: &str,
+    branches: &[Vec<Spanned<Statement>>],
+    ctx: &mut ProcessContext,
+) -> String {
+    let split_id = ctx.split_counter;
+    ctx.split_counter += 1;
+
+    let mut branch_vars = Vec::new();
+
+    for (branch_idx, branch_stmts) in branches.iter().enumerate() {
+        let branch_var = format!("split{}_branch{}", split_id, branch_idx);
+
+        // Copy input to branch variable
+        ctx.pending_lines.push(format!("let mut {} = {};", branch_var, input_code));
+
+        // Set branch context for state field naming
+        ctx.current_branch = Some((split_id, branch_idx));
+
+        // Process each statement in the branch.
+        // Each branch is typically a single chain expression like:
+        //   lowpass(400Hz) -> gain(param.drive) -> tanh()
+        // The chain's input is the branch variable, and its output replaces it.
+        for (stmt, _) in branch_stmts {
+            match stmt {
+                Statement::Expr(expr) => {
+                    // Generate the chain with the branch var as the implicit input
+                    let result = generate_branch_chain(&expr.0, &branch_var, ctx);
+                    let pending = ctx.drain_pending();
+                    for line in pending {
+                        ctx.pending_lines.push(line);
+                    }
+                    ctx.pending_lines.push(format!("{} = {};", branch_var, result));
+                }
+                Statement::Let { name, value } => {
+                    let result = generate_branch_chain(&value.0, &branch_var, ctx);
+                    let pending = ctx.drain_pending();
+                    for line in pending {
+                        ctx.pending_lines.push(line);
+                    }
+                    ctx.pending_lines.push(format!("let {} = {};", name, result));
+                }
+                _ => {}
+            }
+        }
+
+        // Clear branch context
+        ctx.current_branch = None;
+
+        branch_vars.push(branch_var);
+    }
+
+    ctx.split_branch_vars = branch_vars.clone();
+
+    // Return a placeholder — the actual value comes from merge
+    // If someone chains directly off a split without merge, return the last branch
+    branch_vars.last().cloned().unwrap_or_else(|| "0.0_f32".to_string())
+}
+
+/// Generate code for a chain expression within a split branch.
+/// The branch variable serves as the implicit input (replaces `input`).
+fn generate_branch_chain(expr: &Expr, branch_var: &str, ctx: &mut ProcessContext) -> String {
+    match expr {
+        Expr::Binary { left, op: BinOp::Chain, right } => {
+            let input = generate_branch_chain(&left.0, branch_var, ctx);
+            generate_dsp_call_with_input(&right.0, &input, ctx)
+        }
+        Expr::FnCall { .. } => {
+            // Standalone function call at the start of a branch chain —
+            // the input is the branch variable
+            generate_dsp_call_with_input(expr, branch_var, ctx)
+        }
+        Expr::Ident(name) if name == "input" => branch_var.to_string(),
+        _ => generate_expr(expr, ctx),
+    }
 }
 
 /// Generate code for an expression.
@@ -272,9 +458,65 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
+                        let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
+                            ctx.branch_filters.push((split_id, branch_idx, crate::dsp::primitives::FilterKind::Lowpass));
+                            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
+                        } else {
+                            "self.biquad_state[channel_idx]".to_string()
+                        };
                         return format!(
-                            "process_biquad(&mut self.biquad_state[channel_idx], *sample, {}, {}, self.sample_rate)",
-                            cutoff, resonance
+                            "process_biquad(&mut {}, *sample, {}, {}, self.sample_rate)",
+                            state_field, cutoff, resonance
+                        );
+                    }
+                    "bandpass" => {
+                        ctx.used_primitives.insert(DspPrimitive::Filter(
+                            crate::dsp::primitives::FilterKind::Bandpass,
+                        ));
+                        let cutoff = if !args.is_empty() {
+                            generate_expr_as_param(&args[0].0, ctx)
+                        } else {
+                            "1000.0".to_string()
+                        };
+                        let resonance = if args.len() > 1 {
+                            generate_expr_as_param(&args[1].0, ctx)
+                        } else {
+                            "0.707".to_string()
+                        };
+                        let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
+                            ctx.branch_filters.push((split_id, branch_idx, crate::dsp::primitives::FilterKind::Bandpass));
+                            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
+                        } else {
+                            "self.biquad_state[channel_idx]".to_string()
+                        };
+                        return format!(
+                            "process_biquad_bandpass(&mut {}, *sample, {}, {}, self.sample_rate)",
+                            state_field, cutoff, resonance
+                        );
+                    }
+                    "highpass" => {
+                        ctx.used_primitives.insert(DspPrimitive::Filter(
+                            crate::dsp::primitives::FilterKind::Highpass,
+                        ));
+                        let cutoff = if !args.is_empty() {
+                            generate_expr_as_param(&args[0].0, ctx)
+                        } else {
+                            "1000.0".to_string()
+                        };
+                        let resonance = if args.len() > 1 {
+                            generate_expr_as_param(&args[1].0, ctx)
+                        } else {
+                            "0.707".to_string()
+                        };
+                        let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
+                            ctx.branch_filters.push((split_id, branch_idx, crate::dsp::primitives::FilterKind::Highpass));
+                            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
+                        } else {
+                            "self.biquad_state[channel_idx]".to_string()
+                        };
+                        return format!(
+                            "process_biquad_highpass(&mut {}, *sample, {}, {}, self.sample_rate)",
+                            state_field, cutoff, resonance
                         );
                     }
                     "tanh" => {
@@ -331,6 +573,20 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
         Expr::Grouped(inner) => {
             let inner_code = generate_expr(&inner.0, ctx);
             format!("({})", inner_code)
+        }
+        Expr::Split { branches } => {
+            // Standalone split (not chained from an input) — use *sample as input
+            generate_split_branches("*sample", branches, ctx)
+        }
+        Expr::Merge => {
+            // Standalone merge — sum whatever branch vars exist
+            if ctx.split_branch_vars.is_empty() {
+                "0.0_f32".to_string()
+            } else {
+                let sum = format!("({})", ctx.split_branch_vars.join(" + "));
+                ctx.split_branch_vars.clear();
+                sum
+            }
         }
         _ => "todo!()".to_string(),
     }

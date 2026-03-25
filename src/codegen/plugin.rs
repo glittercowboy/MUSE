@@ -1,12 +1,11 @@
 //! Generates the Plugin struct, Plugin/ClapPlugin/Vst3Plugin trait impls, and export macros.
 
-use std::collections::HashSet;
-
 use crate::ast::{
     ClapItem, ChannelSpec, FormatBlock, IoDirection, MetadataKey, MetadataValue,
     PluginDef, PluginItem, Vst3Item,
 };
-use crate::dsp::primitives::{DspPrimitive, FilterKind};
+use crate::dsp::primitives::DspPrimitive;
+use crate::codegen::process::ProcessInfo;
 
 /// Info extracted from the plugin AST needed for code generation.
 struct PluginInfo {
@@ -35,16 +34,29 @@ struct Vst3Info {
 
 /// Generate the complete Plugin struct, trait impls, and export macros.
 ///
-/// `used_primitives` controls which DSP state fields are added to the struct
-/// (e.g., biquad filter state for lowpass).
-pub fn generate_plugin_struct(plugin: &PluginDef, used_primitives: &HashSet<DspPrimitive>) -> String {
+/// `process_info` provides which DSP primitives are used and per-branch filter state requirements.
+pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) -> String {
     let info = extract_plugin_info(plugin);
     let clap = extract_clap_info(plugin);
     let vst3 = extract_vst3_info(plugin);
 
-    let needs_biquad = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(FilterKind::Lowpass))
-    });
+    let used_primitives = &process_info.used_primitives;
+
+    // Check for non-branch (top-level) biquad usage
+    let needs_top_level_biquad = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Filter(_))
+    }) && process_info.branch_filters.is_empty();
+
+    // Collect unique (split_id, branch_idx) pairs that need biquad state
+    let mut branch_biquad_fields: Vec<(usize, usize)> = Vec::new();
+    for &(split_id, branch_idx, _) in &process_info.branch_filters {
+        let key = (split_id, branch_idx);
+        if !branch_biquad_fields.contains(&key) {
+            branch_biquad_fields.push(key);
+        }
+    }
+
+    let needs_any_biquad = needs_top_level_biquad || !branch_biquad_fields.is_empty();
     let num_channels = info.output_channels.max(info.input_channels) as usize;
 
     let mut out = String::new();
@@ -52,11 +64,19 @@ pub fn generate_plugin_struct(plugin: &PluginDef, used_primitives: &HashSet<DspP
     // Plugin struct
     out.push_str(&format!("struct {} {{\n", info.struct_name));
     out.push_str("    params: Arc<PluginParams>,\n");
-    if needs_biquad {
+    if needs_top_level_biquad {
         out.push_str(&format!(
             "    biquad_state: [BiquadState; {}],\n",
             num_channels
         ));
+    }
+    for &(split_id, branch_idx) in &branch_biquad_fields {
+        out.push_str(&format!(
+            "    split{}_branch{}_biquad: [BiquadState; {}],\n",
+            split_id, branch_idx, num_channels
+        ));
+    }
+    if needs_any_biquad {
         out.push_str("    sample_rate: f32,\n");
     }
     out.push_str("}\n\n");
@@ -66,17 +86,25 @@ pub fn generate_plugin_struct(plugin: &PluginDef, used_primitives: &HashSet<DspP
         "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n            params: Arc::new(PluginParams::default()),\n",
         info.struct_name
     ));
-    if needs_biquad {
+    if needs_top_level_biquad {
         out.push_str(&format!(
             "            biquad_state: [BiquadState::default(); {}],\n",
             num_channels
         ));
+    }
+    for &(split_id, branch_idx) in &branch_biquad_fields {
+        out.push_str(&format!(
+            "            split{}_branch{}_biquad: [BiquadState::default(); {}],\n",
+            split_id, branch_idx, num_channels
+        ));
+    }
+    if needs_any_biquad {
         out.push_str("            sample_rate: 44100.0,\n");
     }
     out.push_str("        }\n    }\n}\n\n");
 
     // Plugin trait impl
-    out.push_str(&generate_plugin_trait(&info, needs_biquad));
+    out.push_str(&generate_plugin_trait(&info, needs_any_biquad));
 
     // ClapPlugin trait impl + export macro
     if let Some(ref clap) = clap {

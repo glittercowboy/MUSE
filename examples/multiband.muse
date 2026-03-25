@@ -7,6 +7,17 @@ plugin "Multiband FX" {
   version  "0.1.0"
   category effect
 
+  clap {
+    id          "dev.museaudio.multiband-fx"
+    description "A multiband effect processor"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseMultibandFx"
+    subcategories   [Fx, EQ]
+  }
+
   input  stereo
   output stereo
 

@@ -44,13 +44,13 @@ pub fn generate_plugin(
     let params_code = params::generate_params(plugin);
 
     // Generate process body — also collects which DSP primitives are used
-    let (process_body, used_primitives) = process::generate_process(plugin);
+    let (process_body, process_info) = process::generate_process(plugin);
 
     // Generate DSP helpers based on which primitives are actually used
-    let dsp_helpers = dsp::generate_dsp_helpers(&used_primitives);
+    let dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
 
     // Generate plugin struct with DSP state fields based on used primitives
-    let plugin_code = plugin::generate_plugin_struct(plugin, &used_primitives);
+    let plugin_code = plugin::generate_plugin_struct(plugin, &process_info);
 
     // Replace the process body placeholder in the plugin code
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
