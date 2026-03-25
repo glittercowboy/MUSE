@@ -8,3 +8,9 @@ pub mod host_plugin;
 
 #[cfg(target_os = "macos")]
 pub mod audio;
+
+#[cfg(target_os = "macos")]
+pub mod watcher;
+
+#[cfg(target_os = "macos")]
+pub mod reload;

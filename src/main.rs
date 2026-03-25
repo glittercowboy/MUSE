@@ -16,7 +16,10 @@ use std::path::PathBuf;
 use std::process;
 use std::time::Instant;
 
-use muse_lang::{compile, compile_check, preview_html, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
+use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
+
+#[cfg(target_os = "macos")]
+use muse_lang::preview::{audio::AudioHost, reload::ReloadPipeline, watcher::FileWatcher};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -935,6 +938,14 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
                     other => return Err(format!("unknown format '{other}', expected 'json'")),
                 }
             }
+            // Stub: --input flag for future S02/S03 (audio input routing)
+            "--input" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--input requires a value".into());
+                }
+                eprintln!("[muse preview] --input not yet implemented, ignoring");
+            }
             arg if arg.starts_with('-') => {
                 return Err(format!("unknown option '{arg}'"));
             }
@@ -955,10 +966,8 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
 
 #[cfg(target_os = "macos")]
 fn cmd_preview(args: &[String]) {
-    use objc2::{MainThreadMarker, MainThreadOnly};
-    use objc2_app_kit::{NSApplication, NSWindow, NSWindowStyleMask, NSBackingStoreType};
-    use objc2_foundation::{NSRect, NSPoint, NSSize, NSString};
-    use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     let opts = match parse_preview_args(args) {
         Ok(o) => o,
@@ -968,87 +977,158 @@ fn cmd_preview(args: &[String]) {
         }
     };
 
-    let source = match std::fs::read_to_string(&opts.file) {
-        Ok(s) => s,
+    // Resolve to absolute path for the watcher
+    let source_path = match opts.file.canonicalize() {
+        Ok(p) => p,
         Err(e) => {
-            eprintln!("muse: cannot read '{}': {e}", opts.file.display());
+            eprintln!("muse: cannot resolve '{}': {e}", opts.file.display());
             process::exit(2);
         }
     };
 
-    let filename = opts.file.display().to_string();
+    // Set up reload pipeline
+    let pipeline = match ReloadPipeline::new() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("muse: {e}");
+            process::exit(2);
+        }
+    };
 
-    let html = match preview_html(&source, &filename) {
-        Ok(h) => h,
-        Err(diags) => {
-            if opts.json_format {
-                println!("{}", diagnostics_to_json(&diags));
-            } else {
-                render_ariadne(&diags, &source, &filename);
-            }
+    // Initial build — must succeed before we start audio
+    eprintln!("[muse preview] compiling '{}'...", opts.file.display());
+    let (plugin, result) = match pipeline.initial_build(&source_path, 44100.0) {
+        Ok(r) => r,
+        Err(e) => {
+            pipeline.format_error(&e, &source_path, opts.json_format);
             process::exit(1);
         }
     };
 
-    // Extract GUI size from AST for window dimensions
-    let (width, height) = extract_gui_size(&source);
-
-    // ── Native macOS window with WKWebView ──
-    let mtm = unsafe { MainThreadMarker::new_unchecked() };
-
-    let app = NSApplication::sharedApplication(mtm);
-
-    let style = NSWindowStyleMask::Titled
-        | NSWindowStyleMask::Closable
-        | NSWindowStyleMask::Miniaturizable;
-
-    let frame = NSRect::new(
-        NSPoint::new(200.0, 200.0),
-        NSSize::new(width as f64, height as f64),
-    );
-
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            frame,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
+    // Start audio playback
+    let audio_host = match AudioHost::start(Some(plugin)) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("muse: audio failed: {e}");
+            process::exit(2);
+        }
     };
 
-    let plugin_name = opts.file.file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Muse Preview".to_string());
-    let title = NSString::from_str(&format!("{plugin_name} — Muse Preview"));
-    window.setTitle(&title);
+    let device_rate = audio_host.sample_rate();
 
-    let config = unsafe { WKWebViewConfiguration::new(mtm) };
-    let webview_frame = NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(width as f64, height as f64),
-    );
-    let webview = unsafe {
-        WKWebView::initWithFrame_configuration(
-            WKWebView::alloc(mtm),
-            webview_frame,
-            &config,
-        )
+    // If device sample rate differs from our initial build (44100), rebuild at
+    // the correct rate. Common: macOS devices often run at 48000 Hz.
+    if (device_rate - 44100.0).abs() > 1.0 {
+        eprintln!(
+            "[muse preview] device sample rate is {} Hz, rebuilding...",
+            device_rate
+        );
+        let old_plugin = audio_host.take_plugin();
+        match pipeline.initial_build(&source_path, device_rate) {
+            Ok((new_plugin, _)) => {
+                audio_host.swap_plugin(new_plugin);
+                drop(old_plugin);
+            }
+            Err(e) => {
+                // Put old plugin back — shouldn't fail since initial build worked
+                eprintln!("[muse preview] rebuild at device rate failed: {e}");
+                if let Some(p) = old_plugin {
+                    audio_host.swap_plugin(p);
+                }
+            }
+        }
+    }
+
+    if opts.json_format {
+        let json = serde_json::json!({
+            "event": "started",
+            "plugin_name": result.plugin_name,
+            "sample_rate": device_rate,
+            "channels": audio_host.num_channels(),
+        });
+        println!("{}", serde_json::to_string(&json).unwrap());
+    } else {
+        eprintln!(
+            "[muse preview] playing '{}' — edit and save to hot-reload, Ctrl+C to stop",
+            result.plugin_name
+        );
+    }
+
+    // Set up Ctrl+C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let running_clone = Arc::clone(&running);
+    ctrlc::set_handler(move || {
+        running_clone.store(false, Ordering::SeqCst);
+    })
+    .unwrap_or_else(|e| {
+        eprintln!("[muse preview] warning: could not set Ctrl+C handler: {e}");
+    });
+
+    // Start file watcher
+    let watcher = match FileWatcher::start(&source_path) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("muse: file watcher failed: {e}");
+            process::exit(2);
+        }
     };
 
-    // Load the HTML string into the webview
-    let html_ns = NSString::from_str(&html);
-    let base_url: Option<&objc2_foundation::NSURL> = None;
-    unsafe { webview.loadHTMLString_baseURL(&html_ns, base_url) };
+    // Main loop: wait for file changes and reload
+    while running.load(Ordering::SeqCst) {
+        match watcher.rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(_change) => {
+                if opts.json_format {
+                    let json = serde_json::json!({ "event": "file_changed" });
+                    println!("{}", serde_json::to_string(&json).unwrap());
+                } else {
+                    eprintln!("[muse preview] file changed, reloading...");
+                }
 
-    // WKWebView → NSView via into_super (WKWebView > NSView > NSResponder > NSObject)
-    let webview_view: objc2::rc::Retained<objc2_app_kit::NSView> =
-        objc2::rc::Retained::into_super(webview);
-    window.setContentView(Some(&webview_view));
-    window.center();
-    window.makeKeyAndOrderFront(None);
+                // Snapshot current param state (brief lock, doesn't block audio)
+                let param_snapshot = {
+                    let guard = audio_host.plugin_slot().lock().unwrap();
+                    guard
+                        .as_ref()
+                        .map(|p| (p.param_count(), p.snapshot_params()))
+                };
 
-    app.run();
+                // Run the full reload pipeline (compile + build + codesign + load)
+                // This happens outside the mutex — audio keeps playing the old plugin
+                match pipeline.reload(&source_path, device_rate, param_snapshot) {
+                    Ok(new_plugin) => {
+                        // Swap the new plugin in (brief lock)
+                        let _old = audio_host.swap_plugin(new_plugin);
+                        // Old plugin dropped here — calls muse_preview_destroy + dlclose
+
+                        if opts.json_format {
+                            let json = serde_json::json!({ "event": "reloaded" });
+                            println!("{}", serde_json::to_string(&json).unwrap());
+                        }
+                    }
+                    Err(e) => {
+                        // Print error but keep playing the old plugin
+                        pipeline.format_error(&e, &source_path, opts.json_format);
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                eprintln!("[muse preview] file watcher disconnected");
+                break;
+            }
+        }
+    }
+
+    // Graceful shutdown
+    if opts.json_format {
+        let json = serde_json::json!({ "event": "stopped" });
+        println!("{}", serde_json::to_string(&json).unwrap());
+    } else {
+        eprintln!("[muse preview] stopped");
+    }
+    process::exit(0);
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1059,6 +1139,7 @@ fn cmd_preview(_args: &[String]) {
 
 /// Extract GUI size from source by parsing the AST.
 /// Returns (width, height), defaulting to (600, 400).
+#[allow(dead_code)]
 fn extract_gui_size(source: &str) -> (u32, u32) {
     let (ast, errors) = muse_lang::parse(source);
     if !errors.is_empty() {

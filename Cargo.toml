@@ -20,6 +20,15 @@ version = "0.15"
 [target.'cfg(target_os = "macos")'.dependencies.libloading]
 version = "0.8"
 
+[target.'cfg(target_os = "macos")'.dependencies.ctrlc]
+version = "3.5"
+
+[target.'cfg(target_os = "macos")'.dependencies.notify]
+version = "7"
+
+[target.'cfg(target_os = "macos")'.dependencies.notify-debouncer-mini]
+version = "0.5"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSObject", "NSURL", "NSRunLoop"] }
