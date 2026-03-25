@@ -657,3 +657,105 @@ fn temporal_assertion_codegen_contains_range_slice() {
         "Generated code should compute peak on the sliced range"
     );
 }
+
+#[test]
+fn frequency_assert_codegen_has_fft_helper_and_rustfft() {
+    let source = r#"
+    plugin "FFT Plugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+
+        clap {
+            id "dev.test.fft"
+            description "FFT test"
+            features [audio_effect, stereo]
+        }
+
+        vst3 {
+            id "FFTTestPlugin001"
+            subcategories [Fx]
+        }
+
+        process { input }
+
+        test "spectral test" {
+            input sine 440 Hz 4096 samples
+            assert frequency 440Hz > -20.0
+        }
+    }
+    "#;
+
+    let (cargo_toml, lib_rs) = generate_code_strings(source);
+
+    // Cargo.toml should include rustfft dev-dependency
+    assert!(
+        cargo_toml.contains("rustfft"),
+        "Cargo.toml should contain rustfft dev-dependency when frequency assertions present"
+    );
+    assert!(
+        cargo_toml.contains("[dev-dependencies]"),
+        "Cargo.toml should have [dev-dependencies] section"
+    );
+
+    // lib.rs should contain the FFT helper and assertion
+    assert!(
+        lib_rs.contains("compute_magnitude_at_freq"),
+        "Generated code should contain compute_magnitude_at_freq helper"
+    );
+    assert!(
+        lib_rs.contains("FftPlanner"),
+        "Generated code should use FftPlanner from rustfft"
+    );
+    assert!(
+        lib_rs.contains("use rustfft"),
+        "Generated code should import rustfft"
+    );
+}
+
+#[test]
+fn no_fft_when_no_frequency_assertions() {
+    let source = r#"
+    plugin "Plain Plugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+
+        clap {
+            id "dev.test.plain"
+            description "Plain test"
+            features [audio_effect, stereo]
+        }
+
+        vst3 {
+            id "PlainPlugin00001"
+            subcategories [Fx]
+        }
+
+        process { input }
+
+        test "basic test" {
+            input silence 512 samples
+            assert output.rms < -60.0
+        }
+    }
+    "#;
+
+    let (cargo_toml, lib_rs) = generate_code_strings(source);
+
+    // Cargo.toml should NOT include rustfft when no frequency assertions
+    assert!(
+        !cargo_toml.contains("rustfft"),
+        "Cargo.toml should not contain rustfft when no frequency assertions"
+    );
+    assert!(
+        !cargo_toml.contains("[dev-dependencies]"),
+        "Cargo.toml should not have [dev-dependencies] when not needed"
+    );
+
+    // lib.rs should NOT contain FFT helper
+    assert!(
+        !lib_rs.contains("compute_magnitude_at_freq"),
+        "Generated code should not contain FFT helper when no frequency assertions"
+    );
+}

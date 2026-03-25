@@ -392,6 +392,8 @@ pub enum TestProperty {
     InputPeak,
     OutputRmsIn(u64, u64),
     OutputPeakIn(u64, u64),
+    /// FFT-based magnitude at a specific frequency: `assert frequency 440Hz > -20dB`
+    Frequency(f64),
 }
 
 /// Comparison operators for test assertions.

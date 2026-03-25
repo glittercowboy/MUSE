@@ -1301,3 +1301,38 @@ fn temporal_rms_in_parsed() {
         other => panic!("Expected Assert with OutputPeakIn, got {:?}", other),
     }
 }
+
+#[test]
+fn frequency_assert_parsed() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "spectral test" {
+            input sine 440 Hz 4096 samples
+            assert frequency 440Hz > -20.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).expect("Should have a TestBlock");
+
+    assert_eq!(tb.statements.len(), 2);
+
+    match &tb.statements[1].0 {
+        TestStatement::Assert(assert) => {
+            assert_eq!(assert.property, TestProperty::Frequency(440.0));
+            assert_eq!(assert.op, TestOp::GreaterThan);
+            assert!((assert.value - (-20.0)).abs() < f64::EPSILON);
+        }
+        other => panic!("Expected Assert with Frequency, got {:?}", other),
+    }
+}

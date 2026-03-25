@@ -6,11 +6,12 @@ use crate::ast::PluginDef;
 ///
 /// The package name is derived from the plugin name: lowercased, spaces → hyphens.
 /// Depends on nih-plug from git (pinned commit for reproducibility).
-pub fn generate_cargo_toml(plugin: &PluginDef) -> String {
+/// When `needs_fft` is true, adds rustfft as a dev-dependency for spectral assertions.
+pub fn generate_cargo_toml(plugin: &PluginDef, needs_fft: bool) -> String {
     let pkg_name = plugin_name_to_package(&plugin.name);
     let version = extract_metadata(plugin, "version").unwrap_or_else(|| "0.1.0".to_string());
 
-    format!(
+    let mut toml = format!(
         r#"[package]
 name = "{pkg_name}"
 version = "{version}"
@@ -22,7 +23,13 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149ec4d" }}
 "#,
-    )
+    );
+
+    if needs_fft {
+        toml.push_str("\n[dev-dependencies]\nrustfft = \"6\"\n");
+    }
+
+    toml
 }
 
 /// Convert a plugin display name to a Cargo package name.

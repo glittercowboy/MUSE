@@ -14,7 +14,7 @@ pub mod test;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ast::{PluginDef, PluginItem};
+use crate::ast::{PluginDef, PluginItem, TestProperty, TestStatement};
 use crate::diagnostic::Diagnostic;
 use crate::resolve::ResolvedPlugin;
 use crate::span::Span;
@@ -39,7 +39,8 @@ pub fn generate_plugin(
         return Err(diagnostics);
     }
 
-    let cargo_toml = cargo::generate_cargo_toml(plugin);
+    let needs_fft = has_frequency_assertions(plugin);
+    let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft);
     let params_code = params::generate_params(plugin);
     let voice_count = find_voice_count(plugin);
     let unison_config = find_unison_config(plugin);
@@ -226,4 +227,20 @@ fn assemble_lib_rs(
 
     out.push_str(plugin_code);
     out
+}
+
+/// Check if any test block contains a frequency assertion (requiring rustfft dev-dependency).
+fn has_frequency_assertions(plugin: &PluginDef) -> bool {
+    plugin.items.iter().any(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item {
+            tb.statements.iter().any(|(stmt, _)| {
+                matches!(
+                    stmt,
+                    TestStatement::Assert(a) if matches!(a.property, TestProperty::Frequency(_))
+                )
+            })
+        } else {
+            false
+        }
+    })
 }

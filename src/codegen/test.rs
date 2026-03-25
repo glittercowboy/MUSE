@@ -43,11 +43,25 @@ pub fn generate_test_module(plugin: &PluginDef, process_info: &ProcessInfo) -> S
     let mut out = String::new();
     out.push_str("\n#[cfg(test)]\n#[allow(unused_variables, dead_code)]\nmod tests {\n    use super::*;\n\n");
 
+    // Check if any test block has frequency assertions (needs rustfft)
+    let needs_fft = test_blocks.iter().any(|tb| {
+        tb.statements.iter().any(|(stmt, _)| {
+            matches!(
+                stmt,
+                TestStatement::Assert(a) if matches!(a.property, TestProperty::Frequency(_))
+            )
+        })
+    });
+
+    if needs_fft {
+        out.push_str("    use rustfft::{FftPlanner, num_complex::Complex};\n\n");
+    }
+
     // Generate the mock ProcessContext (parameterized by struct name)
     out.push_str(&generate_mock_process_context(&struct_name));
 
     // Generate helper functions (parameterized by struct name)
-    out.push_str(&generate_helpers(&struct_name));
+    out.push_str(&generate_helpers(&struct_name, needs_fft));
 
     // Generate each test function
     for tb in &test_blocks {
@@ -103,8 +117,8 @@ fn generate_mock_process_context(struct_name: &str) -> String {
 }
 
 /// Generate helper functions for buffer creation and measurement.
-fn generate_helpers(struct_name: &str) -> String {
-    format!(
+fn generate_helpers(struct_name: &str, needs_fft: bool) -> String {
+    let mut out = format!(
         r#"    const TEST_SAMPLE_RATE: f32 = 44100.0;
     const TEST_CHANNELS: usize = 2;
 
@@ -183,7 +197,31 @@ fn generate_helpers(struct_name: &str) -> String {
 
 "#,
         s = struct_name,
-    )
+    );
+
+    if needs_fft {
+        out.push_str(&format!(
+            r#"    /// Compute the magnitude (in dB) of a specific frequency bin via FFT.
+    #[cfg(test)]
+    fn compute_magnitude_at_freq(data: &[f32], target_freq: f64, sample_rate: f64) -> f32 {{
+        use rustfft::{{FftPlanner, num_complex::Complex}};
+        let n = data.len();
+        if n == 0 {{ return -f32::INFINITY; }}
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(n);
+        let mut buffer: Vec<Complex<f32>> = data.iter().map(|&s| Complex {{ re: s, im: 0.0 }}).collect();
+        fft.process(&mut buffer);
+        let bin_index = ((target_freq * n as f64) / sample_rate).round() as usize;
+        if bin_index >= n / 2 {{ return -f32::INFINITY; }}
+        let magnitude = buffer[bin_index].norm() / (n as f32 / 2.0);
+        if magnitude <= 0.0 {{ -f32::INFINITY }} else {{ 20.0 * magnitude.log10() }}
+    }}
+
+"#
+        ));
+    }
+
+    out
 }
 
 /// Generate one `#[test]` function from a TestBlock.
@@ -384,6 +422,14 @@ fn generate_assertion(
                  let {db_var} = peak_to_db({var});\n",
             ));
             (var, db_var, format!("output.peak_in {}..{}", start, end))
+        }
+        TestProperty::Frequency(freq) => {
+            let var = format!("freq_mag_{}", freq as u64);
+            let db_var = var.clone(); // compute_magnitude_at_freq already returns dB
+            preamble.push_str(&format!(
+                "        let {var} = compute_magnitude_at_freq(&output[0], {freq:.1}, TEST_SAMPLE_RATE as f64);\n",
+            ));
+            (var, db_var, format!("frequency {}Hz", freq))
         }
     };
 

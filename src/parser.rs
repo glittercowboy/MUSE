@@ -1105,8 +1105,8 @@ where
 
     let assert_stmt = just(Token::Assert)
         .ignore_then(test_property)
-        .then(test_op)
-        .then(test_number)
+        .then(test_op.clone())
+        .then(test_number.clone())
         .map_with(|((property, op), value), e| {
             (
                 TestStatement::Assert(TestAssert {
@@ -1133,6 +1133,28 @@ where
                 _ => unreachable!(),
             };
             (TestStatement::SafetyAssert(check), e.span())
+        });
+
+    // assert frequency <number>Hz <op> <value>  — FFT magnitude at a frequency bin
+    let frequency_assert_stmt = just(Token::Assert)
+        .ignore_then(
+            select! { Token::Ident(s) => s }.filter(|s: &String| s == "frequency"),
+        )
+        .ignore_then(select! { Token::Number(n) => n })
+        .then_ignore(just(Token::UnitHz))
+        .then(test_op)
+        .then(test_number)
+        .map_with(|((freq_str, op), value), e| {
+            let freq: f64 = freq_str.parse().unwrap_or(440.0);
+            (
+                TestStatement::Assert(TestAssert {
+                    property: TestProperty::Frequency(freq),
+                    op,
+                    value,
+                    tolerance: None,
+                }),
+                e.span(),
+            )
         });
 
     // note on <note> <velocity> at <timing>
@@ -1177,7 +1199,7 @@ where
             )
         });
 
-    let test_stmt = choice((input_stmt, set_stmt, safety_assert_stmt, assert_stmt, note_on_stmt, note_off_stmt));
+    let test_stmt = choice((input_stmt, set_stmt, safety_assert_stmt, frequency_assert_stmt, assert_stmt, note_on_stmt, note_off_stmt));
 
     just(Token::Test)
         .ignore_then(select! { Token::StringLiteral(s) => s })
