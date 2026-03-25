@@ -1,0 +1,96 @@
+// GUI Compressor — Tier 2 + CSS compressor with dark neon-themed editor.
+// Demonstrates: reduction meter, value displays, knob layout, panels,
+// and Tier 3 CSS glow effects. A meaningfully different GUI from all
+// existing gui_* examples (different plugin type, DSP chain, widget set).
+
+plugin "Neon Crush" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.neon-crush"
+    description "A dynamics compressor with dark neon-themed GUI"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseNeonCrsh1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param threshold: float = 0.5 in 0.01..1.0 {
+    smoothing logarithmic 10ms
+  }
+
+  param ratio: float = 4.0 in 1.0..20.0 {
+    smoothing linear 5ms
+  }
+
+  param makeup: float = 0.0 in -12.0..24.0 {
+    smoothing logarithmic 30ms
+    unit "dB"
+  }
+
+  param dry_wet: float = 1.0 in 0.0..1.0 {
+    smoothing linear 10ms
+    display "percentage"
+  }
+
+  gui {
+    theme dark
+    accent "#00FFAA"
+    size 860 520
+
+    layout vertical {
+      panel "Gain Reduction" {
+        layout horizontal {
+          reduction
+          meter makeup
+        }
+      }
+      panel "Dynamics" {
+        layout horizontal {
+          knob threshold { label "Threshold" class "neon-knob" }
+          knob ratio { label "Ratio" class "neon-knob" }
+          knob makeup { label "Makeup" class "neon-knob" }
+          knob dry_wet { label "Mix" class "neon-knob" }
+        }
+      }
+      panel "Readout" {
+        layout horizontal {
+          value threshold
+          value ratio
+          value makeup
+          value dry_wet
+        }
+      }
+    }
+
+    css ".neon-knob canvas { filter: drop-shadow(0 0 12px var(--accent)); } body { background: linear-gradient(180deg, #0a0a0f, #101020); } .panel { border: 1px solid rgba(0, 255, 170, 0.15); box-shadow: 0 0 20px rgba(0, 255, 170, 0.05); }"
+  }
+
+  process {
+    let compressed = input -> compressor(param.threshold, param.ratio)
+    compressed -> gain(param.makeup) -> gain(param.dry_wet) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "compressor passes signal" {
+    input  sine 440Hz 1024 samples
+    set    param.threshold = 0.3
+    set    param.ratio = 4.0
+    set    param.makeup = 0.0
+    set    param.dry_wet = 1.0
+    assert output.peak > 0.0
+  }
+}
