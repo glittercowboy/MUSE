@@ -488,3 +488,172 @@ fn unison_synth_cargo_check() {
 
     assert_cargo_check(&crate_dir);
 }
+
+#[test]
+fn note_on_codegen_contains_note_event_and_vecdeque() {
+    let source = r#"
+    plugin "Test Synth" {
+        vendor "Test"
+        input mono
+        output stereo
+
+        clap {
+            id "dev.test.synth"
+            description "Test synth"
+            features [instrument, stereo]
+        }
+
+        vst3 {
+            id "TestSynth00001"
+            subcategories [Instrument, Synth]
+        }
+
+        midi {
+            note {
+                let freq = note.pitch
+                let vel = note.velocity
+                let gate = note.gate
+            }
+        }
+
+        param attack: float = 10.0 in 0.5..5000.0 { unit "ms" }
+        param decay: float = 200.0 in 1.0..5000.0 { unit "ms" }
+        param sustain: float = 0.7 in 0.0..1.0
+        param release: float = 300.0 in 1.0..10000.0 { unit "ms" }
+
+        process {
+            let env = adsr(param.attack, param.decay, param.sustain, param.release)
+            saw(note.pitch) -> gain(env) -> output
+        }
+
+        test "note produces sound" {
+            note on 69 0.8 at 0
+            note off 69 at 4096
+            input silence 8192 samples
+            assert output.rms > -20.0
+        }
+    }
+    "#;
+
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(
+        lib_rs.contains("VecDeque"),
+        "Generated code should use VecDeque for event queue"
+    );
+    assert!(
+        lib_rs.contains("NoteEvent::NoteOn"),
+        "Generated code should contain NoteEvent::NoteOn for injected events"
+    );
+    assert!(
+        lib_rs.contains("NoteEvent::NoteOff"),
+        "Generated code should contain NoteEvent::NoteOff for injected events"
+    );
+    assert!(
+        lib_rs.contains("push_back"),
+        "Generated code should push events to the VecDeque"
+    );
+    assert!(
+        lib_rs.contains("pop_front"),
+        "Generated code should pop events from the VecDeque via next_event"
+    );
+}
+
+#[test]
+fn safety_assert_codegen_contains_nan_denormal_inf_checks() {
+    let source = r#"
+    plugin "Safe Plugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+
+        clap {
+            id "dev.test.safe"
+            description "Safety test"
+            features [audio_effect, stereo]
+        }
+
+        vst3 {
+            id "SafePlugin00001"
+            subcategories [Fx]
+        }
+
+        process { input }
+
+        test "safety checks" {
+            input silence 512 samples
+            assert no_nan
+            assert no_denormal
+            assert no_inf
+        }
+    }
+    "#;
+
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(
+        lib_rs.contains("is_nan()"),
+        "Generated code should contain is_nan() check"
+    );
+    assert!(
+        lib_rs.contains("MIN_POSITIVE"),
+        "Generated code should contain MIN_POSITIVE for denormal detection"
+    );
+    assert!(
+        lib_rs.contains("is_infinite()"),
+        "Generated code should contain is_infinite() check"
+    );
+    assert!(
+        lib_rs.contains("MUSE_TEST_FAIL"),
+        "Generated code should emit MUSE_TEST_FAIL on failure"
+    );
+}
+
+#[test]
+fn temporal_assertion_codegen_contains_range_slice() {
+    let source = r#"
+    plugin "Temporal Plugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+
+        clap {
+            id "dev.test.temporal"
+            description "Temporal test"
+            features [audio_effect, stereo]
+        }
+
+        vst3 {
+            id "TempoPlugin00001"
+            subcategories [Fx]
+        }
+
+        process { input }
+
+        test "temporal checks" {
+            input silence 1024 samples
+            assert output.rms_in 0..256 > -10.0
+            assert output.peak_in 256..512 < -60.0
+        }
+    }
+    "#;
+
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(
+        lib_rs.contains("output[0][0..256]"),
+        "Generated code should slice output for rms_in range"
+    );
+    assert!(
+        lib_rs.contains("output[0][256..512]"),
+        "Generated code should slice output for peak_in range"
+    );
+    assert!(
+        lib_rs.contains("compute_rms"),
+        "Generated code should compute RMS on the sliced range"
+    );
+    assert!(
+        lib_rs.contains("compute_peak"),
+        "Generated code should compute peak on the sliced range"
+    );
+}

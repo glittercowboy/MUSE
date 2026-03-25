@@ -1061,13 +1061,29 @@ where
 
     // assert <property> <op> <value>
     // property: output.rms | output.peak | input.rms | input.peak
+    //           output.rms_in N..M | output.peak_in N..M  (temporal range)
     let test_property = choice((
         just(Token::Output)
             .ignore_then(just(Token::Dot))
             .ignore_then(select! { Token::Ident(s) => s })
-            .map(|field| match field.as_str() {
-                "rms" => TestProperty::OutputRms,
-                "peak" => TestProperty::OutputPeak,
+            .then(
+                // Optional range for temporal assertions: N..M
+                select! { Token::Number(n) => n }
+                    .then_ignore(just(Token::DotDot))
+                    .then(select! { Token::Number(n) => n })
+                    .or_not(),
+            )
+            .map(|(field, range)| match (field.as_str(), range) {
+                ("rms_in", Some((start, end))) => TestProperty::OutputRmsIn(
+                    start.parse().unwrap_or(0),
+                    end.parse().unwrap_or(0),
+                ),
+                ("peak_in", Some((start, end))) => TestProperty::OutputPeakIn(
+                    start.parse().unwrap_or(0),
+                    end.parse().unwrap_or(0),
+                ),
+                ("rms", _) => TestProperty::OutputRms,
+                ("peak", _) => TestProperty::OutputPeak,
                 _ => TestProperty::OutputRms, // fallback
             }),
         just(Token::Input)
@@ -1103,7 +1119,65 @@ where
             )
         });
 
-    let test_stmt = choice((input_stmt, set_stmt, assert_stmt));
+    // assert no_nan | assert no_denormal | assert no_inf
+    let safety_assert_stmt = just(Token::Assert)
+        .ignore_then(
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "no_nan" || s == "no_denormal" || s == "no_inf"),
+        )
+        .map_with(|check_name, e| {
+            let check = match check_name.as_str() {
+                "no_nan" => SafetyCheck::NoNan,
+                "no_denormal" => SafetyCheck::NoDenormal,
+                "no_inf" => SafetyCheck::NoInf,
+                _ => unreachable!(),
+            };
+            (TestStatement::SafetyAssert(check), e.span())
+        });
+
+    // note on <note> <velocity> at <timing>
+    let note_on_stmt = just(Token::Note)
+        .ignore_then(
+            select! { Token::Ident(s) => s }.filter(|s: &String| s == "on"),
+        )
+        .ignore_then(select! { Token::Number(n) => n })
+        .then(select! { Token::Number(n) => n })
+        .then_ignore(
+            select! { Token::Ident(s) => s }.filter(|s: &String| s == "at"),
+        )
+        .then(select! { Token::Number(n) => n })
+        .map_with(|((note_str, vel_str), timing_str), e| {
+            (
+                TestStatement::NoteOn {
+                    note: note_str.parse::<u8>().unwrap_or(69),
+                    velocity: vel_str.parse::<f64>().unwrap_or(0.8),
+                    timing: timing_str.parse::<u64>().unwrap_or(0),
+                },
+                e.span(),
+            )
+        });
+
+    // note off <note> at <timing>
+    let note_off_stmt = just(Token::Note)
+        .ignore_then(
+            select! { Token::Ident(s) => s }.filter(|s: &String| s == "off"),
+        )
+        .ignore_then(select! { Token::Number(n) => n })
+        .then_ignore(
+            select! { Token::Ident(s) => s }.filter(|s: &String| s == "at"),
+        )
+        .then(select! { Token::Number(n) => n })
+        .map_with(|(note_str, timing_str), e| {
+            (
+                TestStatement::NoteOff {
+                    note: note_str.parse::<u8>().unwrap_or(69),
+                    timing: timing_str.parse::<u64>().unwrap_or(0),
+                },
+                e.span(),
+            )
+        });
+
+    let test_stmt = choice((input_stmt, set_stmt, safety_assert_stmt, assert_stmt, note_on_stmt, note_off_stmt));
 
     just(Token::Test)
         .ignore_then(select! { Token::StringLiteral(s) => s })

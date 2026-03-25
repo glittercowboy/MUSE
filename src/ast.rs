@@ -332,6 +332,24 @@ pub enum TestStatement {
     Input(TestInput),
     Set(TestSet),
     Assert(TestAssert),
+    SafetyAssert(SafetyCheck),
+    NoteOn {
+        note: u8,
+        velocity: f64,
+        timing: u64,
+    },
+    NoteOff {
+        note: u8,
+        timing: u64,
+    },
+}
+
+/// Safety check variants for `assert no_nan`, `assert no_denormal`, `assert no_inf`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SafetyCheck {
+    NoNan,
+    NoDenormal,
+    NoInf,
 }
 
 /// `input <signal> <count> samples`
@@ -372,6 +390,8 @@ pub enum TestProperty {
     OutputPeak,
     InputRms,
     InputPeak,
+    OutputRmsIn(u64, u64),
+    OutputPeakIn(u64, u64),
 }
 
 /// Comparison operators for test assertions.

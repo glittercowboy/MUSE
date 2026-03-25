@@ -11,8 +11,8 @@
 //! that the `muse test` CLI can parse into structured results.
 
 use crate::ast::{
-    ParamOption, ParamType, PluginDef, PluginItem, TestBlock, TestOp, TestProperty, TestSignal,
-    TestStatement,
+    ParamOption, ParamType, PluginDef, PluginItem, TestBlock, TestOp, TestProperty,
+    TestSignal, TestStatement,
 };
 use crate::codegen::process::ProcessInfo;
 
@@ -59,10 +59,14 @@ pub fn generate_test_module(plugin: &PluginDef, process_info: &ProcessInfo) -> S
 }
 
 /// Generate a minimal mock ProcessContext for testing.
+///
+/// Uses a VecDeque-based event queue so instrument tests can inject
+/// MIDI NoteOn/NoteOff events via `note on` / `note off` statements.
 fn generate_mock_process_context(struct_name: &str) -> String {
     format!(
         r#"    struct TestProcessContext {{
         transport: Transport,
+        events: std::collections::VecDeque<PluginNoteEvent<{s}>>,
     }}
 
     impl TestProcessContext {{
@@ -78,7 +82,7 @@ fn generate_mock_process_context(struct_name: &str) -> String {
             transport.tempo = Some(120.0);
             transport.time_sig_numerator = Some(4);
             transport.time_sig_denominator = Some(4);
-            Self {{ transport }}
+            Self {{ transport, events: std::collections::VecDeque::new() }}
         }}
     }}
 
@@ -87,7 +91,7 @@ fn generate_mock_process_context(struct_name: &str) -> String {
         fn execute_background(&self, _task: ()) {{}}
         fn execute_gui(&self, _task: ()) {{}}
         fn transport(&self) -> &Transport {{ &self.transport }}
-        fn next_event(&mut self) -> Option<PluginNoteEvent<{s}>> {{ None }}
+        fn next_event(&mut self) -> Option<PluginNoteEvent<{s}>> {{ self.events.pop_front() }}
         fn send_event(&mut self, _event: PluginNoteEvent<{s}>) {{}}
         fn set_latency_samples(&self, _samples: u32) {{}}
         fn set_current_voice_capacity(&self, _capacity: u32) {{}}
@@ -146,6 +150,7 @@ fn generate_helpers(struct_name: &str) -> String {
     fn run_process(
         plugin: &mut {s},
         channel_data: &mut Vec<Vec<f32>>,
+        ctx: &mut TestProcessContext,
     ) -> Vec<Vec<f32>> {{
         let num_samples = channel_data[0].len();
         let mut buffer = Buffer::default();
@@ -164,8 +169,7 @@ fn generate_helpers(struct_name: &str) -> String {
             inputs: &mut [],
             outputs: &mut [],
         }};
-        let mut ctx = TestProcessContext::new(TEST_SAMPLE_RATE);
-        plugin.process(&mut buffer, &mut aux, &mut ctx);
+        plugin.process(&mut buffer, &mut aux, ctx);
         // Copy output data before dropping the buffer
         channel_data.clone()
     }}
@@ -273,8 +277,11 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
                     ));
                 }
             }
-            TestStatement::Assert(_) => {
+            TestStatement::Assert(_) | TestStatement::SafetyAssert(_) => {
                 // Assertions are generated after processing — skip for now
+            }
+            TestStatement::NoteOn { .. } | TestStatement::NoteOff { .. } => {
+                // MIDI events are pushed to context below — skip for now
             }
         }
     }
@@ -299,9 +306,29 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
         ));
     }
 
+    // Create the test process context and push MIDI events
+    out.push_str("        let mut ctx = TestProcessContext::new(TEST_SAMPLE_RATE);\n");
+    for (stmt, _span) in &tb.statements {
+        match stmt {
+            TestStatement::NoteOn { note, velocity, timing } => {
+                out.push_str(&format!(
+                    "        ctx.events.push_back(NoteEvent::NoteOn {{ timing: {}, voice_id: None, channel: 0, note: {}, velocity: {:.6} }});\n",
+                    timing, note, velocity
+                ));
+            }
+            TestStatement::NoteOff { note, timing } => {
+                out.push_str(&format!(
+                    "        ctx.events.push_back(NoteEvent::NoteOff {{ timing: {}, voice_id: None, channel: 0, note: {}, velocity: 0.0 }});\n",
+                    timing, note
+                ));
+            }
+            _ => {}
+        }
+    }
+
     // Run process
     out.push_str(&format!(
-        "        let output = run_process(&mut plugin, &mut {});\n\n",
+        "        let output = run_process(&mut plugin, &mut {}, &mut ctx);\n\n",
         input_var
     ));
 
@@ -318,6 +345,9 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
         if let TestStatement::Assert(assert) = stmt {
             out.push_str(&generate_assertion(assert, test_name));
         }
+        if let TestStatement::SafetyAssert(check) = stmt {
+            out.push_str(&generate_safety_assertion(check, test_name));
+        }
     }
 
     out.push_str("    }\n\n");
@@ -329,19 +359,32 @@ fn generate_assertion(
     assert: &crate::ast::TestAssert,
     test_name: &str,
 ) -> String {
-    // Determine which computed value to use
-    let (actual_var, actual_db_var) = match assert.property {
-        TestProperty::OutputRms => ("output_rms", "output_rms_db"),
-        TestProperty::OutputPeak => ("output_peak", "output_peak_db"),
-        TestProperty::InputRms => ("input_rms", "input_rms_db"),
-        TestProperty::InputPeak => ("input_peak", "input_peak_db"),
-    };
+    let mut preamble = String::new();
 
-    let prop_name = match assert.property {
-        TestProperty::OutputRms => "output.rms",
-        TestProperty::OutputPeak => "output.peak",
-        TestProperty::InputRms => "input.rms",
-        TestProperty::InputPeak => "input.peak",
+    // Determine which computed value to use
+    let (actual_var, actual_db_var, prop_name) = match assert.property {
+        TestProperty::OutputRms => ("output_rms".to_string(), "output_rms_db".to_string(), "output.rms".to_string()),
+        TestProperty::OutputPeak => ("output_peak".to_string(), "output_peak_db".to_string(), "output.peak".to_string()),
+        TestProperty::InputRms => ("input_rms".to_string(), "input_rms_db".to_string(), "input.rms".to_string()),
+        TestProperty::InputPeak => ("input_peak".to_string(), "input_peak_db".to_string(), "input.peak".to_string()),
+        TestProperty::OutputRmsIn(start, end) => {
+            let var = format!("output_rms_in_{}_{}", start, end);
+            let db_var = format!("{}_db", var);
+            preamble.push_str(&format!(
+                "        let {var} = compute_rms(&output[0][{start}..{end}]);\n\
+                 let {db_var} = rms_to_db({var});\n",
+            ));
+            (var, db_var, format!("output.rms_in {}..{}", start, end))
+        }
+        TestProperty::OutputPeakIn(start, end) => {
+            let var = format!("output_peak_in_{}_{}", start, end);
+            let db_var = format!("{}_db", var);
+            preamble.push_str(&format!(
+                "        let {var} = compute_peak(&output[0][{start}..{end}]);\n\
+                 let {db_var} = peak_to_db({var});\n",
+            ));
+            (var, db_var, format!("output.peak_in {}..{}", start, end))
+        }
     };
 
     let op_str = match assert.op {
@@ -357,14 +400,14 @@ fn generate_assertion(
     let is_db_value = value < 0.0 || value.abs() > 10.0;
 
     let (compare_var, display_val) = if is_db_value {
-        (actual_db_var, format!("{:.1} dB", value))
+        (&actual_db_var, format!("{:.1} dB", value))
     } else {
-        (actual_var, format!("{:.6}", value))
+        (&actual_var, format!("{:.6}", value))
     };
 
     let assertion_text = format!("{} {} {}", prop_name, op_str, display_val);
 
-    match assert.op {
+    let check = match assert.op {
         TestOp::LessThan => {
             format!(
                 "        if !({compare_var} < {value:.6}_f32) {{\n            \
@@ -392,6 +435,48 @@ fn generate_assertion(
                 "        if !(({compare_var} - {value:.6}_f32).abs() < {tolerance:.6}) {{\n            \
                  panic!(\"{{}}\", muse_test_fail(\"{test_name}\", \"{assertion_text}\", \"~= {display_val}\", &format!(\"{{:.2}}\", {compare_var})));\n        \
                  }}\n",
+            )
+        }
+    };
+
+    format!("{}{}", preamble, check)
+}
+
+/// Generate safety assertion code (no_nan, no_denormal, no_inf).
+fn generate_safety_assertion(check: &crate::ast::SafetyCheck, test_name: &str) -> String {
+    use crate::ast::SafetyCheck;
+    match check {
+        SafetyCheck::NoNan => {
+            format!(
+                "        for (ch_idx, ch) in output.iter().enumerate() {{\n\
+                 for (s_idx, sample) in ch.iter().enumerate() {{\n\
+                 if sample.is_nan() {{\n\
+                 panic!(\"{{}}\", muse_test_fail(\"{test_name}\", \"no_nan\", \"no NaN values\", &format!(\"NaN at channel {{}} sample {{}}\", ch_idx, s_idx)));\n\
+                 }}\n\
+                 }}\n\
+                 }}\n"
+            )
+        }
+        SafetyCheck::NoDenormal => {
+            format!(
+                "        for (ch_idx, ch) in output.iter().enumerate() {{\n\
+                 for (s_idx, sample) in ch.iter().enumerate() {{\n\
+                 if *sample != 0.0 && sample.abs() < f32::MIN_POSITIVE {{\n\
+                 panic!(\"{{}}\", muse_test_fail(\"{test_name}\", \"no_denormal\", \"no denormal values\", &format!(\"denormal {{:.2e}} at channel {{}} sample {{}}\", sample, ch_idx, s_idx)));\n\
+                 }}\n\
+                 }}\n\
+                 }}\n"
+            )
+        }
+        SafetyCheck::NoInf => {
+            format!(
+                "        for (ch_idx, ch) in output.iter().enumerate() {{\n\
+                 for (s_idx, sample) in ch.iter().enumerate() {{\n\
+                 if sample.is_infinite() {{\n\
+                 panic!(\"{{}}\", muse_test_fail(\"{test_name}\", \"no_inf\", \"no infinite values\", &format!(\"inf at channel {{}} sample {{}}\", ch_idx, s_idx)));\n\
+                 }}\n\
+                 }}\n\
+                 }}\n"
             )
         }
     }

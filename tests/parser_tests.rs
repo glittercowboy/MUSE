@@ -1137,3 +1137,167 @@ fn parse_unison_block_float_detune() {
     assert_eq!(unison.count, 4);
     assert!((unison.detune_cents - 7.5).abs() < f64::EPSILON);
 }
+
+#[test]
+fn note_on_parsed() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "note on test" {
+            note on 69 0.8 at 0
+            input silence 8192 samples
+            assert output.rms > -20.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).expect("Should have a TestBlock");
+
+    match &tb.statements[0].0 {
+        TestStatement::NoteOn { note, velocity, timing } => {
+            assert_eq!(*note, 69);
+            assert!((*velocity - 0.8).abs() < f64::EPSILON);
+            assert_eq!(*timing, 0);
+        }
+        other => panic!("Expected NoteOn, got {:?}", other),
+    }
+}
+
+#[test]
+fn note_off_parsed() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "note off test" {
+            note on 60 0.5 at 0
+            note off 60 at 4096
+            input silence 8192 samples
+            assert output.rms > -60.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).expect("Should have a TestBlock");
+
+    assert_eq!(tb.statements.len(), 4);
+
+    match &tb.statements[0].0 {
+        TestStatement::NoteOn { note, velocity, timing } => {
+            assert_eq!(*note, 60);
+            assert!((*velocity - 0.5).abs() < f64::EPSILON);
+            assert_eq!(*timing, 0);
+        }
+        other => panic!("Expected NoteOn, got {:?}", other),
+    }
+
+    match &tb.statements[1].0 {
+        TestStatement::NoteOff { note, timing } => {
+            assert_eq!(*note, 60);
+            assert_eq!(*timing, 4096);
+        }
+        other => panic!("Expected NoteOff, got {:?}", other),
+    }
+}
+
+#[test]
+fn safety_assert_no_nan_parsed() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "safety test" {
+            input silence 512 samples
+            assert no_nan
+            assert no_denormal
+            assert no_inf
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).expect("Should have a TestBlock");
+
+    assert_eq!(tb.statements.len(), 4);
+
+    match &tb.statements[1].0 {
+        TestStatement::SafetyAssert(SafetyCheck::NoNan) => {}
+        other => panic!("Expected SafetyAssert(NoNan), got {:?}", other),
+    }
+    match &tb.statements[2].0 {
+        TestStatement::SafetyAssert(SafetyCheck::NoDenormal) => {}
+        other => panic!("Expected SafetyAssert(NoDenormal), got {:?}", other),
+    }
+    match &tb.statements[3].0 {
+        TestStatement::SafetyAssert(SafetyCheck::NoInf) => {}
+        other => panic!("Expected SafetyAssert(NoInf), got {:?}", other),
+    }
+}
+
+#[test]
+fn temporal_rms_in_parsed() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "temporal test" {
+            input silence 1024 samples
+            assert output.rms_in 0..256 > -10.0
+            assert output.peak_in 256..512 < -60.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).expect("Should have a TestBlock");
+
+    assert_eq!(tb.statements.len(), 3);
+
+    match &tb.statements[1].0 {
+        TestStatement::Assert(assert) => {
+            assert_eq!(assert.property, TestProperty::OutputRmsIn(0, 256));
+            assert_eq!(assert.op, TestOp::GreaterThan);
+            assert!(assert.value < 0.0);
+        }
+        other => panic!("Expected Assert with OutputRmsIn, got {:?}", other),
+    }
+
+    match &tb.statements[2].0 {
+        TestStatement::Assert(assert) => {
+            assert_eq!(assert.property, TestProperty::OutputPeakIn(256, 512));
+            assert_eq!(assert.op, TestOp::LessThan);
+        }
+        other => panic!("Expected Assert with OutputPeakIn, got {:?}", other),
+    }
+}
