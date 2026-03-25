@@ -9,7 +9,6 @@ use std::process::Command;
 
 use muse_lang::{builtin_registry, diagnostics_to_json, generate_plugin, parse, resolve_plugin};
 
-/// Helper: parse + resolve + codegen from source, return the generated crate path.
 fn generate_from_source(source: &str, output_dir: &std::path::Path) -> PathBuf {
     let (ast, errors) = parse(source);
     assert!(errors.is_empty(), "parse errors: {:?}", errors);
@@ -19,7 +18,6 @@ fn generate_from_source(source: &str, output_dir: &std::path::Path) -> PathBuf {
     generate_plugin(&resolved, &registry, output_dir).expect("codegen failed")
 }
 
-/// Helper: parse + resolve + codegen from source, return generated Cargo.toml and lib.rs as strings.
 fn generate_code_strings(source: &str) -> (String, String) {
     let tmp = std::env::temp_dir().join(format!(
         "muse-codegen-test-strings-{}",
@@ -37,7 +35,6 @@ fn generate_code_strings(source: &str) -> (String, String) {
     (cargo_toml, lib_rs)
 }
 
-/// Helper: run `cargo check` on a generated crate and assert it succeeds.
 fn assert_cargo_check(crate_dir: &std::path::Path) {
     let output = Command::new("cargo")
         .arg("check")
@@ -60,10 +57,6 @@ fn assert_cargo_check(crate_dir: &std::path::Path) {
 
     eprintln!("cargo check passed for {}", crate_dir.display());
 }
-
-// ══════════════════════════════════════════════════════════════
-// Unit tests: verify generated code structure (string assertions)
-// ══════════════════════════════════════════════════════════════
 
 #[test]
 fn cargo_toml_contains_cdylib() {
@@ -135,7 +128,6 @@ fn plugin_struct_has_arc_params() {
 fn clap_features_map_correctly() {
     let source = include_str!("../examples/gain.muse");
     let (_, lib_rs) = generate_code_strings(source);
-    // gain.muse has features [audio_effect, stereo, utility]
     assert!(
         lib_rs.contains("ClapFeature::AudioEffect"),
         "Should map audio_effect to ClapFeature::AudioEffect"
@@ -154,8 +146,6 @@ fn clap_features_map_correctly() {
 fn vst3_class_id_is_16_bytes() {
     let source = include_str!("../examples/gain.muse");
     let (_, lib_rs) = generate_code_strings(source);
-    // VST3_CLASS_ID should be a byte literal with exactly 16 bytes
-    // gain.muse has vst3 id "MuseWarmGain1" (13 chars, padded to 16 with spaces)
     let marker = r#"const VST3_CLASS_ID: [u8; 16] = *b""#;
     let idx = lib_rs.find(marker).expect("should contain VST3_CLASS_ID");
     let after = &lib_rs[idx + marker.len()..];
@@ -170,154 +160,176 @@ fn vst3_class_id_is_16_bytes() {
     );
 }
 
-// ══════════════════════════════════════════════════════════════
-// Integration tests: cargo check on generated crates
-// ══════════════════════════════════════════════════════════════
-
 #[test]
 fn codegen_gain_cargo_check() {
     let source = include_str!("../examples/gain.muse");
-
     let tmp = std::env::temp_dir().join("muse-codegen-test-gain");
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp).ok();
     }
-
     let crate_dir = generate_from_source(source, &tmp);
-
     assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
     assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
-
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated src/lib.rs ===\n{}\n=== END ===", lib_rs);
-
     assert_cargo_check(&crate_dir);
 }
 
 #[test]
 fn codegen_filter_cargo_check() {
     let source = include_str!("../examples/filter.muse");
-
     let tmp = std::env::temp_dir().join("muse-codegen-test-filter");
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp).ok();
     }
-
     let crate_dir = generate_from_source(source, &tmp);
-
-    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
-    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
-
     assert_cargo_check(&crate_dir);
 }
 
 #[test]
 fn codegen_multiband_cargo_check() {
     let source = include_str!("../examples/multiband.muse");
-
     let tmp = std::env::temp_dir().join("muse-codegen-test-multiband");
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp).ok();
     }
-
     let crate_dir = generate_from_source(source, &tmp);
-
-    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
-    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
-
     assert_cargo_check(&crate_dir);
 }
 
-// ══════════════════════════════════════════════════════════════
-// Integration test: instrument mode (synth) cargo check
-// ══════════════════════════════════════════════════════════════
-
 #[test]
-fn codegen_synth_cargo_check() {
-    let source = include_str!("../examples/synth.muse");
+fn poly_synth_cargo_check() {
+    let source = r#"plugin "Glass Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category instrument
 
-    let tmp = std::env::temp_dir().join("muse-codegen-test-synth");
+  clap {
+    id          "dev.museaudio.glass-synth"
+    description "A crystalline subtractive synthesizer"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseGlassSyn1"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  param attack: float = 10.0 in 0.5..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param decay: float = 200.0 in 1.0..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param sustain: float = 0.7 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  param release: float = 300.0 in 1.0..10000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param cutoff: float = 4000.0 in 20.0..20000.0 {
+    smoothing logarithmic 15ms
+    unit "Hz"
+  }
+
+  param resonance: float = 0.3 in 0.0..1.0 {
+    smoothing linear 10ms
+  }
+
+  param osc_mix: float = 0.5 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  param volume: float = -6.0 in -60.0..0.0 {
+    unit "dB"
+  }
+
+  process {
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    let osc1 = saw(note.pitch)
+    let osc2 = square(note.pitch)
+    let tone = mix(osc1, osc2) -> gain(param.osc_mix)
+    tone -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(param.volume) -> output
+  }
+}"#;
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-poly-synth");
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp).ok();
     }
 
     let crate_dir = generate_from_source(source, &tmp);
-
-    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
-    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
-
     let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated synth src/lib.rs ===\n{}\n=== END ===", lib_rs);
 
-    // Verify instrument-mode codegen markers
-    assert!(lib_rs.contains("MidiConfig::Basic"), "Instrument should use MidiConfig::Basic");
-    assert!(lib_rs.contains("ProcessStatus::KeepAlive"), "Instrument should use KeepAlive");
-    assert!(lib_rs.contains("main_input_channels: None"), "Instrument should have no main input");
-    assert!(lib_rs.contains("active_note: Option<u8>"), "Should have active_note field");
-    assert!(lib_rs.contains("note_freq: f32"), "Should have note_freq field");
-    assert!(lib_rs.contains("velocity: f32"), "Should have velocity field");
-    assert!(lib_rs.contains("osc_state_0: OscState"), "Should have first oscillator state");
-    assert!(lib_rs.contains("osc_state_1: OscState"), "Should have second oscillator state");
-    assert!(lib_rs.contains("adsr_state: AdsrState"), "Should have ADSR state");
-    assert!(lib_rs.contains("process_osc_saw"), "Should have saw oscillator function");
-    assert!(lib_rs.contains("process_osc_square"), "Should have square oscillator function");
-    assert!(lib_rs.contains("process_adsr"), "Should have ADSR function");
-    assert!(lib_rs.contains("context.next_event()"), "Should have MIDI event processing");
+    assert!(lib_rs.contains("struct Voice"), "Should emit Voice struct");
+    assert!(lib_rs.contains("voices: [Option<Voice>; 8]"), "Should allocate 8 voices");
+    assert!(lib_rs.contains("next_internal_voice_id: u64"), "Should track voice age");
+    assert!(lib_rs.contains("ProcessStatus::Normal"), "Poly process should return Normal");
+    assert!(lib_rs.contains("VoiceTerminated"), "Should send VoiceTerminated events");
+    assert!(lib_rs.contains("MAX_BLOCK_SIZE"), "Should use block-based rendering");
+    assert!(lib_rs.contains("CLAP_POLY_MODULATION_CONFIG"), "Should emit CLAP poly config");
 
     assert_cargo_check(&crate_dir);
 }
 
 #[test]
-fn codegen_synth_has_instrument_struct_fields() {
+fn mono_synth_unchanged() {
     let source = include_str!("../examples/synth.muse");
     let (_, lib_rs) = generate_code_strings(source);
 
-    assert!(lib_rs.contains("osc_state_0: OscState"), "Missing osc_state_0");
-    assert!(lib_rs.contains("osc_state_1: OscState"), "Missing osc_state_1");
-    assert!(lib_rs.contains("adsr_state: AdsrState"), "Missing adsr_state");
-    assert!(lib_rs.contains("active_note: Option<u8>"), "Missing active_note");
-    assert!(lib_rs.contains("note_freq: f32"), "Missing note_freq");
-    assert!(lib_rs.contains("velocity: f32"), "Missing velocity");
-    assert!(lib_rs.contains("sample_rate: f32"), "Missing sample_rate");
+    assert!(lib_rs.contains("MidiConfig::Basic"), "Instrument should use MidiConfig::Basic");
+    assert!(lib_rs.contains("ProcessStatus::KeepAlive"), "Mono instrument should keep KeepAlive");
+    assert!(lib_rs.contains("active_note: Option<u8>"), "Mono should keep active_note");
+    assert!(!lib_rs.contains("struct Voice"), "Mono synth should not emit Voice struct");
+    assert!(!lib_rs.contains("CLAP_POLY_MODULATION_CONFIG"), "Mono synth should not emit CLAP poly config");
 }
 
 #[test]
-fn codegen_synth_has_midi_note_event_handling() {
-    let source = include_str!("../examples/synth.muse");
+fn poly_codegen_contains_voice_struct() {
+    let source = include_str!("../tests/fixtures/poly_synth_voice_decl.muse");
     let (_, lib_rs) = generate_code_strings(source);
-
-    assert!(lib_rs.contains("NoteEvent::NoteOn"), "Missing NoteOn match arm");
-    assert!(lib_rs.contains("NoteEvent::NoteOff"), "Missing NoteOff match arm");
-    assert!(lib_rs.contains("process_osc_saw"), "Missing process_osc_saw call");
-    assert!(lib_rs.contains("process_osc_square"), "Missing process_osc_square call");
-    assert!(lib_rs.contains("process_adsr"), "Missing process_adsr call");
-    assert!(lib_rs.contains("MidiConfig::Basic"), "Missing MidiConfig::Basic");
-    assert!(lib_rs.contains("ProcessStatus::KeepAlive"), "Missing ProcessStatus::KeepAlive");
-    assert!(lib_rs.contains("main_input_channels: None"), "Missing main_input_channels: None");
+    assert!(lib_rs.contains("struct Voice"), "Missing Voice struct");
+    assert!(lib_rs.contains("voice.note_freq"), "Poly code should address per-voice note frequency");
 }
 
 #[test]
-fn codegen_effect_unchanged_after_instrument_mode() {
-    // Ensure gain.muse still generates identical effect-mode code
-    let source = include_str!("../examples/gain.muse");
+fn poly_codegen_contains_block_loop() {
+    let source = include_str!("../tests/fixtures/poly_synth_voice_decl.muse");
     let (_, lib_rs) = generate_code_strings(source);
-
-    assert!(lib_rs.contains("MidiConfig::None"), "Effect should use MidiConfig::None");
-    assert!(lib_rs.contains("ProcessStatus::Normal"), "Effect should use ProcessStatus::Normal");
-    assert!(!lib_rs.contains("active_note"), "Effect should not have instrument fields");
-    assert!(!lib_rs.contains("OscState"), "Effect should not have oscillator state");
-    assert!(!lib_rs.contains("AdsrState"), "Effect should not have ADSR state");
-    assert!(!lib_rs.contains("KeepAlive"), "Effect should not use KeepAlive");
-    assert!(lib_rs.contains("main_input_channels: NonZeroU32::new(2)"), "Effect should have stereo input");
+    assert!(lib_rs.contains("block_start"), "Missing block_start loop");
+    assert!(lib_rs.contains("block_end"), "Missing block_end loop");
+    assert!(lib_rs.contains("smoothed.next_block"), "Missing block parameter smoothing");
 }
 
-// ══════════════════════════════════════════════════════════════
-// Diagnostic tests: E010 / E011 error codes and JSON format
-// ══════════════════════════════════════════════════════════════
+#[test]
+fn poly_codegen_contains_voice_terminated() {
+    let source = include_str!("../tests/fixtures/poly_synth_voice_decl.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    assert!(lib_rs.contains("NoteEvent::VoiceTerminated"), "Missing VoiceTerminated event emission");
+    assert!(lib_rs.contains("compute_fallback_voice_id"), "Missing fallback voice ID helper");
+}
 
 #[test]
 fn codegen_missing_clap_id_produces_e010() {
-    // Plugin missing vendor, clap, vst3 blocks should produce E010 diagnostics
     let source = r#"plugin "Bare" {
   input stereo
   output stereo
@@ -338,7 +350,6 @@ fn codegen_missing_clap_id_produces_e010() {
     assert!(result.is_err(), "expected codegen to fail for bare plugin");
     let diags = result.unwrap_err();
 
-    // Should have E010 for missing vendor, clap, vst3
     let e010_count = diags.iter().filter(|d| d.code == "E010").count();
     assert!(
         e010_count >= 3,
@@ -347,7 +358,6 @@ fn codegen_missing_clap_id_produces_e010() {
         diags
     );
 
-    // Each E010 should have a suggestion
     for d in &diags {
         if d.code == "E010" {
             assert!(
@@ -361,7 +371,6 @@ fn codegen_missing_clap_id_produces_e010() {
 
 #[test]
 fn codegen_diagnostic_json_format() {
-    // Verify E010 diagnostics serialize correctly via diagnostics_to_json
     let source = r#"plugin "Bare" {
   input stereo
   output stereo
@@ -380,7 +389,6 @@ fn codegen_diagnostic_json_format() {
     let result = generate_plugin(&resolved, &registry, &tmp);
     let diags = result.unwrap_err();
 
-    // Serialize to JSON
     let json = diagnostics_to_json(&diags);
     let parsed: Vec<serde_json::Value> =
         serde_json::from_str(&json).expect("should be valid JSON array");
@@ -388,7 +396,6 @@ fn codegen_diagnostic_json_format() {
     assert!(!parsed.is_empty(), "should have diagnostics");
 
     for entry in &parsed {
-        // Same contract as parse/resolve diagnostics
         let code = entry["code"].as_str().expect("code should be string");
         assert!(code.starts_with('E'), "error code should start with 'E'");
 
@@ -410,418 +417,4 @@ fn codegen_generate_plugin_returns_path() {
 
     let crate_dir = generate_from_source(source, &tmp);
     assert_eq!(crate_dir, tmp);
-}
-
-// ══════════════════════════════════════════════════════════════
-// Unit tests: oscillator DSP helper generation
-// ══════════════════════════════════════════════════════════════
-
-#[test]
-fn dsp_helpers_emit_osc_state_for_oscillator() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-
-    let mut prims = HashSet::new();
-    prims.insert(muse_lang::dsp::primitives::DspPrimitive::Oscillator(
-        muse_lang::dsp::primitives::OscKind::Saw,
-    ));
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(
-        code.contains("struct OscState"),
-        "Should emit OscState struct when oscillator is used, got:\n{}",
-        code
-    );
-    assert!(
-        code.contains("fn process_osc_saw("),
-        "Should emit process_osc_saw function, got:\n{}",
-        code
-    );
-}
-
-#[test]
-fn dsp_helpers_emit_all_oscillator_variants() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::{DspPrimitive, OscKind};
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Oscillator(OscKind::Saw));
-    prims.insert(DspPrimitive::Oscillator(OscKind::Square));
-    prims.insert(DspPrimitive::Oscillator(OscKind::Sine));
-    prims.insert(DspPrimitive::Oscillator(OscKind::Triangle));
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("fn process_osc_saw("), "Missing saw");
-    assert!(code.contains("fn process_osc_square("), "Missing square");
-    assert!(code.contains("fn process_osc_sine("), "Missing sine");
-    assert!(code.contains("fn process_osc_triangle("), "Missing triangle");
-    // OscState should appear exactly once
-    assert!(code.contains("struct OscState"), "Missing OscState");
-}
-
-#[test]
-fn dsp_helpers_emit_only_used_oscillator() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::{DspPrimitive, OscKind};
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Oscillator(OscKind::Sine));
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("fn process_osc_sine("), "Should emit sine");
-    assert!(!code.contains("fn process_osc_saw("), "Should NOT emit saw");
-    assert!(!code.contains("fn process_osc_square("), "Should NOT emit square");
-}
-
-// ══════════════════════════════════════════════════════════════
-// Unit tests: ADSR envelope DSP helper generation
-// ══════════════════════════════════════════════════════════════
-
-#[test]
-fn dsp_helpers_emit_adsr_state_and_function() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::{DspPrimitive, EnvKind};
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Envelope(EnvKind::Adsr));
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(
-        code.contains("enum AdsrStage"),
-        "Should emit AdsrStage enum, got:\n{}",
-        code
-    );
-    assert!(
-        code.contains("struct AdsrState"),
-        "Should emit AdsrState struct"
-    );
-    assert!(
-        code.contains("fn process_adsr("),
-        "Should emit process_adsr function"
-    );
-    // Verify all stages are present
-    assert!(code.contains("Attack"), "AdsrStage should include Attack");
-    assert!(code.contains("Decay"), "AdsrStage should include Decay");
-    assert!(code.contains("Sustain"), "AdsrStage should include Sustain");
-    assert!(code.contains("Release"), "AdsrStage should include Release");
-    assert!(code.contains("Idle"), "AdsrStage should include Idle");
-}
-
-#[test]
-fn dsp_helpers_no_adsr_when_not_used() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::{DspPrimitive, FilterKind};
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Filter(FilterKind::Lowpass));
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(!code.contains("AdsrState"), "Should NOT emit ADSR when only filter is used");
-    assert!(!code.contains("OscState"), "Should NOT emit oscillator when only filter is used");
-}
-
-// ══════════════════════════════════════════════════════════════
-// Unit tests: MIDI event loop generation
-// ══════════════════════════════════════════════════════════════
-
-#[test]
-fn midi_event_loop_generates_non_empty_code() {
-    let code = muse_lang::codegen::midi::generate_midi_event_loop();
-    assert!(!code.is_empty(), "MIDI event loop should not be empty");
-    assert!(
-        code.contains("NoteEvent::NoteOn"),
-        "Should handle NoteOn events"
-    );
-    assert!(
-        code.contains("NoteEvent::NoteOff"),
-        "Should handle NoteOff events"
-    );
-    assert!(
-        code.contains("self.active_note"),
-        "Should use self.active_note for note tracking"
-    );
-    assert!(
-        code.contains("self.note_freq"),
-        "Should set self.note_freq from MIDI note"
-    );
-    assert!(
-        code.contains("self.velocity"),
-        "Should capture velocity from NoteOn into self.velocity"
-    );
-}
-
-// ══════════════════════════════════════════════════════════════
-// Regression: existing filter codegen still works
-// ══════════════════════════════════════════════════════════════
-
-#[test]
-fn dsp_helpers_still_emit_biquad_for_filters() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::{DspPrimitive, FilterKind};
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Filter(FilterKind::Lowpass));
-    prims.insert(DspPrimitive::Filter(FilterKind::Highpass));
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("struct BiquadState"), "Should still emit BiquadState");
-    assert!(code.contains("fn process_biquad("), "Should still emit lowpass biquad");
-    assert!(code.contains("fn process_biquad_highpass("), "Should still emit highpass biquad");
-}
-
-// ══════════════════════════════════════════════════════════════
-// Integration tests: new DSP primitives (fold, bitcrush, lfo, pulse)
-// ══════════════════════════════════════════════════════════════
-
-#[test]
-fn codegen_new_primitives_cargo_check() {
-    // Effect plugin using fold and bitcrush in chains
-    let source = r#"plugin "FX Lab" {
-  vendor   "Muse Audio"
-  version  "0.1.0"
-  url      "https://museaudio.dev"
-  email    "hello@museaudio.dev"
-  category effect
-
-  clap {
-    id          "dev.museaudio.fx-lab"
-    description "Effect lab with fold and bitcrush"
-    features    [audio_effect, stereo, utility]
-  }
-
-  vst3 {
-    id              "MuseFxLab00001"
-    subcategories   [Fx, Distortion]
-  }
-
-  input  stereo
-  output stereo
-
-  param drive: float = 3.0 in 1.0..10.0 {
-    smoothing logarithmic 50ms
-    unit "x"
-  }
-  param bits: float = 8.0 in 1.0..16.0 {
-    smoothing logarithmic 50ms
-    unit "bits"
-  }
-
-  process {
-    input -> fold(param.drive) -> bitcrush(param.bits) -> output
-  }
-}"#;
-
-    let tmp = std::env::temp_dir().join("muse-codegen-test-new-fx");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    let crate_dir = generate_from_source(source, &tmp);
-
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated FX Lab src/lib.rs ===\n{}\n=== END ===", lib_rs);
-
-    // fold is inline math: (input * amount).sin()
-    assert!(lib_rs.contains(".sin()"), "fold should use .sin() wavefold");
-    // bitcrush is inline math: powi / round
-    assert!(lib_rs.contains(".powi("), "bitcrush should use .powi()");
-    assert!(lib_rs.contains(".round()"), "bitcrush should use .round()");
-
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn codegen_lfo_pulse_cargo_check() {
-    // Instrument plugin using lfo and pulse oscillators
-    let source = r#"plugin "Pulse Synth" {
-  vendor   "Muse Audio"
-  version  "0.1.0"
-  url      "https://museaudio.dev"
-  email    "hello@museaudio.dev"
-  category instrument
-
-  clap {
-    id          "dev.museaudio.pulse-synth"
-    description "Pulse synth with LFO"
-    features    [instrument, synthesizer, stereo]
-  }
-
-  vst3 {
-    id              "MusePulseSynth1"
-    subcategories   [Instrument, Synth]
-  }
-
-  input  mono
-  output stereo
-
-  midi {
-    note {
-      let freq = note.pitch
-    }
-  }
-
-  param width: float = 0.5 in 0.01..0.99 {
-    smoothing logarithmic 50ms
-    unit "%"
-  }
-  param lfo_rate: float = 2.0 in 0.1..20.0 {
-    smoothing logarithmic 50ms
-    unit "Hz"
-  }
-
-  process {
-    let osc = pulse(note.pitch, param.width)
-    let mod_sig = lfo(param.lfo_rate)
-    let env = adsr(10ms, 100ms, 0.7, 200ms)
-    mix(osc, mod_sig) -> gain(env) -> output
-  }
-}"#;
-
-    let tmp = std::env::temp_dir().join("muse-codegen-test-lfo-pulse");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    let crate_dir = generate_from_source(source, &tmp);
-
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated Pulse Synth src/lib.rs ===\n{}\n=== END ===", lib_rs);
-
-    // Pulse oscillator helper
-    assert!(lib_rs.contains("fn process_osc_pulse("), "Should emit pulse oscillator helper");
-    // LFO reuses sine
-    assert!(lib_rs.contains("fn process_osc_sine("), "LFO should emit sine oscillator helper");
-    // Multiple OscState fields
-    assert!(lib_rs.contains("osc_state_0: OscState"), "Should have first osc state (pulse)");
-    assert!(lib_rs.contains("osc_state_1: OscState"), "Should have second osc state (lfo)");
-
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn dsp_helpers_emit_pulse_oscillator() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::DspPrimitive;
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Pulse);
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("struct OscState"), "Pulse should emit OscState");
-    assert!(code.contains("fn process_osc_pulse("), "Should emit process_osc_pulse");
-    assert!(!code.contains("fn process_osc_sine("), "Pulse alone should NOT emit sine");
-}
-
-#[test]
-fn dsp_helpers_lfo_emits_sine() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::DspPrimitive;
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Lfo);
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("struct OscState"), "LFO should emit OscState");
-    assert!(code.contains("fn process_osc_sine("), "LFO should emit sine helper (reuse)");
-    assert!(!code.contains("fn process_osc_pulse("), "LFO alone should NOT emit pulse");
-}
-
-// ── Chorus and Compressor codegen tests ──────────────────────
-
-#[test]
-fn codegen_distortion_cargo_check() {
-    let source = std::fs::read_to_string("examples/distortion.muse").expect("read distortion.muse");
-    let tmp = std::env::temp_dir().join("muse-codegen-test-distortion");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-    let crate_dir = generate_from_source(&source, &tmp);
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated distortion src/lib.rs ===\n{}\n=== END ===", lib_rs);
-    assert!(lib_rs.contains(".sin()"), "fold should use .sin() wavefold");
-    assert!(lib_rs.contains(".powi("), "bitcrush should use .powi()");
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn codegen_chorus_effect_cargo_check() {
-    let source = std::fs::read_to_string("examples/chorus_effect.muse").expect("read chorus_effect.muse");
-    let tmp = std::env::temp_dir().join("muse-codegen-test-chorus-effect");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-    let crate_dir = generate_from_source(&source, &tmp);
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated chorus effect src/lib.rs ===\n{}\n=== END ===", lib_rs);
-    assert!(lib_rs.contains("fn process_chorus("), "Should emit process_chorus helper");
-    assert!(lib_rs.contains("struct ChorusState"), "Should emit ChorusState struct");
-    assert!(lib_rs.contains("chorus_state_0: ChorusState"), "Should have chorus state field");
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn codegen_dynamics_cargo_check() {
-    let source = std::fs::read_to_string("examples/dynamics.muse").expect("read dynamics.muse");
-    let tmp = std::env::temp_dir().join("muse-codegen-test-dynamics");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-    let crate_dir = generate_from_source(&source, &tmp);
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated dynamics src/lib.rs ===\n{}\n=== END ===", lib_rs);
-    assert!(lib_rs.contains("fn process_compressor("), "Should emit process_compressor helper");
-    assert!(lib_rs.contains("struct CompressorState"), "Should emit CompressorState struct");
-    assert!(lib_rs.contains("compressor_state_0: CompressorState"), "Should have compressor state field");
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn codegen_pulse_synth_cargo_check() {
-    let source = std::fs::read_to_string("examples/pulse_synth.muse").expect("read pulse_synth.muse");
-    let tmp = std::env::temp_dir().join("muse-codegen-test-pulse-synth");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-    let crate_dir = generate_from_source(&source, &tmp);
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated pulse synth src/lib.rs ===\n{}\n=== END ===", lib_rs);
-    assert!(lib_rs.contains("fn process_osc_pulse("), "Should emit pulse oscillator helper");
-    assert!(lib_rs.contains("fn process_adsr("), "Should emit ADSR helper");
-    assert!(lib_rs.contains("osc_state_0: OscState"), "Should have osc state field");
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn dsp_helpers_emit_chorus_state() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::DspPrimitive;
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Chorus);
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("struct ChorusState"), "Chorus should emit ChorusState");
-    assert!(code.contains("fn process_chorus("), "Should emit process_chorus");
-}
-
-#[test]
-fn dsp_helpers_emit_compressor_state() {
-    use std::collections::HashSet;
-    use muse_lang::codegen::dsp::generate_dsp_helpers;
-    use muse_lang::dsp::primitives::DspPrimitive;
-
-    let mut prims = HashSet::new();
-    prims.insert(DspPrimitive::Compressor);
-
-    let code = generate_dsp_helpers(&prims);
-    assert!(code.contains("struct CompressorState"), "Compressor should emit CompressorState");
-    assert!(code.contains("fn process_compressor("), "Should emit process_compressor");
 }

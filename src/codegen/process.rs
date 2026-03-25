@@ -9,59 +9,55 @@
 
 use std::collections::HashSet;
 
-use crate::ast::{BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp};
+use crate::ast::{
+    BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp,
+};
 use crate::dsp::primitives::{DspPrimitive, EnvKind, OscKind};
+
+pub const MAX_BLOCK_SIZE: usize = 64;
 
 /// Information collected during process generation that downstream codegen needs.
 pub struct ProcessInfo {
-    /// DSP primitives used (for state struct generation and DSP helpers).
     pub used_primitives: HashSet<DspPrimitive>,
-    /// Per-branch filter uses: (split_id, branch_idx, FilterKind).
-    /// Used by plugin.rs to generate per-branch biquad state fields.
     pub branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
-    /// Whether any code needs per-channel indexing (e.g. filter state).
     pub needs_channel_idx: bool,
-    /// Diagnostics collected during process generation (E011 unsupported constructs).
     pub diagnostics: Vec<crate::diagnostic::Diagnostic>,
-    /// True when the plugin has a MidiDecl — triggers instrument mode codegen.
     pub is_instrument: bool,
-    /// Number of oscillator state fields needed (one per oscillator call site).
+    pub voice_count: Option<u32>,
     pub oscillator_count: usize,
-    /// Whether ADSR envelope state is needed.
     pub has_adsr: bool,
-    /// Number of chorus state fields needed (one per chorus call site).
     pub chorus_count: usize,
-    /// Number of compressor state fields needed (one per compressor call site).
     pub compressor_count: usize,
 }
 
-/// Generate the process() body (the code that replaces `{PROCESS_BODY}` in the Plugin trait).
-///
-/// Also collects which DSP primitives are used so the caller can generate
-/// appropriate state structs and helper functions.
-pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
+pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>) -> (String, ProcessInfo) {
     let is_instrument = find_midi_decl(plugin);
 
     let process_block = match find_process_block(plugin) {
         Some(pb) => pb,
-        None => return ("        ProcessStatus::Normal".to_string(), ProcessInfo {
-            used_primitives: HashSet::new(),
-            branch_filters: Vec::new(),
-            needs_channel_idx: false,
-            diagnostics: Vec::new(),
-            is_instrument: false,
-            oscillator_count: 0,
-            has_adsr: false,
-            chorus_count: 0,
-            compressor_count: 0,
-        }),
+        None => {
+            return (
+                "        ProcessStatus::Normal".to_string(),
+                ProcessInfo {
+                    used_primitives: HashSet::new(),
+                    branch_filters: Vec::new(),
+                    needs_channel_idx: false,
+                    diagnostics: Vec::new(),
+                    is_instrument: false,
+                    voice_count,
+                    oscillator_count: 0,
+                    has_adsr: false,
+                    chorus_count: 0,
+                    compressor_count: 0,
+                },
+            )
+        }
     };
 
     let mut ctx = ProcessContext::new();
     ctx.is_instrument = is_instrument;
+    ctx.is_polyphonic = is_instrument && voice_count.is_some();
 
-    // First pass: collect all statements' code
-    // All statements execute per-sample inside the inner loop.
     let mut stmt_lines: Vec<String> = Vec::new();
     for (i, (stmt, _)) in process_block.body.iter().enumerate() {
         let is_last = i == process_block.body.len() - 1;
@@ -69,108 +65,175 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
         stmt_lines.extend(lines);
     }
 
-    let has_adsr = ctx.used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Envelope(EnvKind::Adsr))
-    });
+    let has_adsr = ctx
+        .used_primitives
+        .iter()
+        .any(|p| matches!(p, DspPrimitive::Envelope(EnvKind::Adsr)));
     let oscillator_count = ctx.oscillator_counter;
     let chorus_count = ctx.chorus_counter;
     let compressor_count = ctx.compressor_counter;
 
-    if is_instrument {
-        // ── Instrument mode: MIDI event loop, mono output, KeepAlive ──
-        let mut out = String::new();
-
-        out.push_str("        let mut next_event = context.next_event();\n");
-        out.push_str("        for (sample_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
-
-        // Per-sample parameter smoothing
-        for param_name in &ctx.smoothed_params {
-            out.push_str(&format!(
-                "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
-            ));
-        }
-
-        // MIDI event loop (sample-accurate)
-        let midi_loop = crate::codegen::midi::generate_midi_event_loop();
-        for line in midi_loop.lines() {
-            out.push_str("            ");
-            out.push_str(line);
-            out.push('\n');
-        }
-
-        // Process block statements — compute the mono output
-        for line in &stmt_lines {
-            out.push_str("            ");
-            out.push_str(line);
-            out.push('\n');
-        }
-
-        out.push_str("        }\n");
-        out.push_str("        ProcessStatus::KeepAlive");
-
-        let info = ProcessInfo {
-            used_primitives: ctx.used_primitives,
-            branch_filters: ctx.branch_filters,
-            needs_channel_idx: false, // instrument mode doesn't use per-channel indexing
-            diagnostics: ctx.diagnostics,
-            is_instrument: true,
-            oscillator_count,
-            has_adsr,
-            chorus_count,
-            compressor_count,
-        };
-        (out, info)
+    let process_body = if ctx.is_polyphonic {
+        generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines)
+    } else if is_instrument {
+        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines)
     } else {
-        // ── Effect mode: iterate sample frames, then channels ──
-        let mut out = String::new();
+        generate_effect_process(&ctx, &stmt_lines)
+    };
 
-        let needs_channel_idx = ctx.used_primitives.iter().any(|p| {
-            matches!(p, DspPrimitive::Filter(_))
-        });
+    let needs_channel_idx = if ctx.is_polyphonic {
+        false
+    } else {
+        ctx.used_primitives
+            .iter()
+            .any(|p| matches!(p, DspPrimitive::Filter(_)))
+    };
 
-        // Outer loop: iterate over sample frames (time steps).
-        // nih-plug's iter_samples() yields one ChannelSamples per time step.
-        out.push_str("        for channel_samples in buffer.iter_samples() {\n");
+    let info = ProcessInfo {
+        used_primitives: ctx.used_primitives,
+        branch_filters: ctx.branch_filters,
+        needs_channel_idx,
+        diagnostics: ctx.diagnostics,
+        is_instrument,
+        voice_count,
+        oscillator_count,
+        has_adsr,
+        chorus_count,
+        compressor_count,
+    };
 
-        // Per-sample parameter smoothing
-        for param_name in &ctx.smoothed_params {
-            out.push_str(&format!(
-                "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
-            ));
-        }
-
-        // Inner loop: iterate over channels within each sample frame.
-        // When filters are used, we need channel_idx to index per-channel biquad state.
-        if needs_channel_idx {
-            out.push_str("            for (channel_idx, sample) in channel_samples.into_iter().enumerate() {\n");
-        } else {
-            out.push_str("            for sample in channel_samples {\n");
-        }
-        for line in &stmt_lines {
-            out.push_str("                ");
-            out.push_str(line);
-            out.push('\n');
-        }
-        out.push_str("            }\n");
-        out.push_str("        }\n");
-        out.push_str("        ProcessStatus::Normal");
-
-        let info = ProcessInfo {
-            used_primitives: ctx.used_primitives,
-            branch_filters: ctx.branch_filters,
-            needs_channel_idx,
-            diagnostics: ctx.diagnostics,
-            is_instrument: false,
-            oscillator_count,
-            has_adsr,
-            chorus_count,
-            compressor_count,
-        };
-        (out, info)
-    }
+    (process_body, info)
 }
 
-/// Find the process block in the plugin's items.
+fn generate_monophonic_instrument_process(
+    smoothed_params: &[String],
+    stmt_lines: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str("        let mut next_event = context.next_event();\n");
+    out.push_str("        for (sample_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
+
+    for param_name in smoothed_params {
+        out.push_str(&format!(
+            "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
+        ));
+    }
+
+    let midi_loop = crate::codegen::midi::generate_midi_event_loop();
+    for line in midi_loop.lines() {
+        out.push_str("            ");
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    for line in stmt_lines {
+        out.push_str("            ");
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out.push_str("        }\n");
+    out.push_str("        ProcessStatus::KeepAlive");
+    out
+}
+
+fn generate_polyphonic_process(smoothed_params: &[String], stmt_lines: &[String]) -> String {
+    let mut out = String::new();
+    out.push_str("        let num_samples = buffer.samples();\n");
+    out.push_str("        let output = buffer.as_slice();\n");
+    out.push_str("        let mut next_event = context.next_event();\n");
+    out.push_str("        let mut block_start: usize = 0;\n");
+    out.push_str("        let mut block_end: usize = MAX_BLOCK_SIZE.min(num_samples);\n");
+    out.push_str("        while block_start < num_samples {\n");
+
+    let poly_handler = crate::codegen::midi::generate_polyphonic_event_handler();
+    for line in poly_handler.lines() {
+        out.push_str("            ");
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    out.push_str("            let block_len = block_end - block_start;\n");
+    out.push_str("            for channel in output.iter_mut() {\n");
+    out.push_str("                channel[block_start..block_end].fill(0.0);\n");
+    out.push_str("            }\n");
+
+    for param_name in smoothed_params {
+        out.push_str(&format!(
+            "            let mut {param_name} = [0.0_f32; MAX_BLOCK_SIZE];\n"
+        ));
+        out.push_str(&format!(
+            "            self.params.{param_name}.smoothed.next_block(&mut {param_name}, block_len);\n"
+        ));
+    }
+
+    out.push_str("            let mut terminated_voices = Vec::new();\n");
+    out.push_str("            for voice in self.voices.iter_mut().filter_map(|voice| voice.as_mut()) {\n");
+    out.push_str("                for value_idx in 0..block_len {\n");
+    out.push_str("                    let sample_idx = block_start + value_idx;\n");
+    for line in stmt_lines {
+        out.push_str("                    ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("                }\n");
+    out.push_str("                if voice.releasing && voice_is_silent(voice) {\n");
+    out.push_str("                    terminated_voices.push((voice.voice_id, voice.channel, voice.note));\n");
+    out.push_str("                }\n");
+    out.push_str("            }\n");
+    out.push_str("            for (voice_id, channel, note) in terminated_voices {\n");
+    out.push_str("                context.send_event(NoteEvent::VoiceTerminated {\n");
+    out.push_str("                    timing: block_end as u32,\n");
+    out.push_str("                    voice_id: Some(voice_id),\n");
+    out.push_str("                    channel,\n");
+    out.push_str("                    note,\n");
+    out.push_str("                });\n");
+    out.push_str("                if let Some(idx) = self.get_voice_idx(voice_id) {\n");
+    out.push_str("                    self.voices[idx] = None;\n");
+    out.push_str("                }\n");
+    out.push_str("            }\n");
+    out.push_str("            block_start = block_end;\n");
+    out.push_str("            block_end = (block_start + MAX_BLOCK_SIZE).min(num_samples);\n");
+    out.push_str("        }\n");
+    out.push_str("        ProcessStatus::Normal");
+    out
+}
+
+fn generate_effect_process(ctx: &ProcessContext, stmt_lines: &[String]) -> String {
+    let mut out = String::new();
+
+    let needs_channel_idx = ctx
+        .used_primitives
+        .iter()
+        .any(|p| matches!(p, DspPrimitive::Filter(_)));
+
+    out.push_str("        for channel_samples in buffer.iter_samples() {\n");
+
+    for param_name in &ctx.smoothed_params {
+        out.push_str(&format!(
+            "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
+        ));
+    }
+
+    if needs_channel_idx {
+        out.push_str(
+            "            for (channel_idx, sample) in channel_samples.into_iter().enumerate() {\n",
+        );
+    } else {
+        out.push_str("            for sample in channel_samples {\n");
+    }
+    for line in stmt_lines {
+        out.push_str("                ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("            }\n");
+    out.push_str("        }\n");
+    out.push_str("        ProcessStatus::Normal");
+
+    out
+}
+
 fn find_process_block(plugin: &PluginDef) -> Option<&ProcessBlock> {
     for (item, _) in &plugin.items {
         if let PluginItem::ProcessBlock(pb) = item {
@@ -180,40 +243,27 @@ fn find_process_block(plugin: &PluginDef) -> Option<&ProcessBlock> {
     None
 }
 
-/// Check if the plugin has a MidiDecl item, indicating instrument mode.
 fn find_midi_decl(plugin: &PluginDef) -> bool {
-    plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::MidiDecl(_)))
+    plugin
+        .items
+        .iter()
+        .any(|(item, _)| matches!(item, PluginItem::MidiDecl(_)))
 }
 
-/// Tracks state during process body generation.
 struct ProcessContext {
-    /// Parameter fields that need `.smoothed.next()` calls.
     smoothed_params: Vec<String>,
-    /// DSP primitives used (for state struct generation).
     used_primitives: HashSet<DspPrimitive>,
-    /// Lines emitted as side-effects during expression generation (e.g. split branch processing).
-    /// Drained into the statement output by generate_statement.
     pending_lines: Vec<String>,
-    /// Names of the last split's branch result variables — consumed by merge.
     split_branch_vars: Vec<String>,
-    /// Counter for generating unique split IDs when multiple splits exist.
     split_counter: usize,
-    /// Current branch context: Some((split_id, branch_idx)) when inside a split branch.
-    /// Controls per-branch state field naming in biquad calls.
     current_branch: Option<(usize, usize)>,
-    /// Records (split_id, branch_idx, FilterKind) for all filter uses inside branches.
-    /// Used by plugin.rs to generate per-branch state fields.
     branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
-    /// Diagnostics collected during process generation (E011 unsupported constructs).
     diagnostics: Vec<crate::diagnostic::Diagnostic>,
-    /// Counter for generating unique oscillator state field names (osc_state_0, osc_state_1, ...).
     oscillator_counter: usize,
-    /// Counter for generating unique chorus state field names (chorus_state_0, chorus_state_1, ...).
     chorus_counter: usize,
-    /// Counter for generating unique compressor state field names (compressor_state_0, ...).
     compressor_counter: usize,
-    /// True when generating for an instrument plugin (affects output/input codegen).
     is_instrument: bool,
+    is_polyphonic: bool,
 }
 
 impl ProcessContext {
@@ -231,26 +281,21 @@ impl ProcessContext {
             chorus_counter: 0,
             compressor_counter: 0,
             is_instrument: false,
+            is_polyphonic: false,
         }
     }
 
-    /// Record that a smoothed parameter is used, avoiding duplicates.
     fn use_smoothed_param(&mut self, name: &str) {
         if !self.smoothed_params.contains(&name.to_string()) {
             self.smoothed_params.push(name.to_string());
         }
     }
 
-    /// Drain pending side-effect lines into a target vec.
     fn drain_pending(&mut self) -> Vec<String> {
         std::mem::take(&mut self.pending_lines)
     }
 }
 
-/// Generate code lines for a single statement.
-/// Returns one or more lines (without trailing newlines).
-/// `is_last_in_block` is true for the final statement in the process block —
-/// if it's a chain ending in `-> output`, it writes to the sample buffer.
 fn generate_statement(
     stmt: &Statement,
     is_last_in_block: bool,
@@ -264,21 +309,18 @@ fn generate_statement(
             lines
         }
         Statement::Expr(expr) => {
-            // Check if this is a chain ending in `output` — that's a write to the output buffer
             if let Some(output_lines) = extract_output_chain(&expr.0, ctx) {
                 let mut lines = ctx.drain_pending();
                 lines.extend(output_lines);
                 lines
-            } else if is_last_in_block {
-                // Last expression in block — might still need to become an output write
-                let code = generate_chain_value(&expr.0, ctx);
-                let mut lines = ctx.drain_pending();
-                lines.push(format!("{};", code));
-                lines
             } else {
                 let code = generate_chain_value(&expr.0, ctx);
                 let mut lines = ctx.drain_pending();
-                lines.push(format!("{};", code));
+                if is_last_in_block {
+                    lines.push(format!("{};", code));
+                } else {
+                    lines.push(format!("{};", code));
+                }
                 lines
             }
         }
@@ -297,43 +339,45 @@ fn generate_statement(
     }
 }
 
-/// Try to extract `X -> output` as a chain where the final step is writing to the output buffer.
-/// Returns the generated code for X if this is an output chain, None otherwise.
 fn extract_output_chain(expr: &Expr, ctx: &mut ProcessContext) -> Option<Vec<String>> {
-    // Match: anything -> output
-    if let Expr::Binary { left, op: BinOp::Chain, right } = expr {
+    if let Expr::Binary {
+        left,
+        op: BinOp::Chain,
+        right,
+    } = expr
+    {
         if matches!(&right.0, Expr::Ident(name) if name == "output") {
             let source = generate_chain_value(&left.0, ctx);
+            if ctx.is_polyphonic {
+                return Some(vec![
+                    format!("let output_sample = {};", source),
+                    "for channel in output.iter_mut() { channel[sample_idx] += output_sample; }".to_string(),
+                ]);
+            }
             if ctx.is_instrument {
-                // Instrument mode: compute mono output, write to all channels
                 return Some(vec![
                     format!("let output_sample = {};", source),
                     "for sample in channel_samples { *sample = output_sample; }".to_string(),
                 ]);
-            } else {
-                return Some(vec![format!("*sample = {};", source)]);
             }
+            return Some(vec![format!("*sample = {};", source)]);
         }
     }
     None
 }
 
-/// Generate the value produced by a chain expression.
-/// Handles nested chains like `input -> lowpass(cutoff, res)` and
-/// `mix(input, shaped) -> gain(param.mix)`.
 fn generate_chain_value(expr: &Expr, ctx: &mut ProcessContext) -> String {
-    // Check for chain: left -> right (where right is a DSP function call applied to the chain input)
-    if let Expr::Binary { left, op: BinOp::Chain, right } = expr {
-        // Check if right is `output` — if so, generate the left side as the value
+    if let Expr::Binary {
+        left,
+        op: BinOp::Chain,
+        right,
+    } = expr
+    {
         if matches!(&right.0, Expr::Ident(name) if name == "output") {
             return generate_chain_value(&left.0, ctx);
         }
-        // Check if right is Merge — sum the split branch variables
         if matches!(&right.0, Expr::Merge) {
-            // The left side should have been a split (or chain ending in split)
-            // which populated split_branch_vars. Just evaluate the left to trigger that.
-            let _left_val = generate_chain_value(&left.0, ctx);
-            // Sum all branch result variables
+            let _ = generate_chain_value(&left.0, ctx);
             if ctx.split_branch_vars.is_empty() {
                 return "0.0_f32".to_string();
             }
@@ -341,7 +385,6 @@ fn generate_chain_value(expr: &Expr, ctx: &mut ProcessContext) -> String {
             ctx.split_branch_vars.clear();
             return sum_expr;
         }
-        // Check if right is Split — generate parallel branches
         if let Expr::Split { branches } = &right.0 {
             let input_code = generate_chain_value(&left.0, ctx);
             return generate_split_branches(&input_code, branches, ctx);
@@ -350,11 +393,9 @@ fn generate_chain_value(expr: &Expr, ctx: &mut ProcessContext) -> String {
         return generate_dsp_call_with_input(&right.0, &input_code, ctx);
     }
 
-    // Not a chain — generate as a regular expression
     generate_expr(expr, ctx)
 }
 
-/// Generate a DSP function call where the input signal is piped in via the chain operator.
 fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut ProcessContext) -> String {
     if let Expr::FnCall { callee, args } = expr {
         if let Expr::Ident(fn_name) = &callee.0 {
@@ -389,24 +430,24 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "bitcrush" => {
                     ctx.used_primitives.insert(DspPrimitive::Bitcrush);
                     let bits = generate_expr_as_param(&args[0].0, ctx);
-                    format!("{{ let step = 2.0_f32.powi({} as i32); ({} * step).round() / step }}", bits, input_code)
+                    format!(
+                        "{{ let step = 2.0_f32.powi({} as i32); ({} * step).round() / step }}",
+                        bits, input_code
+                    )
                 }
-                "chorus" => {
-                    return generate_chorus_call_with_input(input_code, args, ctx);
-                }
-                "compressor" => {
-                    return generate_compressor_call_with_input(input_code, args, ctx);
-                }
+                "chorus" => generate_chorus_call_with_input(input_code, args, ctx),
+                "compressor" => generate_compressor_call_with_input(input_code, args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
     }
-    // Not a function call — might be just an ident
     generate_expr(expr, ctx)
 }
 
-/// Get the biquad state field reference, accounting for branch context and instrument mode.
-fn biquad_state_field(ctx: &mut ProcessContext, filter_kind: crate::dsp::primitives::FilterKind) -> String {
+fn biquad_state_field(
+    ctx: &mut ProcessContext,
+    filter_kind: crate::dsp::primitives::FilterKind,
+) -> String {
     if let Some((split_id, branch_idx)) = ctx.current_branch {
         ctx.branch_filters.push((split_id, branch_idx, filter_kind));
         if ctx.is_instrument {
@@ -421,7 +462,6 @@ fn biquad_state_field(ctx: &mut ProcessContext, filter_kind: crate::dsp::primiti
     }
 }
 
-/// Generate a biquad filter call (lowpass, bandpass, highpass) with branch-aware state naming.
 fn generate_filter_call(
     input_code: &str,
     filter_name: &str,
@@ -444,10 +484,8 @@ fn generate_filter_call(
         "0.707".to_string()
     };
 
-    // Determine the state field name based on branch context and instrument mode
     let state_field = biquad_state_field(ctx, filter_kind);
 
-    // Use filter-type-specific function for the correct coefficient formula
     let fn_name = match filter_name {
         "bandpass" => "process_biquad_bandpass",
         "highpass" => "process_biquad_highpass",
@@ -461,10 +499,6 @@ fn generate_filter_call(
     )
 }
 
-/// Generate code for parallel split branches.
-///
-/// Emits per-branch variable declarations and processing chains into pending_lines,
-/// then stores the branch result variable names for merge to consume.
 fn generate_split_branches(
     input_code: &str,
     branches: &[Vec<Spanned<Statement>>],
@@ -477,21 +511,13 @@ fn generate_split_branches(
 
     for (branch_idx, branch_stmts) in branches.iter().enumerate() {
         let branch_var = format!("split{}_branch{}", split_id, branch_idx);
-
-        // Copy input to branch variable
-        ctx.pending_lines.push(format!("let mut {} = {};", branch_var, input_code));
-
-        // Set branch context for state field naming
+        ctx.pending_lines
+            .push(format!("let mut {} = {};", branch_var, input_code));
         ctx.current_branch = Some((split_id, branch_idx));
 
-        // Process each statement in the branch.
-        // Each branch is typically a single chain expression like:
-        //   lowpass(400Hz) -> gain(param.drive) -> tanh()
-        // The chain's input is the branch variable, and its output replaces it.
         for (stmt, _) in branch_stmts {
             match stmt {
                 Statement::Expr(expr) => {
-                    // Generate the chain with the branch var as the implicit input
                     let result = generate_branch_chain(&expr.0, &branch_var, ctx);
                     let pending = ctx.drain_pending();
                     for line in pending {
@@ -511,62 +537,80 @@ fn generate_split_branches(
             }
         }
 
-        // Clear branch context
         ctx.current_branch = None;
-
         branch_vars.push(branch_var);
     }
 
     ctx.split_branch_vars = branch_vars.clone();
-
-    // Return a placeholder — the actual value comes from merge
-    // If someone chains directly off a split without merge, return the last branch
-    branch_vars.last().cloned().unwrap_or_else(|| "0.0_f32".to_string())
+    branch_vars
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "0.0_f32".to_string())
 }
 
-/// Generate code for a chain expression within a split branch.
-/// The branch variable serves as the implicit input (replaces `input`).
 fn generate_branch_chain(expr: &Expr, branch_var: &str, ctx: &mut ProcessContext) -> String {
     match expr {
-        Expr::Binary { left, op: BinOp::Chain, right } => {
+        Expr::Binary {
+            left,
+            op: BinOp::Chain,
+            right,
+        } => {
             let input = generate_branch_chain(&left.0, branch_var, ctx);
             generate_dsp_call_with_input(&right.0, &input, ctx)
         }
-        Expr::FnCall { .. } => {
-            // Standalone function call at the start of a branch chain —
-            // the input is the branch variable
-            generate_dsp_call_with_input(expr, branch_var, ctx)
-        }
+        Expr::FnCall { .. } => generate_dsp_call_with_input(expr, branch_var, ctx),
         Expr::Ident(name) if name == "input" => branch_var.to_string(),
         _ => generate_expr(expr, ctx),
     }
 }
 
-/// Generate code for an expression.
 fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
     match expr {
-        Expr::Number(n, _) => {
-            format!("{:.1}_f32", n)
-        }
+        Expr::Number(n, _) => format!("{:.1}_f32", n),
         Expr::Bool(b) => format!("{}", b),
         Expr::StringLit(s) => format!("\"{}\"", s),
-        Expr::Ident(name) => {
-            match name.as_str() {
-                "input" => "*sample".to_string(),
-                _ => name.clone(),
+        Expr::Ident(name) => match name.as_str() {
+            "input" => {
+                if ctx.is_polyphonic {
+                    "0.0_f32".to_string()
+                } else {
+                    "*sample".to_string()
+                }
             }
-        }
+            _ => name.clone(),
+        },
         Expr::FieldAccess(base, field) => {
             if let Expr::Ident(base_name) = &base.0 {
                 if base_name == "param" {
                     ctx.use_smoothed_param(field);
+                    if ctx.is_polyphonic {
+                        return format!("{}[value_idx]", field);
+                    }
                     return field.clone();
                 }
                 if base_name == "note" {
                     return match field.as_str() {
-                        "pitch" => "self.note_freq".to_string(),
-                        "velocity" => "self.velocity".to_string(),
-                        "gate" => "if self.active_note.is_some() { 1.0_f32 } else { 0.0_f32 }".to_string(),
+                        "pitch" => {
+                            if ctx.is_polyphonic {
+                                "voice.note_freq".to_string()
+                            } else {
+                                "self.note_freq".to_string()
+                            }
+                        }
+                        "velocity" => {
+                            if ctx.is_polyphonic {
+                                "voice.velocity".to_string()
+                            } else {
+                                "self.velocity".to_string()
+                            }
+                        }
+                        "gate" => {
+                            if ctx.is_polyphonic {
+                                "if !voice.releasing { 1.0_f32 } else { 0.0_f32 }".to_string()
+                            } else {
+                                "if self.active_note.is_some() { 1.0_f32 } else { 0.0_f32 }".to_string()
+                            }
+                        }
                         _ => format!("self.{}", field),
                     };
                 }
@@ -577,7 +621,6 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
             if let Expr::Ident(fn_name) = &callee.0 {
                 match fn_name.as_str() {
                     "mix" => {
-                        // mix(dry, wet) as a standalone call (not chained)
                         ctx.used_primitives.insert(DspPrimitive::Mix);
                         if args.len() >= 2 {
                             let dry = generate_chain_value(&args[0].0, ctx);
@@ -606,7 +649,8 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Lowpass);
+                        let state_field =
+                            biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Lowpass);
                         return format!(
                             "process_biquad(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -626,7 +670,8 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Bandpass);
+                        let state_field =
+                            biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Bandpass);
                         return format!(
                             "process_biquad_bandpass(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -646,7 +691,8 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Highpass);
+                        let state_field =
+                            biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Highpass);
                         return format!(
                             "process_biquad_highpass(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -666,7 +712,8 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Notch);
+                        let state_field =
+                            biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Notch);
                         return format!(
                             "process_biquad_notch(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -680,19 +727,11 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         }
                         return "0.0_f32.tanh()".to_string();
                     }
-                    // ── Oscillators (standalone call) ──
                     "saw" | "square" | "sine" | "triangle" => {
-                        return generate_osc_call(fn_name, args, ctx);
+                        return generate_osc_call(fn_name, args, ctx)
                     }
-                    // ── LFO (sine-based, uses OscState) ──
-                    "lfo" => {
-                        return generate_lfo_call(args, ctx);
-                    }
-                    // ── Pulse oscillator (variable width, uses OscState) ──
-                    "pulse" => {
-                        return generate_pulse_call(args, ctx);
-                    }
-                    // ── Fold / Bitcrush (standalone, apply to *sample) ──
+                    "lfo" => return generate_lfo_call(args, ctx),
+                    "pulse" => return generate_pulse_call(args, ctx),
                     "fold" => {
                         ctx.used_primitives.insert(DspPrimitive::Fold);
                         let amount = generate_expr_as_param(&args[0].0, ctx);
@@ -701,30 +740,25 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "bitcrush" => {
                         ctx.used_primitives.insert(DspPrimitive::Bitcrush);
                         let bits = generate_expr_as_param(&args[0].0, ctx);
-                        return format!("{{ let step = 2.0_f32.powi({} as i32); (*sample * step).round() / step }}", bits);
+                        return format!(
+                            "{{ let step = 2.0_f32.powi({} as i32); (*sample * step).round() / step }}",
+                            bits
+                        );
                     }
-                    // ── Chorus / Compressor (standalone, apply to *sample) ──
-                    "chorus" => {
-                        return generate_chorus_call_with_input("*sample", args, ctx);
-                    }
+                    "chorus" => return generate_chorus_call_with_input("*sample", args, ctx),
                     "compressor" => {
-                        return generate_compressor_call_with_input("*sample", args, ctx);
+                        return generate_compressor_call_with_input("*sample", args, ctx)
                     }
-                    // ── ADSR envelope ──
-                    "adsr" => {
-                        return generate_adsr_call(args, ctx);
-                    }
+                    "adsr" => return generate_adsr_call(args, ctx),
                     _ => {}
                 }
             }
-            // Generic function call
             let callee_code = generate_expr(&callee.0, ctx);
             let args_code: Vec<String> = args.iter().map(|(a, _)| generate_expr(a, ctx)).collect();
             format!("{}({})", callee_code, args_code.join(", "))
         }
         Expr::Binary { left, op, right } => {
             if *op == BinOp::Chain {
-                // Handle chain expressions
                 return generate_chain_value(expr, ctx);
             }
             let left_code = generate_expr(&left.0, ctx);
@@ -743,7 +777,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                 BinOp::GtEq => ">=",
                 BinOp::And => "&&",
                 BinOp::Or => "||",
-                BinOp::Chain => "->", // handled above
+                BinOp::Chain => "->",
             };
             format!("{} {} {}", left_code, op_str, right_code)
         }
@@ -754,19 +788,24 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                 UnaryOp::Not => format!("!{}", operand_code),
             }
         }
-        Expr::If { condition, then_body, then_expr, else_body } => {
-            generate_if_expr(condition, then_body, then_expr, else_body.as_ref(), ctx)
-        }
+        Expr::If {
+            condition,
+            then_body,
+            then_expr,
+            else_body,
+        } => generate_if_expr(condition, then_body, then_expr, else_body.as_ref(), ctx),
         Expr::Grouped(inner) => {
             let inner_code = generate_expr(&inner.0, ctx);
             format!("({})", inner_code)
         }
         Expr::Split { branches } => {
-            // Standalone split (not chained from an input) — use *sample as input
-            generate_split_branches("*sample", branches, ctx)
+            if ctx.is_polyphonic {
+                generate_split_branches("0.0_f32", branches, ctx)
+            } else {
+                generate_split_branches("*sample", branches, ctx)
+            }
         }
         Expr::Merge => {
-            // Standalone merge — sum whatever branch vars exist
             if ctx.split_branch_vars.is_empty() {
                 "0.0_f32".to_string()
             } else {
@@ -776,19 +815,22 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
             }
         }
         _ => {
-            ctx.diagnostics.push(crate::diagnostic::Diagnostic::error(
-                "E011",
-                crate::span::Span::new(0, 0),
-                format!("Unsupported expression in codegen: {:?}", std::mem::discriminant(expr)),
-            ).with_suggestion("This language construct is not yet supported in code generation"));
+            ctx.diagnostics.push(
+                crate::diagnostic::Diagnostic::error(
+                    "E011",
+                    crate::span::Span::new(0, 0),
+                    format!(
+                        "Unsupported expression in codegen: {:?}",
+                        std::mem::discriminant(expr)
+                    ),
+                )
+                .with_suggestion("This language construct is not yet supported in code generation"),
+            );
             "0.0_f32 /* unsupported */".to_string()
         }
     }
 }
 
-/// Generate an if-expression that produces a value.
-/// The result is a single-line or indented multi-line block suitable
-/// for use inside a let binding or as a value expression.
 fn generate_if_expr(
     condition: &Spanned<Expr>,
     then_body: &[Spanned<Statement>],
@@ -834,10 +876,6 @@ fn generate_if_expr(
     s
 }
 
-/// Generate code for an oscillator call: `saw(freq)`, `square(freq)`, etc.
-///
-/// Each call site gets a unique state field (`self.osc_state_0`, `self.osc_state_1`, ...)
-/// via the oscillator counter on ProcessContext.
 fn generate_osc_call(fn_name: &str, args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
     let osc_kind = match fn_name {
         "saw" => OscKind::Saw,
@@ -865,20 +903,22 @@ fn generate_osc_call(fn_name: &str, args: &[Spanned<Expr>], ctx: &mut ProcessCon
         _ => unreachable!(),
     };
 
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.osc_state_{}", osc_idx)
+    } else {
+        format!("self.osc_state_{}", osc_idx)
+    };
+
     format!(
-        "{}(&mut self.osc_state_{}, {}, self.sample_rate)",
-        process_fn, osc_idx, freq
+        "{}(&mut {}, {}, self.sample_rate)",
+        process_fn, state_target, freq
     )
 }
 
-/// Generate code for an LFO call: `lfo(rate)`.
-///
-/// Uses sine oscillator internally via `process_osc_sine`. Each call site gets its
-/// own OscState via the oscillator counter (same pattern as K014).
 fn generate_lfo_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
     ctx.used_primitives.insert(DspPrimitive::Lfo);
-    // LFO reuses the sine oscillator helper
-    ctx.used_primitives.insert(DspPrimitive::Oscillator(crate::dsp::primitives::OscKind::Sine));
+    ctx.used_primitives
+        .insert(DspPrimitive::Oscillator(crate::dsp::primitives::OscKind::Sine));
 
     let osc_idx = ctx.oscillator_counter;
     ctx.oscillator_counter += 1;
@@ -889,15 +929,18 @@ fn generate_lfo_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String
         "1.0_f32".to_string()
     };
 
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.osc_state_{}", osc_idx)
+    } else {
+        format!("self.osc_state_{}", osc_idx)
+    };
+
     format!(
-        "process_osc_sine(&mut self.osc_state_{}, {}, self.sample_rate)",
-        osc_idx, rate
+        "process_osc_sine(&mut {}, {}, self.sample_rate)",
+        state_target, rate
     )
 }
 
-/// Generate code for a pulse oscillator call: `pulse(freq, width)`.
-///
-/// Each call site gets its own OscState via the oscillator counter (K014 pattern).
 fn generate_pulse_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
     ctx.used_primitives.insert(DspPrimitive::Pulse);
 
@@ -916,17 +959,21 @@ fn generate_pulse_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> Stri
         "0.5_f32".to_string()
     };
 
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.osc_state_{}", osc_idx)
+    } else {
+        format!("self.osc_state_{}", osc_idx)
+    };
+
     format!(
-        "process_osc_pulse(&mut self.osc_state_{}, {}, {}, self.sample_rate)",
-        osc_idx, freq, width
+        "process_osc_pulse(&mut {}, {}, {}, self.sample_rate)",
+        state_target, freq, width
     )
 }
 
-/// Generate code for an ADSR envelope call: `adsr(attack, decay, sustain, release)`.
-///
-/// Maps to `process_adsr(&mut self.adsr_state, gate, attack, decay, sustain, release, sample_rate)`.
 fn generate_adsr_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
-    ctx.used_primitives.insert(DspPrimitive::Envelope(EnvKind::Adsr));
+    ctx.used_primitives
+        .insert(DspPrimitive::Envelope(EnvKind::Adsr));
 
     let attack = if !args.is_empty() {
         generate_expr_as_param(&args[0].0, ctx)
@@ -949,19 +996,31 @@ fn generate_adsr_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> Strin
         "200.0_f32".to_string()
     };
 
-    // Gate is based on active_note state
+    let gate = if ctx.is_polyphonic {
+        "if !voice.releasing { 1.0_f32 } else { 0.0_f32 }"
+    } else {
+        "if self.active_note.is_some() { 1.0_f32 } else { 0.0_f32 }"
+    };
+    let state_target = if ctx.is_polyphonic {
+        "voice.adsr_state"
+    } else {
+        "self.adsr_state"
+    };
+
     format!(
-        "process_adsr(&mut self.adsr_state, if self.active_note.is_some() {{ 1.0_f32 }} else {{ 0.0_f32 }}, {}, {}, {}, {}, self.sample_rate)",
-        attack, decay, sustain, release
+        "process_adsr(&mut {}, {}, {}, {}, {}, {}, self.sample_rate)",
+        state_target, gate, attack, decay, sustain, release
     )
 }
 
-/// Generate a parameter expression — handles `param.X` field access by using the smoothed local.
 fn generate_expr_as_param(expr: &Expr, ctx: &mut ProcessContext) -> String {
     if let Expr::FieldAccess(base, field) = expr {
         if let Expr::Ident(base_name) = &base.0 {
             if base_name == "param" {
                 ctx.use_smoothed_param(field);
+                if ctx.is_polyphonic {
+                    return format!("{}[value_idx]", field);
+                }
                 return field.clone();
             }
         }
@@ -969,11 +1028,11 @@ fn generate_expr_as_param(expr: &Expr, ctx: &mut ProcessContext) -> String {
     generate_expr(expr, ctx)
 }
 
-/// Generate code for a chorus call: `chorus(rate, depth)` applied to an input signal.
-///
-/// Each call site gets a unique ChorusState field (`self.chorus_state_0`, etc.)
-/// via the chorus counter on ProcessContext.
-fn generate_chorus_call_with_input(input_code: &str, args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+fn generate_chorus_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
     ctx.used_primitives.insert(DspPrimitive::Chorus);
 
     let chorus_idx = ctx.chorus_counter;
@@ -991,17 +1050,23 @@ fn generate_chorus_call_with_input(input_code: &str, args: &[Spanned<Expr>], ctx
         "0.5_f32".to_string()
     };
 
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.chorus_state_{}", chorus_idx)
+    } else {
+        format!("self.chorus_state_{}", chorus_idx)
+    };
+
     format!(
-        "process_chorus(&mut self.chorus_state_{}, {}, {}, {}, self.sample_rate)",
-        chorus_idx, input_code, rate, depth
+        "process_chorus(&mut {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, rate, depth
     )
 }
 
-/// Generate code for a compressor call: `compressor(threshold, ratio)` applied to an input signal.
-///
-/// Each call site gets a unique CompressorState field (`self.compressor_state_0`, etc.)
-/// via the compressor counter on ProcessContext.
-fn generate_compressor_call_with_input(input_code: &str, args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+fn generate_compressor_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
     ctx.used_primitives.insert(DspPrimitive::Compressor);
 
     let comp_idx = ctx.compressor_counter;
@@ -1019,8 +1084,14 @@ fn generate_compressor_call_with_input(input_code: &str, args: &[Spanned<Expr>],
         "4.0_f32".to_string()
     };
 
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.compressor_state_{}", comp_idx)
+    } else {
+        format!("self.compressor_state_{}", comp_idx)
+    };
+
     format!(
-        "process_compressor(&mut self.compressor_state_{}, {}, {}, {}, self.sample_rate)",
-        comp_idx, input_code, threshold, ratio
+        "process_compressor(&mut {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, threshold, ratio
     )
 }

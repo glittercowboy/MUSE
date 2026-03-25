@@ -14,19 +14,11 @@ pub mod test;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::ast::PluginDef;
+use crate::ast::{PluginDef, PluginItem};
 use crate::diagnostic::Diagnostic;
 use crate::resolve::ResolvedPlugin;
 use crate::span::Span;
 
-/// Generate a complete Rust/nih-plug crate from a resolved plugin.
-///
-/// On success, returns the path to the generated crate directory.
-/// On failure, returns structured diagnostics with E010+ codes.
-///
-/// The generated crate is a standalone Rust project with:
-/// - `Cargo.toml` — package config with nih-plug dependency
-/// - `src/lib.rs` — plugin struct, params, trait impls, process body, export macros
 pub fn generate_plugin(
     resolved: &ResolvedPlugin,
     _registry: &crate::dsp::primitives::DspRegistry,
@@ -35,43 +27,31 @@ pub fn generate_plugin(
     let plugin = resolved.plugin;
     let mut diagnostics = Vec::new();
 
-    // Validate required metadata for codegen
     validate_codegen_requirements(plugin, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(diagnostics);
     }
 
-    // Generate all code fragments
     let cargo_toml = cargo::generate_cargo_toml(plugin);
     let params_code = params::generate_params(plugin);
+    let voice_count = find_voice_count(plugin);
+    let (process_body, process_info) = process::generate_process(plugin, voice_count);
 
-    // Generate process body — also collects which DSP primitives are used
-    let (process_body, process_info) = process::generate_process(plugin);
-
-    // Check for codegen diagnostics from process generation (E011 unsupported constructs)
     if !process_info.diagnostics.is_empty() {
         return Err(process_info.diagnostics);
     }
 
-    // Generate DSP helpers based on which primitives are actually used
     let dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
-
-    // Generate plugin struct with DSP state fields based on used primitives
     let plugin_code = plugin::generate_plugin_struct(plugin, &process_info);
-
-    // Replace the process body placeholder in the plugin code
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
-    // Assemble the full lib.rs
-    let mut lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code);
+    let mut lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code, voice_count.is_some());
 
-    // If the plugin has test blocks, append a #[cfg(test)] module
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
         lib_rs.push_str(&test_module);
     }
 
-    // Write files to disk
     let crate_dir = output_dir.to_path_buf();
     let src_dir = crate_dir.join("src");
 
@@ -102,9 +82,18 @@ pub fn generate_plugin(
     Ok(crate_dir)
 }
 
-/// Validate that all metadata required for codegen is present.
+fn find_voice_count(plugin: &PluginDef) -> Option<u32> {
+    plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::VoiceDecl(voice) = item {
+            Some(voice.count)
+        } else {
+            None
+        }
+    })
+}
+
 fn validate_codegen_requirements(plugin: &PluginDef, diagnostics: &mut Vec<Diagnostic>) {
-    use crate::ast::{MetadataKey, PluginItem, FormatBlock};
+    use crate::ast::{FormatBlock, MetadataKey, PluginItem};
 
     let mut has_vendor = false;
     let mut has_clap = false;
@@ -129,55 +118,86 @@ fn validate_codegen_requirements(plugin: &PluginDef, diagnostics: &mut Vec<Diagn
 
     if !has_vendor {
         diagnostics.push(
-            Diagnostic::error("E010", plugin.span, "Missing required 'vendor' metadata for code generation")
-                .with_suggestion("Add: vendor \"Your Name\""),
+            Diagnostic::error(
+                "E010",
+                plugin.span,
+                "Missing required 'vendor' metadata for code generation",
+            )
+            .with_suggestion("Add: vendor \"Your Name\""),
         );
     }
     if !has_clap {
         diagnostics.push(
-            Diagnostic::error("E010", plugin.span, "Missing required 'clap' block for code generation")
-                .with_suggestion("Add a clap { id \"...\" description \"...\" features [...] } block"),
+            Diagnostic::error(
+                "E010",
+                plugin.span,
+                "Missing required 'clap' block for code generation",
+            )
+            .with_suggestion("Add a clap { id \"...\" description \"...\" features [...] } block"),
         );
     }
     if !has_vst3 {
         diagnostics.push(
-            Diagnostic::error("E010", plugin.span, "Missing required 'vst3' block for code generation")
-                .with_suggestion("Add a vst3 { id \"...\" subcategories [...] } block"),
+            Diagnostic::error(
+                "E010",
+                plugin.span,
+                "Missing required 'vst3' block for code generation",
+            )
+            .with_suggestion("Add a vst3 { id \"...\" subcategories [...] } block"),
         );
     }
     if !has_io_in || !has_io_out {
         diagnostics.push(
-            Diagnostic::error("E010", plugin.span, "Missing input/output declarations for code generation")
-                .with_suggestion("Add: input stereo / output stereo"),
+            Diagnostic::error(
+                "E010",
+                plugin.span,
+                "Missing input/output declarations for code generation",
+            )
+            .with_suggestion("Add: input stereo / output stereo"),
         );
     }
     if !has_process {
         diagnostics.push(
-            Diagnostic::error("E010", plugin.span, "Missing process block for code generation")
-                .with_suggestion("Add: process { input -> ... -> output }"),
+            Diagnostic::error(
+                "E010",
+                plugin.span,
+                "Missing process block for code generation",
+            )
+            .with_suggestion("Add: process { input -> ... -> output }"),
         );
     }
 }
 
-/// Assemble the final lib.rs content from generated fragments.
-fn assemble_lib_rs(params_code: &str, dsp_helpers: &str, plugin_code: &str) -> String {
+fn assemble_lib_rs(
+    params_code: &str,
+    dsp_helpers: &str,
+    plugin_code: &str,
+    include_poly_helpers: bool,
+) -> String {
     let mut out = String::new();
 
-    // Prelude imports
-    out.push_str("use nih_plug::prelude::*;\nuse std::sync::Arc;\n\n");
-
-    // Params struct
+    out.push_str(
+        "use nih_plug::prelude::*;\nuse nih_plug::params::FloatParam;\nuse nih_plug::params::IntParam;\nuse nih_plug::params::BoolParam;\nuse nih_plug::params::EnumParam;\nuse nih_plug::params::Params;\nuse nih_plug::params::range::{FloatRange, IntRange};\nuse nih_plug::params::smoothing::SmoothingStyle;\nuse nih_plug::formatters;\nuse nih_plug::util;\nuse nih_plug::{nih_export_clap, nih_export_vst3};\nuse std::sync::Arc;\n\n",
+    );
     out.push_str(params_code);
     out.push('\n');
 
-    // DSP helpers (may be empty)
+    out.push_str("const MAX_BLOCK_SIZE: usize = 64;\n\n");
+
     if !dsp_helpers.is_empty() {
         out.push_str(dsp_helpers);
         out.push('\n');
     }
 
-    // Plugin struct + trait impls + export macros
-    out.push_str(plugin_code);
+    if include_poly_helpers {
+        out.push_str(
+            "fn voice_is_silent(voice: &Voice) -> bool {\n    if let Some(level) = voice_adsr_level(voice) {\n        level <= 0.0001\n    } else {\n        false\n    }\n}\n\n",
+        );
+        out.push_str(
+            "fn voice_adsr_level(voice: &Voice) -> Option<f32> {\n    Some(voice.adsr_state.level)\n}\n\n",
+        );
+    }
 
+    out.push_str(plugin_code);
     out
 }

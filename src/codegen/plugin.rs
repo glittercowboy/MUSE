@@ -1,13 +1,12 @@
 //! Generates the Plugin struct, Plugin/ClapPlugin/Vst3Plugin trait impls, and export macros.
 
 use crate::ast::{
-    ClapItem, ChannelSpec, FormatBlock, IoDirection, MetadataKey, MetadataValue,
-    PluginDef, PluginItem, Vst3Item,
+    ClapItem, ChannelSpec, FormatBlock, IoDirection, MetadataKey, MetadataValue, PluginDef,
+    PluginItem, Vst3Item,
 };
-use crate::dsp::primitives::DspPrimitive;
 use crate::codegen::process::ProcessInfo;
+use crate::dsp::primitives::DspPrimitive;
 
-/// Info extracted from the plugin AST needed for code generation.
 struct PluginInfo {
     name: String,
     vendor: String,
@@ -19,22 +18,17 @@ struct PluginInfo {
     struct_name: String,
 }
 
-/// CLAP-specific metadata.
 struct ClapInfo {
     id: String,
     description: String,
     features: Vec<String>,
 }
 
-/// VST3-specific metadata.
 struct Vst3Info {
     id: String,
     subcategories: Vec<String>,
 }
 
-/// Generate the complete Plugin struct, trait impls, and export macros.
-///
-/// `process_info` provides which DSP primitives are used and per-branch filter state requirements.
 pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) -> String {
     let info = extract_plugin_info(plugin);
     let clap = extract_clap_info(plugin);
@@ -42,13 +36,12 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
 
     let used_primitives = &process_info.used_primitives;
     let is_instrument = process_info.is_instrument;
+    let is_polyphonic = is_instrument && process_info.voice_count.is_some();
+    let voice_count = process_info.voice_count.unwrap_or(0) as usize;
 
-    // Check for non-branch (top-level) biquad usage
-    let needs_top_level_biquad = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(_))
-    }) && process_info.branch_filters.is_empty();
+    let needs_top_level_biquad = used_primitives.iter().any(|p| matches!(p, DspPrimitive::Filter(_)))
+        && process_info.branch_filters.is_empty();
 
-    // Collect unique (split_id, branch_idx) pairs that need biquad state
     let mut branch_biquad_fields: Vec<(usize, usize)> = Vec::new();
     for &(split_id, branch_idx, _) in &process_info.branch_filters {
         let key = (split_id, branch_idx);
@@ -67,14 +60,15 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
 
     let mut out = String::new();
 
-    // Plugin struct
+    if is_polyphonic {
+        out.push_str(&generate_voice_struct(process_info));
+        out.push('\n');
+    }
+
     out.push_str(&format!("struct {} {{\n", info.struct_name));
     out.push_str("    params: Arc<PluginParams>,\n");
     if needs_top_level_biquad {
-        out.push_str(&format!(
-            "    biquad_state: [BiquadState; {}],\n",
-            num_channels
-        ));
+        out.push_str(&format!("    biquad_state: [BiquadState; {}],\n", num_channels));
     }
     for &(split_id, branch_idx) in &branch_biquad_fields {
         out.push_str(&format!(
@@ -82,24 +76,26 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
             split_id, branch_idx, num_channels
         ));
     }
-    // Oscillator state fields (instruments and effects with LFOs)
-    for i in 0..process_info.oscillator_count {
-        out.push_str(&format!("    osc_state_{}: OscState,\n", i));
+
+    if is_polyphonic {
+        out.push_str(&format!("    voices: [Option<Voice>; {}],\n", voice_count));
+        out.push_str("    next_internal_voice_id: u64,\n");
+    } else {
+        for i in 0..process_info.oscillator_count {
+            out.push_str(&format!("    osc_state_{}: OscState,\n", i));
+        }
+        if has_adsr {
+            out.push_str("    adsr_state: AdsrState,\n");
+        }
+        for i in 0..process_info.chorus_count {
+            out.push_str(&format!("    chorus_state_{}: ChorusState,\n", i));
+        }
+        for i in 0..process_info.compressor_count {
+            out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
+        }
     }
-    // ADSR state (instruments and effects with envelope modulation)
-    if has_adsr {
-        out.push_str("    adsr_state: AdsrState,\n");
-    }
-    // Chorus state fields (one per chorus call site)
-    for i in 0..process_info.chorus_count {
-        out.push_str(&format!("    chorus_state_{}: ChorusState,\n", i));
-    }
-    // Compressor state fields (one per compressor call site)
-    for i in 0..process_info.compressor_count {
-        out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
-    }
-    // Instrument-specific state fields
-    if is_instrument {
+
+    if is_instrument && !is_polyphonic {
         out.push_str("    active_note: Option<u8>,\n");
         out.push_str("    note_freq: f32,\n");
         out.push_str("    velocity: f32,\n");
@@ -109,16 +105,12 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
     out.push_str("}\n\n");
 
-    // Default impl
     out.push_str(&format!(
         "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n            params: Arc::new(PluginParams::default()),\n",
         info.struct_name
     ));
     if needs_top_level_biquad {
-        out.push_str(&format!(
-            "            biquad_state: [BiquadState::default(); {}],\n",
-            num_channels
-        ));
+        out.push_str(&format!("            biquad_state: [BiquadState::default(); {}],\n", num_channels));
     }
     for &(split_id, branch_idx) in &branch_biquad_fields {
         out.push_str(&format!(
@@ -126,19 +118,29 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
             split_id, branch_idx, num_channels
         ));
     }
-    for i in 0..process_info.oscillator_count {
-        out.push_str(&format!("            osc_state_{}: OscState::default(),\n", i));
+
+    if is_polyphonic {
+        out.push_str(&format!(
+            "            voices: [(); {}].map(|_| None),\n",
+            voice_count
+        ));
+        out.push_str("            next_internal_voice_id: 0,\n");
+    } else {
+        for i in 0..process_info.oscillator_count {
+            out.push_str(&format!("            osc_state_{}: OscState::default(),\n", i));
+        }
+        if has_adsr {
+            out.push_str("            adsr_state: AdsrState::default(),\n");
+        }
+        for i in 0..process_info.chorus_count {
+            out.push_str(&format!("            chorus_state_{}: ChorusState::default(),\n", i));
+        }
+        for i in 0..process_info.compressor_count {
+            out.push_str(&format!("            compressor_state_{}: CompressorState::default(),\n", i));
+        }
     }
-    if has_adsr {
-        out.push_str("            adsr_state: AdsrState::default(),\n");
-    }
-    for i in 0..process_info.chorus_count {
-        out.push_str(&format!("            chorus_state_{}: ChorusState::default(),\n", i));
-    }
-    for i in 0..process_info.compressor_count {
-        out.push_str(&format!("            compressor_state_{}: CompressorState::default(),\n", i));
-    }
-    if is_instrument {
+
+    if is_instrument && !is_polyphonic {
         out.push_str("            active_note: None,\n");
         out.push_str("            note_freq: 440.0,\n");
         out.push_str("            velocity: 0.0,\n");
@@ -148,20 +150,24 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
     out.push_str("        }\n    }\n}\n\n");
 
-    // Plugin trait impl
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic));
 
-    // ClapPlugin trait impl + export macro
-    if let Some(ref clap) = clap {
-        out.push_str(&generate_clap_trait(&info, clap));
+    if is_polyphonic {
+        let helper_defaults = generate_voice_field_defaults(process_info);
+        let helpers = crate::codegen::midi::generate_voice_helper_methods()
+            .replace("{STRUCT_NAME}", &info.struct_name)
+            .replace("{VOICE_FIELD_DEFAULTS}", &helper_defaults);
+        out.push_str(&helpers);
+        out.push('\n');
     }
 
-    // Vst3Plugin trait impl + export macro
+    if let Some(ref clap) = clap {
+        out.push_str(&generate_clap_trait(&info, clap, process_info));
+    }
     if let Some(ref vst3) = vst3 {
         out.push_str(&generate_vst3_trait(&info, vst3));
     }
 
-    // Export macros
     if clap.is_some() {
         out.push_str(&format!("nih_export_clap!({});\n", info.struct_name));
     }
@@ -172,7 +178,53 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     out
 }
 
-/// Extract core plugin info from the AST.
+fn generate_voice_struct(process_info: &ProcessInfo) -> String {
+    let mut out = String::new();
+    out.push_str("#[derive(Clone, Copy)]\nstruct Voice {\n");
+    out.push_str("    voice_id: i32,\n");
+    out.push_str("    channel: u8,\n");
+    out.push_str("    note: u8,\n");
+    out.push_str("    internal_voice_id: u64,\n");
+    out.push_str("    note_freq: f32,\n");
+    out.push_str("    velocity: f32,\n");
+    out.push_str("    releasing: bool,\n");
+    for i in 0..process_info.oscillator_count {
+        out.push_str(&format!("    osc_state_{}: OscState,\n", i));
+    }
+    if process_info.has_adsr {
+        out.push_str("    adsr_state: AdsrState,\n");
+    }
+    for i in 0..process_info.chorus_count {
+        out.push_str(&format!("    chorus_state_{}: ChorusState,\n", i));
+    }
+    for i in 0..process_info.compressor_count {
+        out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
+    let mut fields = Vec::new();
+    for i in 0..process_info.oscillator_count {
+        fields.push(format!("osc_state_{}: OscState::default()", i));
+    }
+    if process_info.has_adsr {
+        fields.push("adsr_state: AdsrState::default()".to_string());
+    }
+    for i in 0..process_info.chorus_count {
+        fields.push(format!("chorus_state_{}: ChorusState::default()", i));
+    }
+    for i in 0..process_info.compressor_count {
+        fields.push(format!("compressor_state_{}: CompressorState::default()", i));
+    }
+    if fields.is_empty() {
+        String::new()
+    } else {
+        format!("{},", fields.join(", "))
+    }
+}
+
 fn extract_plugin_info(plugin: &PluginDef) -> PluginInfo {
     let name = plugin.name.clone();
     let struct_name = plugin_name_to_struct(&name);
@@ -196,7 +248,7 @@ fn extract_plugin_info(plugin: &PluginDef) -> PluginInfo {
                     MetadataKey::Version => version = val,
                     MetadataKey::Url => url = val,
                     MetadataKey::Email => email = val,
-                    MetadataKey::Category => {} // not used in Plugin trait
+                    MetadataKey::Category => {}
                 }
             }
             PluginItem::IoDecl(io) => match io.direction {
@@ -261,27 +313,27 @@ fn extract_vst3_info(plugin: &PluginDef) -> Option<Vst3Info> {
     None
 }
 
-fn generate_plugin_trait(info: &PluginInfo, needs_sample_rate: bool, is_instrument: bool) -> String {
+fn generate_plugin_trait(
+    info: &PluginInfo,
+    needs_sample_rate: bool,
+    is_instrument: bool,
+    is_polyphonic: bool,
+) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
     let out_ch = info.output_channels;
 
-    let initialize_fn = if needs_sample_rate {
-        r#"
-    fn initialize(
-        &mut self,
-        _audio_io_layout: &AudioIOLayout,
-        buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
-    ) -> bool {
-        self.sample_rate = buffer_config.sample_rate;
-        true
+    let mut lifecycle_fns = String::new();
+    if needs_sample_rate {
+        lifecycle_fns.push_str(
+            "\n    fn initialize(\n        &mut self,\n        _audio_io_layout: &AudioIOLayout,\n        buffer_config: &BufferConfig,\n        _context: &mut impl InitContext<Self>,\n    ) -> bool {\n        self.sample_rate = buffer_config.sample_rate;\n        true\n    }\n",
+        );
     }
-"#
-        .to_string()
-    } else {
-        String::new()
-    };
+    if is_polyphonic {
+        lifecycle_fns.push_str(
+            "\n    fn reset(&mut self) {\n        self.voices.fill(None);\n        self.next_internal_voice_id = 0;\n    }\n",
+        );
+    }
 
     let midi_config = if is_instrument {
         "MidiConfig::Basic"
@@ -295,7 +347,6 @@ fn generate_plugin_trait(info: &PluginInfo, needs_sample_rate: bool, is_instrume
         format!("            main_input_channels: NonZeroU32::new({}),", in_ch)
     };
 
-    // In instrument mode, context is used (for MIDI events); in effect mode it's unused
     let context_param = if is_instrument { "context" } else { "_context" };
 
     format!(
@@ -322,8 +373,7 @@ fn generate_plugin_trait(info: &PluginInfo, needs_sample_rate: bool, is_instrume
 
     fn params(&self) -> Arc<dyn Params> {{
         self.params.clone()
-    }}
-{initialize_fn}
+    }}{lifecycle_fns}
     fn process(
         &mut self,
         buffer: &mut Buffer,
@@ -340,12 +390,21 @@ fn generate_plugin_trait(info: &PluginInfo, needs_sample_rate: bool, is_instrume
         url = info.url,
         email = info.email,
         version = info.version,
+        lifecycle_fns = lifecycle_fns,
     )
 }
 
-fn generate_clap_trait(info: &PluginInfo, clap: &ClapInfo) -> String {
+fn generate_clap_trait(info: &PluginInfo, clap: &ClapInfo, process_info: &ProcessInfo) -> String {
     let features: Vec<String> = clap.features.iter().map(|f| map_clap_feature(f)).collect();
     let features_str = features.join(",\n        ");
+    let poly_mod_config = if let Some(voice_count) = process_info.voice_count {
+        format!(
+            "\n    const CLAP_POLY_MODULATION_CONFIG: Option<PolyModulationConfig> = Some(PolyModulationConfig {{\n        max_voice_capacity: {},\n        supports_overlapping_voices: true,\n    }});",
+            voice_count
+        )
+    } else {
+        String::new()
+    };
 
     format!(
         r#"impl ClapPlugin for {s} {{
@@ -355,13 +414,14 @@ fn generate_clap_trait(info: &PluginInfo, clap: &ClapInfo) -> String {
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[
         {features_str},
-    ];
+    ];{poly_mod_config}
 }}
 
 "#,
         s = info.struct_name,
         id = clap.id,
         desc = clap.description,
+        poly_mod_config = poly_mod_config,
     )
 }
 
@@ -385,7 +445,6 @@ fn generate_vst3_trait(info: &PluginInfo, vst3: &Vst3Info) -> String {
     )
 }
 
-/// Map a CLAP feature string to its nih-plug ClapFeature variant.
 fn map_clap_feature(feature: &str) -> String {
     match feature {
         "audio_effect" => "ClapFeature::AudioEffect".to_string(),
@@ -401,7 +460,6 @@ fn map_clap_feature(feature: &str) -> String {
     }
 }
 
-/// Map a VST3 subcategory string to its nih-plug Vst3SubCategory variant.
 fn map_vst3_subcategory(subcat: &str) -> String {
     match subcat {
         "Fx" => "Vst3SubCategory::Fx".to_string(),
@@ -415,27 +473,20 @@ fn map_vst3_subcategory(subcat: &str) -> String {
         "Distortion" => "Vst3SubCategory::Distortion".to_string(),
         "Tools" => "Vst3SubCategory::Tools".to_string(),
         other => {
-            // nih-plug doesn't support custom VST3 subcategories directly,
-            // so we map unknown ones to Tools as a safe fallback
             eprintln!("codegen: unknown VST3 subcategory '{}', mapping to Tools", other);
             "Vst3SubCategory::Tools".to_string()
         }
     }
 }
 
-/// Generate a 16-byte VST3 class ID literal. Pads with spaces or truncates.
 fn vst3_class_id_literal(id: &str) -> String {
     let bytes = id.as_bytes();
     let mut result = [b' '; 16];
     let len = bytes.len().min(16);
     result[..len].copy_from_slice(&bytes[..len]);
-    // Ensure all bytes are valid ASCII for a byte string literal
     String::from_utf8(result.to_vec()).unwrap_or_else(|_| "MusePlugin______".to_string())
 }
 
-/// Convert a plugin display name to a Rust struct name (PascalCase, no spaces).
-///
-/// "Warm Gain" → "WarmGain"
 fn plugin_name_to_struct(name: &str) -> String {
     name.split_whitespace()
         .map(|word| {
@@ -451,7 +502,6 @@ fn plugin_name_to_struct(name: &str) -> String {
         .collect()
 }
 
-/// Get the channel count from a ChannelSpec.
 fn channel_count(spec: &ChannelSpec) -> u32 {
     match spec {
         ChannelSpec::Mono => 1,
@@ -463,6 +513,7 @@ fn channel_count(spec: &ChannelSpec) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::process::MAX_BLOCK_SIZE;
 
     #[test]
     fn test_plugin_name_to_struct() {
@@ -480,6 +531,14 @@ mod tests {
     #[test]
     fn test_map_clap_feature() {
         assert_eq!(map_clap_feature("audio_effect"), "ClapFeature::AudioEffect");
-        assert_eq!(map_clap_feature("custom_thing"), "ClapFeature::Custom(\"custom_thing\")");
+        assert_eq!(
+            map_clap_feature("custom_thing"),
+            "ClapFeature::Custom(\"custom_thing\")"
+        );
+    }
+
+    #[test]
+    fn max_block_size_constant_matches_contract() {
+        assert_eq!(MAX_BLOCK_SIZE, 64);
     }
 }
