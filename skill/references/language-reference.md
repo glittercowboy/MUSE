@@ -244,6 +244,117 @@ unison {
 - Requires `voices` — the voice pool is shared, not multiplied (16 voices with 3 unison = 5 notes max)
 - Each unison voice gets its own DSP state (oscillators, filters, envelopes)
 
+## GUI Block
+
+Add a `gui { }` block to declare a custom web-view editor for your plugin. Without a gui block, the host's generic parameter UI is used.
+
+### Tier Detection
+
+The compiler auto-detects the GUI complexity tier:
+
+| Tier | Trigger | Result |
+|------|---------|--------|
+| **Tier 1 (auto-layout)** | `gui { }` with only theme/accent/size, no layout/panel/widget | Auto-generates knobs for all declared params |
+| **Tier 2 (explicit layout)** | `gui { }` with `layout`, `panel`, or widget declarations | Uses declared layout and widget placement |
+
+### Theme, Accent, Size
+
+```muse
+gui {
+  theme dark        // dark or light (required)
+  accent "#E8A87C"  // hex color: #RGB or #RRGGBB
+  size 800 550      // editor width and height in pixels (optional, default 600x400)
+}
+```
+
+- `theme`: `dark` (dark background, light text) or `light` (light background, dark text). E014 if invalid.
+- `accent`: hex color string used for active knobs, sliders, and highlights. E014 if not valid hex.
+- `size`: width and height in pixels. Optional — defaults to 600×400.
+
+### Layout and Panels
+
+Layouts are flex containers. Panels are titled grouping sections.
+
+```muse
+gui {
+  theme dark
+  accent "#7ECCE8"
+  size 800 550
+
+  layout vertical {
+    panel "Analyzer" {
+      spectrum
+    }
+    panel "Controls" {
+      layout horizontal {
+        xy_pad freq resonance
+        knob gain
+      }
+    }
+  }
+}
+```
+
+- `layout vertical { ... }` — children stack top-to-bottom
+- `layout horizontal { ... }` — children arrange left-to-right
+- `layout grid { ... }` — CSS grid layout
+- `panel "Title" { ... }` — a titled section with border/background
+- Layouts and panels can nest arbitrarily
+
+### Widget Types
+
+| Widget | Syntax | Binds To | Description |
+|--------|--------|----------|-------------|
+| `knob` | `knob <param>` | float/int param | Rotary knob |
+| `slider` | `slider <param>` | float/int param | Horizontal/vertical slider |
+| `meter` | `meter <param>` | float/int param | Read-only level meter |
+| `switch` | `switch <param>` | bool param | Toggle switch |
+| `label` | `label "Text"` | — | Static text label |
+| `value` | `value <param>` | float/int param | Numeric value display |
+| `xy_pad` | `xy_pad <paramX> <paramY>` | 2 float params | 2D X/Y control pad |
+| `spectrum` | `spectrum` | — | Live frequency spectrum analyzer |
+| `waveform` | `waveform` | — | Waveform display |
+| `envelope` | `envelope` | — | Envelope visualizer |
+| `eq_curve` | `eq_curve` | — | EQ curve display |
+| `reduction` | `reduction` | — | Gain reduction meter |
+
+- **Param-bound widgets** (`knob`, `slider`, `meter`, `switch`, `value`) take a param name that must match a declared `param`. E014 if unknown.
+- **XY pad** takes two param names (X and Y axes). Both must be declared params.
+- **Visualization widgets** (`spectrum`, `waveform`, `envelope`, `eq_curve`, `reduction`) take no parameters. E014 if a param is given.
+- **Label** takes a string literal, not a param name.
+
+### Widget Properties
+
+Widgets accept an optional `{ }` block with properties:
+
+```muse
+knob gain {
+  style "vintage"
+  class "hero-knob"
+  label "Output Gain"
+}
+```
+
+| Property | Value | Effect |
+|----------|-------|--------|
+| `style` | string | CSS style hint (e.g., `"vintage"`, `"minimal"`) |
+| `class` | string | CSS class added to the widget element |
+| `label` | string | Override the default parameter-name label |
+
+### CSS Escape Hatch
+
+Inject raw CSS into the editor with the `css` string item:
+
+```muse
+gui {
+  theme dark
+  accent "#E8A87C"
+  css ".hero-knob { transform: scale(1.5); }"
+}
+```
+
+The CSS string must be non-empty (E014 if empty). The CSS is injected into a `<style>` tag in the editor HTML.
+
 ## Type System
 
 | Type | Description |

@@ -20,6 +20,7 @@ plugin "Name" {
   // unison { count N detune X }             (voice stacking, requires voices)
   // midi { note { ... } cc N { ... } }      (instruments only)
   // param name: type = default in min..max { smoothing/unit/display }
+  // gui { theme/accent/size/layout/panel/widgets/css }  (custom editor)
   // process { signal chain }
   // test "name" { input/set/assert }
 }
@@ -50,7 +51,6 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 
 - **No CC test events.** Test blocks support `note on`/`note off` for MIDI injection but not control change events.
 - **macOS only.** The build pipeline (`muse build`) produces macOS CLAP + VST3 bundles. No Linux or Windows support.
-- **No GUI.** Plugins get the host's generic parameter UI. No custom editor/view support.
 - **Polyphony is per-voice mono.** Each voice outputs mono, summed to the output bus. No per-voice stereo panning yet.
 - **Avoid Rust reserved words as variable names.** Don't use `mod`, `fn`, `type`, etc. as `let` binding names in process blocks — they'll break the generated Rust code.
 
@@ -61,6 +61,7 @@ muse check <file> [--format json]              # Parse + resolve only
 muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]
 muse test <file> [--format json]               # Run test blocks
 muse build <file> [--output-dir <dir>] [--format json]  # Full build → CLAP + VST3
+muse preview <file> [--format json]            # Preview GUI in native window (macOS)
 ```
 
 Exit codes: `0` success, `1` compile/check/test error, `2` build/I/O error.
@@ -132,16 +133,17 @@ If the user's intent is clear from their message, skip the question and route di
 | Create new plugin from description | `workflows/create-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/test-syntax.md`, `references/plugin-recipes.md` |
 | Fix compiler/test errors | `workflows/debug-errors.md` | `references/error-codes.md`, `references/cli-commands.md` |
 | Add features to existing plugin | `workflows/extend-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/test-syntax.md` |
+| Create plugin with custom GUI | `workflows/create-gui-plugin.md` | `references/language-reference.md`, `references/dsp-primitives.md`, `references/plugin-recipes.md` |
 
 ## Reference Files
 
 | File | Contents |
 |---|---|
-| `references/language-reference.md` | Complete syntax guide: plugin structure, params, process blocks, signal chains, routing, MIDI, metadata, type system |
+| `references/language-reference.md` | Complete syntax guide: plugin structure, params, process blocks, signal chains, routing, MIDI, GUI blocks, metadata, type system |
 | `references/test-syntax.md` | Test block grammar, signal types, assertion properties, operators, JSON output format |
 | `references/dsp-primitives.md` | All 24 DSP functions by category with signatures and descriptions |
-| `references/error-codes.md` | E001–E011 with causes and fix patterns |
-| `references/cli-commands.md` | All 4 CLI commands with flags, exit codes, JSON output schemas |
-| `references/plugin-recipes.md` | 9 annotated example patterns: gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth |
+| `references/error-codes.md` | E001–E014 with causes and fix patterns |
+| `references/cli-commands.md` | All 5 CLI commands with flags, exit codes, JSON output schemas |
+| `references/plugin-recipes.md` | 14 annotated example patterns: gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth, poly, MPE, unison, GUI (Tier 1), GUI (Tier 2) |
 
 </routing>

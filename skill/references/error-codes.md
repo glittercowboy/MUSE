@@ -1,6 +1,6 @@
 # Error Codes
 
-The Muse compiler emits structured diagnostics with error codes. Parse errors use E001–E002; semantic errors use E003–E009; codegen errors use E010–E011.
+The Muse compiler emits structured diagnostics with error codes. Parse errors use E001–E002; semantic errors use E003–E009; GUI/preset errors use E012–E014; codegen errors use E010–E011.
 
 ## Parse Errors
 
@@ -160,6 +160,86 @@ input -> split { lowpass(400Hz); highpass(4000Hz) } -> merge -> output
 - Empty feedback body
 
 **Fix:** The feedback body must be a chain that processes and returns audio. Typically: `delay(...) -> filter(...) -> gain(...)`.
+
+## GUI & Preset Errors (Resolve Phase)
+
+### E012 — Unknown Preset Parameter
+
+**When:** A preset block assigns a value to a parameter name that doesn't exist in the plugin.
+
+**Common causes:**
+- Typo in the parameter name inside a preset block
+- Referencing a parameter that was renamed or removed
+
+**Fix:** Check the `param` declarations in the plugin. The preset parameter name must exactly match a declared `param` name.
+
+**Example diagnostic:**
+```json
+{
+  "code": "E012",
+  "message": "preset 'Init': unknown parameter 'gainz'",
+  "suggestion": null
+}
+```
+
+### E013 — Preset Type Mismatch
+
+**When:** A preset block assigns a value whose type doesn't match the declared parameter type.
+
+**Common causes:**
+- Assigning a float to a bool param: `bypass = 1.0` instead of `bypass = true`
+- Assigning a number to an enum param instead of a variant name
+- Assigning a string to a numeric param
+
+**Fix:** Match the value type to the parameter's declared type: `float`→number, `int`→integer, `bool`→`true`/`false`, `enum`→variant name.
+
+**Example diagnostic:**
+```json
+{
+  "code": "E013",
+  "message": "preset 'Init': type mismatch for parameter 'bypass' — expected bool",
+  "suggestion": null
+}
+```
+
+### E014 — Invalid GUI Block
+
+**When:** A `gui { }` block contains invalid values or references.
+
+**Common causes:**
+- Invalid theme: `theme warm` instead of `theme dark` or `theme light`
+- Bad accent color: `accent "red"` instead of `accent "#FF0000"` (must be hex)
+- Duplicate gui block (only one per plugin allowed)
+- Widget references unknown parameter: `knob gainz` when no `param gainz` exists
+- XY pad references unknown axis parameter
+- Visualization widget given a parameter binding: `spectrum gain` (spectrum takes no param)
+- Empty `css ""` string
+
+**Fix:** Check the specific sub-message:
+- Theme: use `dark` or `light`
+- Accent: use hex color format `#RGB` or `#RRGGBB`
+- Widget param: ensure the parameter name matches a declared `param`
+- Visualization widgets (`spectrum`, `waveform`, `envelope`, `eq_curve`, `reduction`) take no parameter
+
+**Example diagnostics:**
+```json
+{
+  "code": "E014",
+  "message": "invalid gui theme 'warm' — must be 'dark' or 'light'"
+}
+```
+```json
+{
+  "code": "E014",
+  "message": "widget references unknown parameter 'gainz' — no `param gainz` declared in this plugin"
+}
+```
+```json
+{
+  "code": "E014",
+  "message": "duplicate gui block — only one `gui` block is allowed per plugin"
+}
+```
 
 ## Codegen Errors
 

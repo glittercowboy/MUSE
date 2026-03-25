@@ -1,6 +1,6 @@
 # CLI Commands
 
-The `muse` CLI has 4 commands. All accept `--format json` for machine-readable output.
+The `muse` CLI has 5 commands. All accept `--format json` for machine-readable output.
 
 ## Commands
 
@@ -147,6 +147,47 @@ muse build <file> [--output-dir <dir>] [--format json]
   }
 }
 ```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success — no errors |
+| `1` | Compile, check, or test error — diagnostics emitted |
+| `2` | Build or I/O error — system-level failure |
+
+---
+
+### `muse preview`
+
+Open a native macOS window showing the plugin's GUI as it would appear in a DAW. Parses the `.muse` file, generates the HTML/CSS/JS editor UI, and renders it in a WKWebView.
+
+```bash
+muse preview <file> [--format json]
+```
+
+**Use when:** Visually verifying a plugin's custom GUI layout, theme, and widget arrangement without a full build+DAW load cycle.
+
+**Constraints:**
+- macOS only (uses Cocoa + WKWebView)
+- Requires a `gui { }` block in the `.muse` file — files without a gui block will compile but show a blank editor
+- Blocks the terminal while the preview window is open (runs the NSApplication event loop)
+- Window size defaults to the `size W H` in the gui block, or 600×400 if omitted
+
+**JSON output (on compile error):**
+```json
+{
+  "status": "error",
+  "diagnostics": [
+    {
+      "code": "E014",
+      "message": "invalid gui theme 'warm' — must be 'dark' or 'light'"
+    }
+  ]
+}
+```
+
+Note: On success, the preview window opens — there is no JSON success output (the window itself is the output).
 
 ## Exit Codes
 

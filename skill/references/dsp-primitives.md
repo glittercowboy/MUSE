@@ -1,6 +1,6 @@
 # DSP Primitives
 
-All 23 built-in DSP functions available in `process` blocks. These compile to real-time-safe Rust code.
+All 24 built-in DSP functions available in `process` blocks. These compile to real-time-safe Rust code.
 
 ## Oscillators
 

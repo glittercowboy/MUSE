@@ -1,6 +1,6 @@
 # Plugin Recipes
 
-Four annotated examples from the Muse codebase, showing common plugin patterns.
+14 annotated examples from the Muse codebase, showing common plugin patterns.
 
 ---
 
@@ -850,6 +850,155 @@ plugin "Unison Synth" {
 
 ---
 
+## Recipe 13: GUI Effect (Tier 1 Auto-Theme)
+
+A gain plugin with a custom dark-themed GUI — the simplest GUI-enabled plugin. No layout declaration needed; the compiler auto-generates knobs for all parameters.
+
+**Pattern:** Add `gui { theme accent }` to any effect — Tier 1 auto-layout handles the rest.
+
+**Source:** `examples/gui_gain.muse`
+
+```muse
+plugin "Warm Gain" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.warm-gain"
+    description "A warm, musical gain stage"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseWarmGain1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#E8A87C"
+  }
+
+  process {
+    input -> gain(param.gain) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    set    param.gain = 0.0
+    assert output.rms < -120dB
+  }
+
+  test "positive gain increases level" {
+    input  sine 440Hz 1024 samples
+    set    param.gain = 6.0
+    assert output.peak > 1.0
+  }
+}
+```
+
+**Key points:**
+- `gui { theme dark  accent "#E8A87C" }` is all you need for a custom-themed editor
+- Tier 1 auto-layout: compiler generates a knob for every declared `param` automatically
+- No `layout`, `panel`, or widget declarations needed
+- `theme` must be `dark` or `light` — E014 if invalid
+- `accent` must be hex color `#RGB` or `#RRGGBB` — E014 if invalid
+- Preview with `muse preview gui_gain.muse` before building
+
+---
+
+## Recipe 14: GUI Instrument with Tier 2 Layout + Advanced Widgets
+
+An effect with an explicit layout, spectrum analyzer, XY pad, and standard knobs. Demonstrates Tier 2 GUI features: layout containers, panels, visualization widgets, and multi-param widgets.
+
+**Pattern:** `gui { layout { panel { widgets } } }` for full control over editor layout.
+
+**Source:** `examples/gui_spectrum.muse`
+
+```muse
+plugin "Spectrum Demo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.spectrum-demo"
+    description "An effect with spectrum analyzer and XY pad"
+    features    [audio_effect, stereo, analyzer]
+  }
+
+  vst3 {
+    id              "MuseSpecDem01"
+    subcategories   [Fx, Analyzer]
+  }
+
+  input  stereo
+  output stereo
+
+  param freq: float = 1000.0 in 20.0..20000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  param resonance: float = 0.707 in 0.1..10.0 {
+    smoothing logarithmic 50ms
+  }
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#7ECCE8"
+    size 800 550
+
+    layout vertical {
+      panel "Analyzer" {
+        spectrum
+      }
+      panel "Controls" {
+        layout horizontal {
+          xy_pad freq resonance
+          knob gain
+        }
+      }
+    }
+  }
+
+  process {
+    input -> lowpass(param.freq, param.resonance) -> gain(param.gain) -> output
+  }
+}
+```
+
+**Key points:**
+- Tier 2: explicit `layout` and `panel` declarations give full control over widget placement
+- `layout vertical { ... }` stacks children top-to-bottom; `horizontal` left-to-right
+- `panel "Analyzer" { spectrum }` — titled section containing a visualization widget
+- `spectrum` is a visualization widget — no parameter binding (E014 if you give it one)
+- `xy_pad freq resonance` binds two parameters to X and Y axes
+- `knob gain` binds a single parameter to a rotary knob
+- `size 800 550` sets the editor window dimensions
+- Nested layouts: `layout vertical { ... layout horizontal { ... } }` for complex arrangements
+- Widget properties available: `knob gain { style "vintage" label "Output" }`
+
+---
+
 ## Choosing a Pattern
 
 | I want to... | Use recipe |
@@ -866,3 +1015,5 @@ plugin "Unison Synth" {
 | Build a polyphonic instrument (chords) | Recipe 10 (Poly Synth) |
 | Build an MPE-enabled instrument | Recipe 11 (MPE Synth) |
 | Add thick unison detuning | Recipe 12 (Unison Synth) |
+| Add a custom GUI with auto-generated knobs | Recipe 13 (GUI Effect — Tier 1) |
+| Build a custom GUI with explicit layout and visualizations | Recipe 14 (GUI with Layout — Tier 2) |

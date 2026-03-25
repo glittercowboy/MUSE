@@ -1,9 +1,9 @@
 <required_reading>
-- ../references/language-reference.md — Full syntax: plugin structure, params, process blocks, signal chains, routing, MIDI, type system
-- ../references/dsp-primitives.md — All 16 DSP functions with signatures, types, and usage examples
+- ../references/language-reference.md — Full syntax: plugin structure, params, process blocks, signal chains, routing, MIDI, GUI blocks, type system
+- ../references/dsp-primitives.md — All 24 DSP functions with signatures, types, and usage examples
 - ../references/test-syntax.md — Test block grammar, signal types, assertions, JSON output format
-- ../references/cli-commands.md — `muse check`, `muse test`, `muse build` with flags and exit codes
-- ../references/plugin-recipes.md — 4 annotated patterns (gain, filter, synth, multiband) to use as starting points
+- ../references/cli-commands.md — `muse check`, `muse test`, `muse build`, `muse preview` with flags and exit codes
+- ../references/plugin-recipes.md — 14 annotated patterns (gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth, poly, MPE, unison, GUI Tier 1, GUI Tier 2) to use as starting points
 </required_reading>
 
 <process>
@@ -43,6 +43,8 @@ Select the closest recipe from plugin-recipes.md:
 | Polyphonic instrument (chords) | Recipe 10 (Poly Synth) — add `voices 8` |
 | MPE-enabled instrument | Recipe 11 (MPE Synth) — `note.pressure`/`bend`/`slide` |
 | Thick unison sound | Recipe 12 (Unison Synth) — `unison { count 3 detune 15 }` |
+| Plugin with custom themed GUI (auto-layout) | Recipe 13 (GUI Effect — Tier 1) — add `gui { theme accent }` |
+| Plugin with explicit layout and visualizations | Recipe 14 (GUI with Layout — Tier 2) — `gui { layout { panel { widgets } } }` |
 
 Copy the recipe's structure as your starting skeleton. Modify the metadata, params, process block, and tests.
 
@@ -98,6 +100,48 @@ plugin "Plugin Name" {
 - Instruments need a `midi { note { ... } }` block.
 - All param references in process/test use `param.name` syntax.
 - Unit suffixes attach directly to numbers: `440Hz`, `50ms`, `-12dB`. No space.
+
+## Step 3.5: Add GUI Block (Optional)
+
+If the user wants a custom editor UI, add a `gui { }` block after the param declarations.
+
+**Tier 1 (auto-layout):** Just set theme and accent — the compiler auto-generates knobs for all params:
+
+```muse
+gui {
+  theme dark
+  accent "#E8A87C"
+}
+```
+
+**Tier 2 (explicit layout):** Declare layout containers, panels, and individual widgets:
+
+```muse
+gui {
+  theme dark
+  accent "#7ECCE8"
+  size 800 550
+
+  layout vertical {
+    panel "Controls" {
+      layout horizontal {
+        knob cutoff
+        knob resonance
+        knob gain
+      }
+    }
+  }
+}
+```
+
+For more details on GUI blocks, see `references/language-reference.md` (GUI Block section) and `workflows/create-gui-plugin.md` for the full GUI-focused workflow.
+
+**GUI rules:**
+- `theme` must be `dark` or `light`
+- `accent` must be hex: `#RGB` or `#RRGGBB`
+- Widget param names must match declared `param` names
+- Visualization widgets (`spectrum`, `waveform`, `envelope`, `eq_curve`, `reduction`) take no params
+- Use `muse preview` to visually verify the GUI before building
 
 ## Step 4: Add Test Blocks
 
