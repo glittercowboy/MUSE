@@ -328,3 +328,165 @@ fn codegen_generate_plugin_returns_path() {
     let crate_dir = generate_from_source(source, &tmp);
     assert_eq!(crate_dir, tmp);
 }
+
+// ══════════════════════════════════════════════════════════════
+// Unit tests: oscillator DSP helper generation
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn dsp_helpers_emit_osc_state_for_oscillator() {
+    use std::collections::HashSet;
+    use muse_lang::codegen::dsp::generate_dsp_helpers;
+
+    let mut prims = HashSet::new();
+    prims.insert(muse_lang::dsp::primitives::DspPrimitive::Oscillator(
+        muse_lang::dsp::primitives::OscKind::Saw,
+    ));
+
+    let code = generate_dsp_helpers(&prims);
+    assert!(
+        code.contains("struct OscState"),
+        "Should emit OscState struct when oscillator is used, got:\n{}",
+        code
+    );
+    assert!(
+        code.contains("fn process_osc_saw("),
+        "Should emit process_osc_saw function, got:\n{}",
+        code
+    );
+}
+
+#[test]
+fn dsp_helpers_emit_all_oscillator_variants() {
+    use std::collections::HashSet;
+    use muse_lang::codegen::dsp::generate_dsp_helpers;
+    use muse_lang::dsp::primitives::{DspPrimitive, OscKind};
+
+    let mut prims = HashSet::new();
+    prims.insert(DspPrimitive::Oscillator(OscKind::Saw));
+    prims.insert(DspPrimitive::Oscillator(OscKind::Square));
+    prims.insert(DspPrimitive::Oscillator(OscKind::Sine));
+    prims.insert(DspPrimitive::Oscillator(OscKind::Triangle));
+
+    let code = generate_dsp_helpers(&prims);
+    assert!(code.contains("fn process_osc_saw("), "Missing saw");
+    assert!(code.contains("fn process_osc_square("), "Missing square");
+    assert!(code.contains("fn process_osc_sine("), "Missing sine");
+    assert!(code.contains("fn process_osc_triangle("), "Missing triangle");
+    // OscState should appear exactly once
+    assert!(code.contains("struct OscState"), "Missing OscState");
+}
+
+#[test]
+fn dsp_helpers_emit_only_used_oscillator() {
+    use std::collections::HashSet;
+    use muse_lang::codegen::dsp::generate_dsp_helpers;
+    use muse_lang::dsp::primitives::{DspPrimitive, OscKind};
+
+    let mut prims = HashSet::new();
+    prims.insert(DspPrimitive::Oscillator(OscKind::Sine));
+
+    let code = generate_dsp_helpers(&prims);
+    assert!(code.contains("fn process_osc_sine("), "Should emit sine");
+    assert!(!code.contains("fn process_osc_saw("), "Should NOT emit saw");
+    assert!(!code.contains("fn process_osc_square("), "Should NOT emit square");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Unit tests: ADSR envelope DSP helper generation
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn dsp_helpers_emit_adsr_state_and_function() {
+    use std::collections::HashSet;
+    use muse_lang::codegen::dsp::generate_dsp_helpers;
+    use muse_lang::dsp::primitives::{DspPrimitive, EnvKind};
+
+    let mut prims = HashSet::new();
+    prims.insert(DspPrimitive::Envelope(EnvKind::Adsr));
+
+    let code = generate_dsp_helpers(&prims);
+    assert!(
+        code.contains("enum AdsrStage"),
+        "Should emit AdsrStage enum, got:\n{}",
+        code
+    );
+    assert!(
+        code.contains("struct AdsrState"),
+        "Should emit AdsrState struct"
+    );
+    assert!(
+        code.contains("fn process_adsr("),
+        "Should emit process_adsr function"
+    );
+    // Verify all stages are present
+    assert!(code.contains("Attack"), "AdsrStage should include Attack");
+    assert!(code.contains("Decay"), "AdsrStage should include Decay");
+    assert!(code.contains("Sustain"), "AdsrStage should include Sustain");
+    assert!(code.contains("Release"), "AdsrStage should include Release");
+    assert!(code.contains("Idle"), "AdsrStage should include Idle");
+}
+
+#[test]
+fn dsp_helpers_no_adsr_when_not_used() {
+    use std::collections::HashSet;
+    use muse_lang::codegen::dsp::generate_dsp_helpers;
+    use muse_lang::dsp::primitives::{DspPrimitive, FilterKind};
+
+    let mut prims = HashSet::new();
+    prims.insert(DspPrimitive::Filter(FilterKind::Lowpass));
+
+    let code = generate_dsp_helpers(&prims);
+    assert!(!code.contains("AdsrState"), "Should NOT emit ADSR when only filter is used");
+    assert!(!code.contains("OscState"), "Should NOT emit oscillator when only filter is used");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Unit tests: MIDI event loop generation
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn midi_event_loop_generates_non_empty_code() {
+    let code = muse_lang::codegen::midi::generate_midi_event_loop();
+    assert!(!code.is_empty(), "MIDI event loop should not be empty");
+    assert!(
+        code.contains("NoteEvent::NoteOn"),
+        "Should handle NoteOn events"
+    );
+    assert!(
+        code.contains("NoteEvent::NoteOff"),
+        "Should handle NoteOff events"
+    );
+    assert!(
+        code.contains("note_gate"),
+        "Should set note_gate for envelope control"
+    );
+    assert!(
+        code.contains("note_pitch"),
+        "Should set note_pitch from MIDI note"
+    );
+    assert!(
+        code.contains("note_velocity"),
+        "Should capture velocity from NoteOn"
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Regression: existing filter codegen still works
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn dsp_helpers_still_emit_biquad_for_filters() {
+    use std::collections::HashSet;
+    use muse_lang::codegen::dsp::generate_dsp_helpers;
+    use muse_lang::dsp::primitives::{DspPrimitive, FilterKind};
+
+    let mut prims = HashSet::new();
+    prims.insert(DspPrimitive::Filter(FilterKind::Lowpass));
+    prims.insert(DspPrimitive::Filter(FilterKind::Highpass));
+
+    let code = generate_dsp_helpers(&prims);
+    assert!(code.contains("struct BiquadState"), "Should still emit BiquadState");
+    assert!(code.contains("fn process_biquad("), "Should still emit lowpass biquad");
+    assert!(code.contains("fn process_biquad_highpass("), "Should still emit highpass biquad");
+}

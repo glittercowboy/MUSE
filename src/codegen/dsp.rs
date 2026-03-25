@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use crate::dsp::primitives::{DspPrimitive, FilterKind};
+use crate::dsp::primitives::{DspPrimitive, EnvKind, FilterKind, OscKind};
 
 /// Generate DSP helper code for the set of primitives used in the plugin.
 ///
@@ -44,6 +44,58 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
 
     if needs_highpass {
         out.push_str(&generate_process_biquad_highpass());
+        out.push('\n');
+    }
+
+    // ── Oscillators ──────────────────────────────────────────
+    let needs_any_osc = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Oscillator(_))
+    });
+
+    if needs_any_osc {
+        out.push_str(&generate_osc_state());
+        out.push('\n');
+    }
+
+    let needs_saw = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Oscillator(OscKind::Saw))
+    });
+    let needs_square = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Oscillator(OscKind::Square))
+    });
+    let needs_sine = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Oscillator(OscKind::Sine))
+    });
+    let needs_triangle = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Oscillator(OscKind::Triangle))
+    });
+
+    if needs_saw {
+        out.push_str(&generate_process_osc_saw());
+        out.push('\n');
+    }
+    if needs_square {
+        out.push_str(&generate_process_osc_square());
+        out.push('\n');
+    }
+    if needs_sine {
+        out.push_str(&generate_process_osc_sine());
+        out.push('\n');
+    }
+    if needs_triangle {
+        out.push_str(&generate_process_osc_triangle());
+        out.push('\n');
+    }
+
+    // ── Envelopes ────────────────────────────────────────────
+    let needs_adsr = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Envelope(EnvKind::Adsr))
+    });
+
+    if needs_adsr {
+        out.push_str(&generate_adsr_state());
+        out.push('\n');
+        out.push_str(&generate_process_adsr());
         out.push('\n');
     }
 
@@ -181,6 +233,176 @@ fn process_biquad_highpass(state: &mut BiquadState, input: f32, cutoff: f32, res
     state.y1 = output;
 
     output
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Oscillator helpers
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the OscState struct shared by all oscillator types.
+fn generate_osc_state() -> String {
+    r#"/// Per-voice oscillator state (phase accumulator).
+#[derive(Clone, Copy)]
+struct OscState {
+    phase: f32,
+}
+
+impl Default for OscState {
+    fn default() -> Self {
+        Self { phase: 0.0 }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the saw oscillator processing function.
+fn generate_process_osc_saw() -> String {
+    r#"/// Process one sample of a naive saw oscillator.
+fn process_osc_saw(state: &mut OscState, frequency: f32, sample_rate: f32) -> f32 {
+    let output = state.phase * 2.0 - 1.0;
+    state.phase += frequency / sample_rate;
+    state.phase -= state.phase.floor();
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the square oscillator processing function.
+fn generate_process_osc_square() -> String {
+    r#"/// Process one sample of a naive square oscillator.
+fn process_osc_square(state: &mut OscState, frequency: f32, sample_rate: f32) -> f32 {
+    let output = if state.phase < 0.5 { 1.0_f32 } else { -1.0_f32 };
+    state.phase += frequency / sample_rate;
+    state.phase -= state.phase.floor();
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the sine oscillator processing function.
+fn generate_process_osc_sine() -> String {
+    r#"/// Process one sample of a sine oscillator.
+fn process_osc_sine(state: &mut OscState, frequency: f32, sample_rate: f32) -> f32 {
+    let output = (state.phase * std::f32::consts::TAU).sin();
+    state.phase += frequency / sample_rate;
+    state.phase -= state.phase.floor();
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the triangle oscillator processing function.
+fn generate_process_osc_triangle() -> String {
+    r#"/// Process one sample of a naive triangle oscillator.
+fn process_osc_triangle(state: &mut OscState, frequency: f32, sample_rate: f32) -> f32 {
+    let output = (2.0 * (state.phase - (state.phase + 0.5).floor()).abs()) * 2.0 - 1.0;
+    state.phase += frequency / sample_rate;
+    state.phase -= state.phase.floor();
+    output
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// ADSR envelope helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the AdsrState struct and AdsrStage enum.
+fn generate_adsr_state() -> String {
+    r#"/// ADSR envelope stage.
+#[derive(Clone, Copy, PartialEq)]
+enum AdsrStage {
+    Idle,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
+/// Per-voice ADSR envelope state.
+#[derive(Clone, Copy)]
+struct AdsrState {
+    stage: AdsrStage,
+    level: f32,
+}
+
+impl Default for AdsrState {
+    fn default() -> Self {
+        Self {
+            stage: AdsrStage::Idle,
+            level: 0.0,
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_adsr function.
+fn generate_process_adsr() -> String {
+    r#"/// Process one sample of an ADSR envelope.
+///
+/// `gate` should be > 0.0 while a note is held and 0.0 when released.
+/// Returns the envelope level (0.0..1.0).
+fn process_adsr(
+    state: &mut AdsrState,
+    gate: f32,
+    attack_ms: f32,
+    decay_ms: f32,
+    sustain_level: f32,
+    release_ms: f32,
+    sample_rate: f32,
+) -> f32 {
+    let attack_samples = (attack_ms * 0.001 * sample_rate).max(1.0);
+    let decay_samples = (decay_ms * 0.001 * sample_rate).max(1.0);
+    let release_samples = (release_ms * 0.001 * sample_rate).max(1.0);
+
+    if gate > 0.0 {
+        // Gate is on
+        if state.stage == AdsrStage::Idle || state.stage == AdsrStage::Release {
+            state.stage = AdsrStage::Attack;
+        }
+        match state.stage {
+            AdsrStage::Attack => {
+                state.level += 1.0 / attack_samples;
+                if state.level >= 1.0 {
+                    state.level = 1.0;
+                    state.stage = AdsrStage::Decay;
+                }
+            }
+            AdsrStage::Decay => {
+                state.level -= (1.0 - sustain_level) / decay_samples;
+                if state.level <= sustain_level {
+                    state.level = sustain_level;
+                    state.stage = AdsrStage::Sustain;
+                }
+            }
+            AdsrStage::Sustain => {
+                state.level = sustain_level;
+            }
+            _ => {}
+        }
+    } else {
+        // Gate is off
+        if state.stage != AdsrStage::Idle {
+            state.stage = AdsrStage::Release;
+            state.level -= state.level / release_samples;
+            if state.level < 0.0001 {
+                state.level = 0.0;
+                state.stage = AdsrStage::Idle;
+            }
+        }
+    }
+
+    state.level
 }
 "#
     .to_string()
