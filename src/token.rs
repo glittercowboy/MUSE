@@ -116,6 +116,10 @@ pub enum Token {
     Bus,
     #[token("assert")]
     Assert,
+    #[token("preset")]
+    Preset,
+    #[token("gui")]
+    Gui,
 
     // ── Type keywords ────────────────────────────────────────
     #[token("float")]
@@ -278,6 +282,8 @@ impl fmt::Display for Token {
             Token::Merge => write!(f, "merge"),
             Token::Bus => write!(f, "bus"),
             Token::Assert => write!(f, "assert"),
+            Token::Preset => write!(f, "preset"),
+            Token::Gui => write!(f, "gui"),
             Token::Float => write!(f, "float"),
             Token::Int => write!(f, "int"),
             Token::Bool => write!(f, "bool"),

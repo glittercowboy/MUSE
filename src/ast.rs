@@ -30,6 +30,8 @@ pub enum PluginItem {
     UnisonDecl(UnisonConfig),
     ProcessBlock(ProcessBlock),
     TestBlock(TestBlock),
+    PresetDecl(PresetBlock),
+    GuiDecl(GuiBlock),
 }
 
 // ── Metadata ─────────────────────────────────────────────────
@@ -331,6 +333,7 @@ pub struct TestBlock {
 pub enum TestStatement {
     Input(TestInput),
     Set(TestSet),
+    SetPreset { name: String },
     Assert(TestAssert),
     SafetyAssert(SafetyCheck),
     NoteOn {
@@ -403,4 +406,50 @@ pub enum TestOp {
     GreaterThan,
     Equal,
     ApproxEqual,
+}
+
+// ── Preset blocks ────────────────────────────────────────────
+
+/// A `preset "Name" { param = value ... }` block inside a plugin definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresetBlock {
+    pub name: String,
+    pub assignments: Vec<Spanned<PresetAssignment>>,
+    pub span: Span,
+}
+
+/// A single parameter assignment inside a preset block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresetAssignment {
+    pub param_name: String,
+    pub value: PresetValue,
+}
+
+/// A value in a preset assignment.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresetValue {
+    /// A numeric value: `gain = -6.0`
+    Number(f64),
+    /// A boolean value: `bypass = true`
+    Bool(bool),
+    /// An identifier value (for enum params): `mode = lowpass`
+    Ident(String),
+}
+
+// ── GUI blocks ───────────────────────────────────────────────
+
+/// `gui { theme dark accent "#E8A87C" }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuiBlock {
+    pub items: Vec<Spanned<GuiItem>>,
+    pub span: Span,
+}
+
+/// An item inside a `gui { }` block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GuiItem {
+    /// `theme dark` or `theme light`
+    Theme(String),
+    /// `accent "#E8A87C"`
+    Accent(String),
 }

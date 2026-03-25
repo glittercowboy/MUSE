@@ -1044,6 +1044,18 @@ where
             )
         });
 
+    // set preset "Name"
+    let set_preset_stmt = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s == "set")
+        .ignore_then(just(Token::Preset))
+        .ignore_then(select! { Token::StringLiteral(s) => s })
+        .map_with(|name, e| {
+            (
+                TestStatement::SetPreset { name },
+                e.span(),
+            )
+        });
+
     // set param.<name> = <value>
     let set_stmt = select! { Token::Ident(s) => s }
         .filter(|s: &String| s == "set")
@@ -1199,7 +1211,7 @@ where
             )
         });
 
-    let test_stmt = choice((input_stmt, set_stmt, safety_assert_stmt, frequency_assert_stmt, assert_stmt, note_on_stmt, note_off_stmt));
+    let test_stmt = choice((input_stmt, set_preset_stmt, set_stmt, safety_assert_stmt, frequency_assert_stmt, assert_stmt, note_on_stmt, note_off_stmt));
 
     just(Token::Test)
         .ignore_then(select! { Token::StringLiteral(s) => s })
@@ -1277,6 +1289,104 @@ where
         })
 }
 
+// ── GUI block parser ─────────────────────────────────────────
+
+fn gui_block_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    // theme <dark|light> — "theme" is parsed as an Ident (not a keyword)
+    let gui_theme = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s == "theme")
+        .ignore_then(select! {
+            Token::Ident(s) => s,
+        })
+        .map_with(|value, e| (GuiItem::Theme(value), e.span()));
+
+    // accent "#RRGGBB" — "accent" is parsed as an Ident
+    let gui_accent = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s == "accent")
+        .ignore_then(select! { Token::StringLiteral(s) => s })
+        .map_with(|value, e| (GuiItem::Accent(value), e.span()));
+
+    let gui_item = gui_theme.or(gui_accent);
+
+    just(Token::Gui)
+        .ignore_then(
+            gui_item
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|items, e| {
+            (
+                PluginItem::GuiDecl(GuiBlock {
+                    items,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
+// ── Preset block parser ──────────────────────────────────────
+
+fn preset_block_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    // Parse: preset "Name" { param_name = value ... }
+    // Param names are Ident tokens; values can be numbers (with optional negation),
+    // booleans, or identifiers (for enum params).
+    let preset_value = choice((
+        // Negative number
+        just(Token::Minus)
+            .ignore_then(select! { Token::Number(n) => n })
+            .map(|n| PresetValue::Number(-n.parse::<f64>().unwrap_or(0.0))),
+        // Positive number
+        select! { Token::Number(n) => n }
+            .map(|n| PresetValue::Number(n.parse::<f64>().unwrap_or(0.0))),
+        // Boolean
+        select! {
+            Token::True => PresetValue::Bool(true),
+            Token::False => PresetValue::Bool(false),
+        },
+        // Identifier (for enum params)
+        select! { Token::Ident(s) => PresetValue::Ident(s) },
+    ));
+
+    let preset_assignment = ident_name()
+        .then_ignore(just(Token::Eq))
+        .then(preset_value)
+        .map_with(|(param_name, value), e| {
+            (
+                PresetAssignment { param_name, value },
+                e.span(),
+            )
+        });
+
+    just(Token::Preset)
+        .ignore_then(select! { Token::StringLiteral(s) => s })
+        .then(
+            preset_assignment
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(name, assignments), e| {
+            (
+                PluginItem::PresetDecl(PresetBlock {
+                    name,
+                    assignments,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1292,6 +1402,8 @@ where
         midi_decl_parser(),
         voice_config_parser(),
         unison_block_parser(),
+        preset_block_parser(),
+        gui_block_parser(),
         process_block_parser(),
         test_block_parser(),
     ))

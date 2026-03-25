@@ -357,3 +357,13 @@ fn test_unison_keyword() {
         .collect();
     assert_eq!(tokens, vec![Token::Unison]);
 }
+
+#[test]
+fn test_preset_keyword() {
+    let tokens: Vec<_> = lex("preset")
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .map(|(t, _)| t)
+        .collect();
+    assert_eq!(tokens, vec![Token::Preset]);
+}

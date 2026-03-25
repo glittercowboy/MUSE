@@ -863,3 +863,225 @@ plugin "Test" {
         "Should error about unison detune: {:?}", errors
     );
 }
+
+// ── Preset validation ────────────────────────────────────────
+
+#[test]
+fn preset_valid_params_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  input stereo
+  output stereo
+  param gain: float = 0.0 in -30.0..30.0
+  param mix: float = 1.0 in 0.0..1.0
+  process { input -> output }
+
+  preset "Default" {
+    gain = 0.0
+    mix = 1.0
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn preset_unknown_param_e012() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  input stereo
+  output stereo
+  param gain: float = 0.0 in -30.0..30.0
+  process { input -> output }
+
+  preset "Bad" {
+    gain = 0.0
+    nonexistent = 5.0
+  }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E012" && d.message.contains("nonexistent")),
+        "Should have E012 for unknown param 'nonexistent': {:?}", errors
+    );
+}
+
+#[test]
+fn preset_type_mismatch_e013() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  input stereo
+  output stereo
+  param gain: float = 0.0 in -30.0..30.0
+  param bypass: bool = false
+  process { input -> output }
+
+  preset "Wrong" {
+    gain = true
+    bypass = 0.5
+  }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E013" && d.message.contains("gain")),
+        "Should have E013 for gain type mismatch: {:?}", errors
+    );
+    assert!(
+        errors.iter().any(|d| d.code == "E013" && d.message.contains("bypass")),
+        "Should have E013 for bypass type mismatch: {:?}", errors
+    );
+}
+
+// ── GUI block resolver tests ─────────────────────────────────
+
+#[test]
+fn gui_block_valid_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        theme dark
+        accent "#E8A87C"
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_block_light_theme_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        theme light
+        accent "#ABC"
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_block_invalid_theme_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        theme neon
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("neon")),
+        "Should have E014 for invalid theme 'neon': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_block_invalid_accent_e014() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        accent "#ZZZZZZ"
+    }
+}
+"##;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("#ZZZZZZ")),
+        "Should have E014 for invalid accent color '#ZZZZZZ': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_block_accent_wrong_length_e014() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        accent "#ABCD"
+    }
+}
+"##;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("#ABCD")),
+        "Should have E014 for wrong-length color '#ABCD': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_block_accent_no_hash_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        accent "E8A87C"
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("E8A87C")),
+        "Should have E014 for missing # in color: {:?}", errors
+    );
+}
+
+#[test]
+fn gui_block_duplicate_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui { theme dark }
+    gui { theme light }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("duplicate")),
+        "Should have E014 for duplicate gui block: {:?}", errors
+    );
+}
+
+#[test]
+fn gui_block_empty_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui { }
+}
+"#;
+    resolve_expect_ok(source);
+}

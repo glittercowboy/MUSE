@@ -8,6 +8,7 @@ pub mod dsp;
 pub mod midi;
 pub mod params;
 pub mod plugin;
+pub mod presets;
 pub mod process;
 pub mod test;
 
@@ -42,6 +43,7 @@ pub fn generate_plugin(
     let needs_fft = has_frequency_assertions(plugin);
     let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft);
     let params_code = params::generate_params(plugin);
+    let preset_code = presets::generate_presets(plugin);
     let voice_count = find_voice_count(plugin);
     let unison_config = find_unison_config(plugin);
     let (process_body, process_info) = process::generate_process(plugin, voice_count, unison_config.as_ref());
@@ -54,7 +56,7 @@ pub fn generate_plugin(
     let plugin_code = plugin::generate_plugin_struct(plugin, &process_info);
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
-    let mut lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref());
+    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref());
 
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
@@ -192,6 +194,7 @@ fn validate_codegen_requirements(plugin: &PluginDef, diagnostics: &mut Vec<Diagn
 
 fn assemble_lib_rs(
     params_code: &str,
+    preset_code: &str,
     dsp_helpers: &str,
     plugin_code: &str,
     include_poly_helpers: bool,
@@ -204,6 +207,11 @@ fn assemble_lib_rs(
     );
     out.push_str(params_code);
     out.push('\n');
+
+    if !preset_code.is_empty() {
+        out.push_str(preset_code);
+        out.push('\n');
+    }
 
     out.push_str("const MAX_BLOCK_SIZE: usize = 64;\n\n");
 

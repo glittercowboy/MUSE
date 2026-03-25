@@ -759,3 +759,86 @@ fn no_fft_when_no_frequency_assertions() {
         "Generated code should not contain FFT helper when no frequency assertions"
     );
 }
+
+#[test]
+#[ignore = "requires cargo check — run with --include-ignored"]
+fn preset_gain_cargo_check() {
+    let source = include_str!("../examples/preset_gain.muse");
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-preset-gain-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn preset_codegen_contains_apply_preset_and_names() {
+    let source = include_str!("../examples/preset_gain.muse");
+    let (_cargo_toml, lib_rs) = generate_code_strings(source);
+
+    assert!(
+        lib_rs.contains("pub const PRESET_NAMES"),
+        "Generated code should contain PRESET_NAMES constant"
+    );
+    assert!(
+        lib_rs.contains("pub fn apply_preset"),
+        "Generated code should contain apply_preset function"
+    );
+    assert!(
+        lib_rs.contains(r#""Unity""#),
+        "Generated code should contain Unity preset name"
+    );
+    assert!(
+        lib_rs.contains(r#""Boost""#),
+        "Generated code should contain Boost preset name"
+    );
+    assert!(
+        lib_rs.contains(r#""Cut""#),
+        "Generated code should contain Cut preset name"
+    );
+    assert!(
+        lib_rs.contains("db_to_gain"),
+        "Generated code should wrap dB param in db_to_gain"
+    );
+}
+
+#[test]
+fn preset_test_codegen_calls_apply_preset() {
+    let source = include_str!("../examples/preset_gain.muse");
+    let (_cargo_toml, lib_rs) = generate_code_strings(source);
+
+    assert!(
+        lib_rs.contains(r#"apply_preset(&plugin.params, "Unity")"#),
+        "Test code should call apply_preset for Unity preset"
+    );
+    assert!(
+        lib_rs.contains(r#"apply_preset(&plugin.params, "Boost")"#),
+        "Test code should call apply_preset for Boost preset"
+    );
+    assert!(
+        lib_rs.contains(r#"apply_preset(&plugin.params, "Cut")"#),
+        "Test code should call apply_preset for Cut preset"
+    );
+}
+
+#[test]
+fn no_preset_code_when_no_presets() {
+    let source = include_str!("../examples/gain.muse");
+    let (_cargo_toml, lib_rs) = generate_code_strings(source);
+
+    assert!(
+        !lib_rs.contains("PRESET_NAMES"),
+        "Generated code should not contain PRESET_NAMES when no presets defined"
+    );
+    assert!(
+        !lib_rs.contains("apply_preset"),
+        "Generated code should not contain apply_preset when no presets defined"
+    );
+}

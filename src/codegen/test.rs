@@ -344,6 +344,14 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
             TestStatement::Assert(_) | TestStatement::SafetyAssert(_) => {
                 // Assertions are generated after processing — skip for now
             }
+            TestStatement::SetPreset { name } => {
+                // Apply a named preset — resets parameter smoothers to preset values.
+                // The generated apply_preset() function lives in the same crate.
+                out.push_str(&format!(
+                    "        apply_preset(&plugin.params, \"{}\");\n",
+                    name
+                ));
+            }
             TestStatement::NoteOn { .. } | TestStatement::NoteOff { .. } => {
                 // MIDI events are pushed to context below — skip for now
             }

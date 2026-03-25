@@ -1,0 +1,71 @@
+// Preset Gain — demonstrates preset blocks in Muse.
+// A gain effect with named parameter snapshots and test verification.
+
+plugin "Preset Gain" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.preset-gain"
+    description "A gain plugin with presets"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MusePresetGn1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  param mix: float = 1.0 in 0.0..1.0 {
+    smoothing linear 10ms
+  }
+
+  process {
+    input -> gain(param.gain * param.mix) -> output
+  }
+
+  preset "Unity" {
+    gain = 0.0
+    mix = 1.0
+  }
+
+  preset "Boost" {
+    gain = 6.0
+    mix = 1.0
+  }
+
+  preset "Cut" {
+    gain = -12.0
+    mix = 1.0
+  }
+
+  test "unity preset passes signal unchanged" {
+    input  sine 440Hz 1024 samples
+    set preset "Unity"
+    assert output.rms > -10dB
+    assert output.peak < 1.5
+  }
+
+  test "boost preset increases level" {
+    input  sine 440Hz 1024 samples
+    set preset "Boost"
+    assert output.peak > 1.0
+  }
+
+  test "cut preset reduces level" {
+    input  sine 440Hz 1024 samples
+    set preset "Cut"
+    assert output.rms < -10dB
+  }
+}

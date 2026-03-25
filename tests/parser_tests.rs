@@ -1336,3 +1336,257 @@ fn frequency_assert_parsed() {
         other => panic!("Expected Assert with Frequency, got {:?}", other),
     }
 }
+
+// ── Preset block parsing ─────────────────────────────────────
+
+#[test]
+fn parse_single_preset_block() {
+    let source = r#"
+    plugin "Test" {
+        vendor "Test"
+        input stereo
+        output stereo
+        param gain: float = 0.0 in -30.0..30.0
+        process { input }
+
+        preset "Default" {
+            gain = 0.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let preset = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::PresetDecl(p) = item { Some(p) } else { None }
+    }).expect("Should have a PresetDecl");
+
+    assert_eq!(preset.name, "Default");
+    assert_eq!(preset.assignments.len(), 1);
+    assert_eq!(preset.assignments[0].0.param_name, "gain");
+    assert_eq!(preset.assignments[0].0.value, PresetValue::Number(0.0));
+}
+
+#[test]
+fn parse_multiple_preset_blocks() {
+    let source = r#"
+    plugin "Test" {
+        vendor "Test"
+        input stereo
+        output stereo
+        param gain: float = 0.0 in -30.0..30.0
+        param mix: float = 1.0 in 0.0..1.0
+        process { input }
+
+        preset "Clean" {
+            gain = 0.0
+            mix = 1.0
+        }
+
+        preset "Heavy" {
+            gain = -12.0
+            mix = 0.5
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let presets: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::PresetDecl(p) = item { Some(p) } else { None }
+    }).collect();
+
+    assert_eq!(presets.len(), 2);
+    assert_eq!(presets[0].name, "Clean");
+    assert_eq!(presets[0].assignments.len(), 2);
+    assert_eq!(presets[1].name, "Heavy");
+    assert_eq!(presets[1].assignments.len(), 2);
+    // Verify negative number parsing
+    assert_eq!(presets[1].assignments[0].0.value, PresetValue::Number(-12.0));
+}
+
+#[test]
+fn parse_preset_with_bool_and_ident_values() {
+    let source = r#"
+    plugin "Test" {
+        vendor "Test"
+        input stereo
+        output stereo
+        param bypass: bool = false
+        param mode: enum [lowpass, highpass, bandpass]
+        param gain: float = 0.0 in -30.0..30.0
+        process { input }
+
+        preset "Special" {
+            bypass = true
+            mode = highpass
+            gain = -6.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let preset = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::PresetDecl(p) = item { Some(p) } else { None }
+    }).expect("Should have a PresetDecl");
+
+    assert_eq!(preset.name, "Special");
+    assert_eq!(preset.assignments.len(), 3);
+    assert_eq!(preset.assignments[0].0.value, PresetValue::Bool(true));
+    assert_eq!(preset.assignments[1].0.value, PresetValue::Ident("highpass".into()));
+    assert_eq!(preset.assignments[2].0.value, PresetValue::Number(-6.0));
+}
+
+#[test]
+fn parse_set_preset_in_test_block() {
+    let source = r#"
+    plugin "Test" {
+        vendor "Test"
+        input stereo
+        output stereo
+        param gain: float = 0.0 in -30.0..30.0
+        process { input }
+
+        preset "Loud" {
+            gain = 6.0
+        }
+
+        test "preset test" {
+            set preset "Loud"
+            input silence 512 samples
+            assert output.peak == 0.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).expect("Should have a TestBlock");
+
+    assert_eq!(tb.statements.len(), 3);
+    match &tb.statements[0].0 {
+        TestStatement::SetPreset { name } => assert_eq!(name, "Loud"),
+        other => panic!("Expected SetPreset, got {:?}", other),
+    }
+}
+
+
+// ── GUI block parser tests ───────────────────────────────────
+
+#[test]
+fn gui_block_with_theme_and_accent() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        theme dark
+        accent "#E8A87C"
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 2);
+    match &gui.items[0].0 {
+        GuiItem::Theme(t) => assert_eq!(t, "dark"),
+        other => panic!("Expected Theme, got {:?}", other),
+    }
+    match &gui.items[1].0 {
+        GuiItem::Accent(a) => assert_eq!(a, "#E8A87C"),
+        other => panic!("Expected Accent, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_theme_only() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        theme light
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Theme(t) => assert_eq!(t, "light"),
+        other => panic!("Expected Theme, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_empty() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui { }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 0);
+}
+
+#[test]
+fn gui_block_accent_only() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        accent "#FFF"
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Accent(a) => assert_eq!(a, "#FFF"),
+        other => panic!("Expected Accent, got {:?}", other),
+    }
+}

@@ -1,13 +1,20 @@
 //! Semantic resolution pass for the Muse language.
 //!
 //! Walks the parsed AST and validates DSP function calls against the registry.
-//! Produces structured `Diagnostic`s with error codes E003–E009 for semantic
+//! Produces structured `Diagnostic`s with error codes E003–E013 for semantic
 //! errors and a side-table mapping expression spans to their resolved `DspType`.
 //!
 //! Routing validation:
 //! - E007: split without merge — every split must be paired with merge
 //! - E008: merge without preceding split
 //! - E009: feedback body must be a signal processing chain
+//!
+//! Preset validation:
+//! - E012: unknown parameter in preset block
+//! - E013: type mismatch in preset assignment
+//!
+//! GUI validation:
+//! - E014: invalid gui block values (bad theme, bad accent color, duplicate block)
 
 use std::collections::HashMap;
 
@@ -67,6 +74,8 @@ struct Resolver<'a> {
     seen_voice_decl: bool,
     /// Whether a unison declaration was seen already
     seen_unison_decl: bool,
+    /// Whether a gui block was seen already
+    seen_gui_decl: bool,
     /// let-binding scope: name → resolved DspType
     scope: HashMap<String, DspType>,
     /// Span → DspType map (the output)
@@ -88,6 +97,7 @@ impl<'a> Resolver<'a> {
             has_midi_decl: false,
             seen_voice_decl: false,
             seen_unison_decl: false,
+            seen_gui_decl: false,
             scope: HashMap::new(),
             type_map: HashMap::new(),
             diagnostics: Vec::new(),
@@ -130,6 +140,9 @@ impl<'a> Resolver<'a> {
                 PluginItem::UnisonDecl(unison) => {
                     self.validate_unison_decl(unison, plugin);
                 }
+                PluginItem::GuiDecl(gui) => {
+                    self.validate_gui_decl(gui);
+                }
                 _ => {}
             }
         }
@@ -154,6 +167,13 @@ impl<'a> Resolver<'a> {
         for (item, _span) in &plugin.items {
             if let PluginItem::ProcessBlock(block) = item {
                 self.resolve_statements(&block.body);
+            }
+        }
+
+        // Phase 5: validate preset blocks against declared params
+        for (item, _span) in &plugin.items {
+            if let PluginItem::PresetDecl(preset) = item {
+                self.validate_preset(preset);
             }
         }
     }
@@ -246,6 +266,122 @@ impl<'a> Resolver<'a> {
         // Note: we intentionally don't warn if voices < unison count here
         // because the diagnostic system treats all diagnostics as errors.
         // The user is responsible for sizing the voice pool appropriately.
+    }
+
+    // ── GUI validation ───────────────────────────────────────
+
+    fn validate_gui_decl(&mut self, gui: &GuiBlock) {
+        if self.seen_gui_decl {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E014",
+                    gui.span,
+                    "duplicate gui block — only one `gui` block is allowed per plugin",
+                )
+                .with_suggestion("Remove the extra `gui` block from the plugin body."),
+            );
+            return;
+        }
+        self.seen_gui_decl = true;
+
+        for (item, span) in &gui.items {
+            match item {
+                GuiItem::Theme(value) => {
+                    if value != "dark" && value != "light" {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E014",
+                                *span,
+                                format!(
+                                    "invalid gui theme '{}' — must be 'dark' or 'light'",
+                                    value
+                                ),
+                            )
+                            .with_suggestion("Use `theme dark` or `theme light`."),
+                        );
+                    }
+                }
+                GuiItem::Accent(value) => {
+                    if !is_valid_hex_color(value) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E014",
+                                *span,
+                                format!(
+                                    "invalid accent color '{}' — must be a hex color (#RGB or #RRGGBB)",
+                                    value
+                                ),
+                            )
+                            .with_suggestion(
+                                "Use a hex color string like \"#E8A87C\" or \"#FFF\".",
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Preset validation ────────────────────────────────────
+
+    fn validate_preset(&mut self, preset: &PresetBlock) {
+        for (assignment, span) in &preset.assignments {
+            match self.params.get(&assignment.param_name) {
+                None => {
+                    // E012: unknown param in preset
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E012",
+                            *span,
+                            format!(
+                                "preset '{}': unknown parameter '{}'",
+                                preset.name, assignment.param_name
+                            ),
+                        )
+                        .with_suggestion(format!(
+                            "Declared parameters: {}",
+                            self.params
+                                .keys()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
+                    );
+                }
+                Some(param_type) => {
+                    // E013: type mismatch — validate value type against param type
+                    let mismatch = match (&assignment.value, param_type) {
+                        (PresetValue::Number(_), ParamType::Float)
+                        | (PresetValue::Number(_), ParamType::Int) => false,
+                        (PresetValue::Bool(_), ParamType::Bool) => false,
+                        (PresetValue::Ident(_), ParamType::Enum(_)) => false,
+                        _ => true,
+                    };
+
+                    if mismatch {
+                        let expected = match param_type {
+                            ParamType::Float | ParamType::Int => "a number",
+                            ParamType::Bool => "a boolean (true/false)",
+                            ParamType::Enum(_) => "an enum variant identifier",
+                        };
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E013",
+                                *span,
+                                format!(
+                                    "preset '{}': type mismatch for parameter '{}' — expected {}",
+                                    preset.name, assignment.param_name, expected
+                                ),
+                            )
+                            .with_suggestion(format!(
+                                "Parameter '{}' is declared as {:?}.",
+                                assignment.param_name, param_type
+                            )),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // ── Statement resolution ─────────────────────────────────
@@ -760,4 +896,17 @@ fn suggest_function(name: &str, registry: &DspRegistry) -> Option<String> {
         .filter(|(_, dist)| *dist <= 3 && *dist > 0)
         .min_by_key(|(_, dist)| *dist)
         .map(|(name, _)| name)
+}
+
+/// Validate a hex color string: must be `#RGB` or `#RRGGBB` with valid hex digits.
+fn is_valid_hex_color(s: &str) -> bool {
+    let s = s.as_bytes();
+    if s.first() != Some(&b'#') {
+        return false;
+    }
+    let hex = &s[1..];
+    if hex.len() != 3 && hex.len() != 6 {
+        return false;
+    }
+    hex.iter().all(|b| b.is_ascii_hexdigit())
 }
