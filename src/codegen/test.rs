@@ -11,10 +11,17 @@
 //! that the `muse test` CLI can parse into structured results.
 
 use crate::ast::{
-    ParamOption, ParamType, PluginDef, PluginItem, TestBlock, TestOp, TestProperty,
+    Expr, ParamOption, ParamType, PluginDef, PluginItem, TestBlock, TestOp, TestProperty,
     TestSignal, TestStatement,
 };
 use crate::codegen::process::ProcessInfo;
+
+/// Info about a parameter needed for test smoother initialization.
+struct ParamInfo {
+    name: String,
+    default_value: f64,
+    is_db: bool,
+}
 
 /// Generate a `#[cfg(test)] mod tests { ... }` block from all TestBlock items.
 ///
@@ -39,6 +46,7 @@ pub fn generate_test_module(plugin: &PluginDef, process_info: &ProcessInfo) -> S
     let struct_name = plugin_name_to_struct(&plugin.name);
     let is_instrument = process_info.is_instrument;
     let db_params = collect_db_param_names(plugin);
+    let param_defaults = collect_param_defaults(plugin);
 
     let mut out = String::new();
     out.push_str("\n#[cfg(test)]\n#[allow(unused_variables, dead_code)]\nmod tests {\n    use super::*;\n\n");
@@ -65,7 +73,7 @@ pub fn generate_test_module(plugin: &PluginDef, process_info: &ProcessInfo) -> S
 
     // Generate each test function
     for tb in &test_blocks {
-        out.push_str(&generate_test_fn(tb, &struct_name, is_instrument, &db_params));
+        out.push_str(&generate_test_fn(tb, &struct_name, is_instrument, &db_params, &param_defaults));
     }
 
     out.push_str("}\n");
@@ -225,7 +233,7 @@ fn generate_helpers(struct_name: &str, needs_fft: bool) -> String {
 }
 
 /// Generate one `#[test]` function from a TestBlock.
-fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_params: &[String]) -> String {
+fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_params: &[String], param_defaults: &[ParamInfo]) -> String {
     let fn_name = sanitize_test_name(&tb.name);
     let test_name = &tb.name;
 
@@ -262,8 +270,26 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
     out.push_str("        }\n");
     out.push_str("        let mut init_ctx = InitCtx;\n");
     out.push_str(
-        "        plugin.initialize(&layout, &buffer_config, &mut init_ctx);\n\n",
+        "        plugin.initialize(&layout, &buffer_config, &mut init_ctx);\n",
     );
+
+    // Reset all parameter smoothers to their default values.
+    // Without this, nih-plug smoothers start at 0.0 in tests (the host
+    // normally handles this during its own initialization sequence).
+    for p in param_defaults {
+        if p.is_db {
+            out.push_str(&format!(
+                "        plugin.params.{}.smoothed.reset(util::db_to_gain({:.6}_f32));\n",
+                p.name, p.default_value
+            ));
+        } else {
+            out.push_str(&format!(
+                "        plugin.params.{}.smoothed.reset({:.6}_f32);\n",
+                p.name, p.default_value
+            ));
+        }
+    }
+    out.push('\n');
 
     // Track input signal info for potential input property assertions
     let input_var = "channel_data".to_string();
@@ -544,6 +570,30 @@ fn collect_db_param_names(plugin: &PluginDef) -> Vec<String> {
         }
     }
     db_params
+}
+
+/// Collect all parameter names with their default values and dB status.
+/// Used to emit smoother resets after plugin initialization in test code.
+fn collect_param_defaults(plugin: &PluginDef) -> Vec<ParamInfo> {
+    let mut params = Vec::new();
+    for (item, _) in &plugin.items {
+        if let PluginItem::ParamDecl(param) = item {
+            if param.param_type == ParamType::Float {
+                let default_value = param.default.as_ref().and_then(|(expr, _)| {
+                    if let Expr::Number(v, _) = expr { Some(*v) } else { None }
+                }).unwrap_or(0.0);
+                let is_db = param.options.iter().any(|(opt, _)| {
+                    matches!(opt, ParamOption::Unit(u) if u.eq_ignore_ascii_case("db"))
+                });
+                params.push(ParamInfo {
+                    name: param.name.clone(),
+                    default_value,
+                    is_db,
+                });
+            }
+        }
+    }
+    params
 }
 
 /// Sanitize a test name into a valid Rust function identifier.

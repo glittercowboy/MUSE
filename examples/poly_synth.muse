@@ -80,4 +80,22 @@ plugin "Poly Synth" {
     input  silence 512 samples
     assert output.rms < -120dB
   }
+
+  test "A4 plays at correct frequency" {
+    note on 69 0.8 at 0
+    note off 69 at 4096
+    input silence 8192 samples
+    assert frequency 440Hz > -20dB
+    assert output.rms > -20dB
+    assert no_nan
+    assert no_denormal
+  }
+
+  test "envelope shape" {
+    note on 69 0.8 at 0
+    note off 69 at 256
+    input silence 1024 samples
+    assert output.rms_in 0..256 > -40dB
+    assert output.rms_in 768..1024 < -20dB
+  }
 }
