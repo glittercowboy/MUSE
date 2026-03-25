@@ -259,8 +259,51 @@ pub fn generate_preview_exports(plugin: &PluginDef, process_info: &ProcessInfo) 
     // --- muse_preview_get_num_channels ---
     out.push_str("    #[no_mangle]\n");
     out.push_str(&format!(
-        "    pub extern \"C\" fn muse_preview_get_num_channels() -> u32 {{\n        {}\n    }}\n",
+        "    pub extern \"C\" fn muse_preview_get_num_channels() -> u32 {{\n        {}\n    }}\n\n",
         num_channels
+    ));
+
+    // --- muse_preview_note_on ---
+    out.push_str("    #[no_mangle]\n");
+    out.push_str("    pub unsafe extern \"C\" fn muse_preview_note_on(ptr: *mut u8, note: u8, velocity: f32) {\n");
+    if is_instrument {
+        out.push_str("        if ptr.is_null() { return; }\n");
+        out.push_str("        let instance = &mut *(ptr as *mut PreviewInstance);\n");
+        out.push_str("        instance.ctx.events.push_back(NoteEvent::NoteOn {\n");
+        out.push_str("            timing: 0,\n");
+        out.push_str("            voice_id: None,\n");
+        out.push_str("            channel: 0,\n");
+        out.push_str("            note,\n");
+        out.push_str("            velocity,\n");
+        out.push_str("        });\n");
+    } else {
+        out.push_str("        let _ = (ptr, note, velocity);\n");
+    }
+    out.push_str("    }\n\n");
+
+    // --- muse_preview_note_off ---
+    out.push_str("    #[no_mangle]\n");
+    out.push_str("    pub unsafe extern \"C\" fn muse_preview_note_off(ptr: *mut u8, note: u8) {\n");
+    if is_instrument {
+        out.push_str("        if ptr.is_null() { return; }\n");
+        out.push_str("        let instance = &mut *(ptr as *mut PreviewInstance);\n");
+        out.push_str("        instance.ctx.events.push_back(NoteEvent::NoteOff {\n");
+        out.push_str("            timing: 0,\n");
+        out.push_str("            voice_id: None,\n");
+        out.push_str("            channel: 0,\n");
+        out.push_str("            note,\n");
+        out.push_str("            velocity: 0.0,\n");
+        out.push_str("        });\n");
+    } else {
+        out.push_str("        let _ = (ptr, note);\n");
+    }
+    out.push_str("    }\n\n");
+
+    // --- muse_preview_is_instrument ---
+    out.push_str("    #[no_mangle]\n");
+    out.push_str(&format!(
+        "    pub extern \"C\" fn muse_preview_is_instrument() -> bool {{\n        {}\n    }}\n",
+        is_instrument
     ));
 
     out.push_str("}\n");

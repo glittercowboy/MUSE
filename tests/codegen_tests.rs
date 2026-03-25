@@ -1202,7 +1202,7 @@ fn preview_exports_in_generated_code() {
         "lib.rs should contain #[cfg(feature = \"preview\")]"
     );
 
-    // All 9 extern "C" functions
+    // All 12 extern "C" functions
     let expected_fns = [
         "fn muse_preview_create(sample_rate: f32) -> *mut u8",
         "fn muse_preview_destroy(ptr: *mut u8)",
@@ -1213,6 +1213,9 @@ fn preview_exports_in_generated_code() {
         "fn muse_preview_set_param(ptr: *mut u8, index: u32, value: f32)",
         "fn muse_preview_get_param(ptr: *mut u8, index: u32) -> f32",
         "fn muse_preview_get_num_channels() -> u32",
+        "fn muse_preview_note_on(ptr: *mut u8, note: u8, velocity: f32)",
+        "fn muse_preview_note_off(ptr: *mut u8, note: u8)",
+        "fn muse_preview_is_instrument() -> bool",
     ];
 
     for func_sig in &expected_fns {
@@ -1227,8 +1230,8 @@ fn preview_exports_in_generated_code() {
     // All functions have #[no_mangle]
     let no_mangle_count = lib_rs.matches("#[no_mangle]").count();
     assert!(
-        no_mangle_count >= 9,
-        "Expected at least 9 #[no_mangle] attributes in preview module, found {}",
+        no_mangle_count >= 12,
+        "Expected at least 12 #[no_mangle] attributes in preview module, found {}",
         no_mangle_count
     );
 
@@ -1248,6 +1251,55 @@ fn preview_exports_in_generated_code() {
     assert!(
         lib_rs.contains("0 => \"gain\""),
         "Param name at index 0 should be \"gain\""
+    );
+
+    // Effect plugin: is_instrument returns false
+    assert!(
+        lib_rs.contains("fn muse_preview_is_instrument() -> bool {\n        false\n    }"),
+        "Effect plugin is_instrument should return false"
+    );
+
+    // Effect plugin: note_on is a no-op (uses let _ = to suppress unused warnings)
+    assert!(
+        lib_rs.contains("let _ = (ptr, note, velocity)"),
+        "Effect plugin note_on should be a no-op"
+    );
+
+    // Effect plugin: note_off is a no-op
+    assert!(
+        lib_rs.contains("let _ = (ptr, note)"),
+        "Effect plugin note_off should be a no-op"
+    );
+}
+
+#[test]
+fn preview_midi_instrument_codegen() {
+    let source = include_str!("../examples/synth.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // Instrument plugin: is_instrument returns true
+    assert!(
+        lib_rs.contains("fn muse_preview_is_instrument() -> bool {\n        true\n    }"),
+        "Instrument plugin is_instrument should return true"
+    );
+
+    // Instrument plugin: note_on pushes NoteEvent::NoteOn
+    assert!(
+        lib_rs.contains("NoteEvent::NoteOn {"),
+        "Instrument plugin note_on should push NoteEvent::NoteOn\n\nGenerated tail:\n{}",
+        &lib_rs[lib_rs.len().saturating_sub(2000)..],
+    );
+
+    // Instrument plugin: note_off pushes NoteEvent::NoteOff
+    assert!(
+        lib_rs.contains("NoteEvent::NoteOff {"),
+        "Instrument plugin note_off should push NoteEvent::NoteOff"
+    );
+
+    // note_on accesses the instance's context event queue
+    assert!(
+        lib_rs.contains("instance.ctx.events.push_back(NoteEvent::NoteOn"),
+        "Instrument note_on should push into instance.ctx.events"
     );
 }
 

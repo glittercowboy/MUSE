@@ -26,6 +26,9 @@ pub struct HostPlugin {
     fn_set_param: unsafe extern "C" fn(*mut u8, u32, f32),
     fn_get_param: unsafe extern "C" fn(*mut u8, u32) -> f32,
     fn_get_num_channels: extern "C" fn() -> u32,
+    fn_note_on: unsafe extern "C" fn(*mut u8, u8, f32),
+    fn_note_off: unsafe extern "C" fn(*mut u8, u8),
+    fn_is_instrument: extern "C" fn() -> bool,
 }
 
 // SAFETY: The plugin instance pointer is only accessed from one thread at a
@@ -75,6 +78,15 @@ impl HostPlugin {
             let fn_get_num_channels: Symbol<extern "C" fn() -> u32> = lib
                 .get(b"muse_preview_get_num_channels")
                 .map_err(|e| format!("symbol muse_preview_get_num_channels: {e}"))?;
+            let fn_note_on: Symbol<unsafe extern "C" fn(*mut u8, u8, f32)> = lib
+                .get(b"muse_preview_note_on")
+                .map_err(|e| format!("symbol muse_preview_note_on: {e}"))?;
+            let fn_note_off: Symbol<unsafe extern "C" fn(*mut u8, u8)> = lib
+                .get(b"muse_preview_note_off")
+                .map_err(|e| format!("symbol muse_preview_note_off: {e}"))?;
+            let fn_is_instrument: Symbol<extern "C" fn() -> bool> = lib
+                .get(b"muse_preview_is_instrument")
+                .map_err(|e| format!("symbol muse_preview_is_instrument: {e}"))?;
 
             // Copy function pointers out of Symbols before moving `lib`.
             // *symbol dereferences the Symbol wrapper to get the raw fn pointer.
@@ -87,6 +99,9 @@ impl HostPlugin {
             let p_set_param = *fn_set_param;
             let p_get_param = *fn_get_param;
             let p_get_num_channels = *fn_get_num_channels;
+            let p_note_on = *fn_note_on;
+            let p_note_off = *fn_note_off;
+            let p_is_instrument = *fn_is_instrument;
 
             // Drop all Symbol borrows before moving lib.
             drop(fn_create);
@@ -98,6 +113,9 @@ impl HostPlugin {
             drop(fn_set_param);
             drop(fn_get_param);
             drop(fn_get_num_channels);
+            drop(fn_note_on);
+            drop(fn_note_off);
+            drop(fn_is_instrument);
 
             // Create the plugin instance.
             let instance = p_create(sample_rate);
@@ -116,6 +134,9 @@ impl HostPlugin {
                 fn_set_param: p_set_param,
                 fn_get_param: p_get_param,
                 fn_get_num_channels: p_get_num_channels,
+                fn_note_on: p_note_on,
+                fn_note_off: p_note_off,
+                fn_is_instrument: p_is_instrument,
             })
         }
     }
@@ -204,6 +225,27 @@ impl HostPlugin {
         for &(index, value) in snapshot {
             self.set_param(index, value);
         }
+    }
+
+    /// Send a NoteOn event to the plugin.
+    ///
+    /// For instrument plugins, this pushes a NoteOn event into the process
+    /// context's event queue. For effect plugins, this is a no-op.
+    pub fn note_on(&self, note: u8, velocity: f32) {
+        unsafe { (self.fn_note_on)(self.instance, note, velocity) }
+    }
+
+    /// Send a NoteOff event to the plugin.
+    ///
+    /// For instrument plugins, this pushes a NoteOff event into the process
+    /// context's event queue. For effect plugins, this is a no-op.
+    pub fn note_off(&self, note: u8) {
+        unsafe { (self.fn_note_off)(self.instance, note) }
+    }
+
+    /// Returns true if the loaded plugin is an instrument (has MIDI input).
+    pub fn is_instrument(&self) -> bool {
+        (self.fn_is_instrument)()
     }
 }
 
