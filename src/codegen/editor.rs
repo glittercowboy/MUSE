@@ -32,7 +32,7 @@ pub fn generate_editor_module(plugin: &PluginDef, _gui: &GuiBlock) -> String {
     out.push_str("    use nih_plug::prelude::*;\n");
     out.push_str("    use objc2::rc::Retained;\n");
     out.push_str("    use objc2::runtime::{AnyClass, AnyObject, Bool, NSObject, ProtocolObject, Sel};\n");
-    out.push_str("    use objc2::{msg_send, msg_send_id, class, sel, AllocAnyThread, ClassType, DeclaredClass, declare_class, mutability};\n");
+    out.push_str("    use objc2::{msg_send, msg_send_id, class, sel, AllocAnyThread, ClassType, DefinedClass, define_class, MainThreadOnly, MainThreadMarker};\n");
     out.push_str("    use objc2_foundation::{NSString, NSObjectProtocol};\n");
     out.push_str("    use objc2_app_kit::NSView;\n");
     out.push_str("    use objc2_web_kit::{WKWebView, WKWebViewConfiguration, WKUserContentController, WKScriptMessageHandler};\n");
@@ -91,14 +91,16 @@ pub fn generate_editor_module(plugin: &PluginDef, _gui: &GuiBlock) -> String {
     out.push_str("            };\n\n");
 
     out.push_str("            unsafe {\n");
+    out.push_str("                // SAFETY: nih-plug guarantees Editor::spawn() is called on the main thread.\n");
+    out.push_str("                let mtm = MainThreadMarker::new_unchecked();\n");
     out.push_str("                let parent_view: &NSView = &*(ns_view_ptr as *const NSView);\n\n");
 
     // Create WKWebViewConfiguration with IPC handler
-    out.push_str("                let config = WKWebViewConfiguration::new();\n");
+    out.push_str("                let config = WKWebViewConfiguration::new(mtm);\n");
     out.push_str("                let content_controller = config.userContentController();\n\n");
 
     // Create IPC handler instance
-    out.push_str("                let handler = ParamBridgeHandler::new(self.params.clone(), context);\n");
+    out.push_str("                let handler = ParamBridgeHandler::new(self.params.clone(), context, mtm);\n");
     out.push_str("                let handler_proto = ProtocolObject::from_retained(handler);\n");
     out.push_str("                let handler_name = NSString::from_str(\"paramBridge\");\n");
     out.push_str("                content_controller.addScriptMessageHandler_name(&handler_proto, &handler_name);\n\n");
@@ -106,7 +108,7 @@ pub fn generate_editor_module(plugin: &PluginDef, _gui: &GuiBlock) -> String {
     // Create WKWebView with parent frame
     out.push_str("                let frame = parent_view.frame();\n");
     out.push_str("                let webview = WKWebView::initWithFrame_configuration(\n");
-    out.push_str("                    WKWebView::alloc(),\n");
+    out.push_str("                    WKWebView::alloc(mtm),\n");
     out.push_str("                    frame,\n");
     out.push_str("                    &config,\n");
     out.push_str("                );\n\n");
@@ -174,21 +176,20 @@ fn generate_ipc_handler(out: &mut String, _plugin: &PluginDef, params: &[gui::Pa
     out.push_str("        context: Arc<dyn GuiContext>,\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    declare_class! {\n");
+    out.push_str("    define_class! {\n");
+    out.push_str("        #[unsafe(super(NSObject))]\n");
+    out.push_str("        #[thread_kind = MainThreadOnly]\n");
+    out.push_str("        #[name = \"MuseParamBridgeHandler\"]\n");
+    out.push_str("        #[ivars = ParamBridgeHandlerIvars]\n");
     out.push_str("        struct ParamBridgeHandler;\n\n");
-    out.push_str("        unsafe impl ClassType for ParamBridgeHandler {\n");
-    out.push_str("            type Super = NSObject;\n");
-    out.push_str("            type Mutability = mutability::MainThreadOnly;\n");
-    out.push_str("            const NAME: &'static str = \"MuseParamBridgeHandler\";\n");
-    out.push_str("        }\n\n");
-    out.push_str("        impl DeclaredClass for ParamBridgeHandler {\n");
-    out.push_str("            type Ivars = ParamBridgeHandlerIvars;\n");
-    out.push_str("        }\n\n");
+
+    // NSObjectProtocol is required by WKScriptMessageHandler
+    out.push_str("        unsafe impl NSObjectProtocol for ParamBridgeHandler {}\n\n");
 
     // WKScriptMessageHandler protocol implementation
     out.push_str("        unsafe impl WKScriptMessageHandler for ParamBridgeHandler {\n");
-    out.push_str("            #[method(userContentController:didReceiveScriptMessage:)]\n");
-    out.push_str("            fn did_receive_script_message(\n");
+    out.push_str("            #[unsafe(method(userContentController:didReceiveScriptMessage:))]\n");
+    out.push_str("            unsafe fn userContentController_didReceiveScriptMessage(\n");
     out.push_str("                &self,\n");
     out.push_str("                _controller: &WKUserContentController,\n");
     out.push_str("                message: &objc2_web_kit::WKScriptMessage,\n");
@@ -218,8 +219,8 @@ fn generate_ipc_handler(out: &mut String, _plugin: &PluginDef, params: &[gui::Pa
 
     // Constructor
     out.push_str("    impl ParamBridgeHandler {\n");
-    out.push_str("        fn new(params: Arc<PluginParams>, context: Arc<dyn GuiContext>) -> Retained<Self> {\n");
-    out.push_str("            let this = Self::alloc().set_ivars(ParamBridgeHandlerIvars { params, context });\n");
+    out.push_str("        fn new(params: Arc<PluginParams>, context: Arc<dyn GuiContext>, mtm: MainThreadMarker) -> Retained<Self> {\n");
+    out.push_str("            let this = Self::alloc(mtm).set_ivars(ParamBridgeHandlerIvars { params, context });\n");
     out.push_str("            unsafe { msg_send_id![super(this), init] }\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
@@ -375,7 +376,7 @@ mod tests {
         let gui = crate::codegen::gui::find_gui_block(&plugin).unwrap();
         let code = generate_editor_module(&plugin, gui);
 
-        assert!(code.contains("declare_class!"));
+        assert!(code.contains("define_class!"));
         assert!(code.contains("ParamBridgeHandler"));
         assert!(code.contains("WKScriptMessageHandler"));
         assert!(code.contains("didReceiveScriptMessage"));

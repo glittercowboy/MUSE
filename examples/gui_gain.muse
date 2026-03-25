@@ -1,0 +1,50 @@
+// GUI Gain — the simplest GUI-enabled Muse plugin.
+// A gain knob with a dark-themed web view editor.
+
+plugin "Warm Gain" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.warm-gain"
+    description "A warm, musical gain stage"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseWarmGain1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param gain: float = 0.0 in -30.0..30.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#E8A87C"
+  }
+
+  process {
+    input -> gain(param.gain) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    set    param.gain = 0.0
+    assert output.rms < -120dB
+  }
+
+  test "positive gain increases level" {
+    input  sine 440Hz 1024 samples
+    set    param.gain = 6.0
+    assert output.peak > 1.0
+  }
+}

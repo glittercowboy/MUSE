@@ -842,3 +842,42 @@ fn no_preset_code_when_no_presets() {
         "Generated code should not contain apply_preset when no presets defined"
     );
 }
+
+#[test]
+#[ignore = "requires cargo check — run with --include-ignored"]
+fn gui_gain_cargo_check() {
+    let source = include_str!("../examples/gui_gain.muse");
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-gui-gain-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // Verify GUI-specific output structure
+    assert!(crate_dir.join("assets/editor.html").exists(), "assets/editor.html missing");
+
+    let cargo_toml = std::fs::read_to_string(crate_dir.join("Cargo.toml")).unwrap();
+    assert!(cargo_toml.contains("objc2"), "Cargo.toml should contain objc2 dependency");
+    assert!(cargo_toml.contains("objc2-web-kit"), "Cargo.toml should contain objc2-web-kit dependency");
+    assert!(cargo_toml.contains("serde_json"), "Cargo.toml should contain serde_json dependency");
+
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(lib_rs.contains("mod editor"), "lib.rs should contain editor module");
+    assert!(lib_rs.contains("define_class!"), "lib.rs should contain define_class! macro");
+    assert!(lib_rs.contains("WKWebView"), "lib.rs should reference WKWebView");
+    assert!(lib_rs.contains("fn editor("), "lib.rs should contain editor() method");
+    assert!(lib_rs.contains("paramBridge"), "lib.rs should set up paramBridge IPC handler");
+
+    // Verify the HTML includes the param name
+    let html = std::fs::read_to_string(crate_dir.join("assets/editor.html")).unwrap();
+    assert!(html.contains("gain"), "editor.html should reference the gain param");
+    assert!(html.contains("#E8A87C"), "editor.html should contain the accent color");
+
+    assert_cargo_check(&crate_dir);
+}

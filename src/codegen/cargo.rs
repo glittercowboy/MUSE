@@ -29,7 +29,7 @@ nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149
 
     if has_gui {
         toml.push_str("objc2 = \"0.6\"\n");
-        toml.push_str("objc2-foundation = { version = \"0.3\", features = [\"NSString\", \"NSObject\"] }\n");
+        toml.push_str("objc2-foundation = { version = \"0.3\", features = [\"NSString\", \"NSObject\", \"NSURL\"] }\n");
         toml.push_str("objc2-app-kit = { version = \"0.3\", features = [\"NSView\", \"NSResponder\"] }\n");
         toml.push_str("objc2-web-kit = { version = \"0.3\", features = [\"WKWebView\", \"WKWebViewConfiguration\", \"WKUserContentController\", \"WKScriptMessageHandler\", \"WKScriptMessage\"] }\n");
         toml.push_str("block2 = \"0.6\"\n");
