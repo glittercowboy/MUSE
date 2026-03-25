@@ -2,6 +2,7 @@
 //!
 //! Usage:
 //!   muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]
+//!   muse build <file> [--output-dir <dir>] [--format json]
 //!   muse check <file> [--format json]
 //!   muse test <file> [--output-dir <dir>] [--format json]
 //!
@@ -12,8 +13,9 @@
 
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
-use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle, BuildOutput};
+use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -25,6 +27,7 @@ fn main() {
 
     match args[1].as_str() {
         "compile" => cmd_compile(&args[2..]),
+        "build" => cmd_build(&args[2..]),
         "check" => cmd_check(&args[2..]),
         "test" => cmd_test(&args[2..]),
         "--help" | "-h" | "help" => {
@@ -153,6 +156,250 @@ fn parse_check_args(args: &[String]) -> Result<CheckOpts, String> {
     let file = file.ok_or("muse check: missing <file> argument")?;
 
     Ok(CheckOpts { file, json_format })
+}
+
+// ── muse build ───────────────────────────────────────────────────────────────
+
+/// Parsed CLI options for the build subcommand.
+struct BuildOpts {
+    file: PathBuf,
+    output_dir: PathBuf,
+    json_format: bool,
+}
+
+fn parse_build_args(args: &[String]) -> Result<BuildOpts, String> {
+    if args.is_empty() {
+        return Err("muse build: missing <file> argument".into());
+    }
+
+    let mut file: Option<PathBuf> = None;
+    let mut output_dir: Option<PathBuf> = None;
+    let mut json_format = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output-dir" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--output-dir requires a value".into());
+                }
+                output_dir = Some(PathBuf::from(&args[i]));
+            }
+            "--format" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--format requires a value".into());
+                }
+                match args[i].as_str() {
+                    "json" => json_format = true,
+                    other => return Err(format!("unknown format '{other}', expected 'json'")),
+                }
+            }
+            arg if arg.starts_with('-') => {
+                return Err(format!("unknown option '{arg}'"));
+            }
+            _ => {
+                if file.is_some() {
+                    return Err(format!("unexpected argument '{}'", args[i]));
+                }
+                file = Some(PathBuf::from(&args[i]));
+            }
+        }
+        i += 1;
+    }
+
+    let file = file.ok_or("muse build: missing <file> argument")?;
+    let output_dir = output_dir.unwrap_or_else(|| PathBuf::from("."));
+
+    Ok(BuildOpts {
+        file,
+        output_dir,
+        json_format,
+    })
+}
+
+fn cmd_build(args: &[String]) {
+    let opts = match parse_build_args(args) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("muse: {e}");
+            process::exit(2);
+        }
+    };
+
+    let source = match std::fs::read_to_string(&opts.file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("muse: cannot read '{}': {e}", opts.file.display());
+            process::exit(2);
+        }
+    };
+
+    let filename = opts.file.display().to_string();
+
+    // Phase 1: compile (.muse → Rust crate)
+    let t0 = Instant::now();
+    let result = match compile(&source, &filename, &opts.output_dir) {
+        Ok(r) => r,
+        Err(diags) => {
+            if opts.json_format {
+                // Compilation errors are structured diagnostics, not phase errors
+                println!("{}", diagnostics_to_json(&diags));
+            } else {
+                render_ariadne(&diags, &source, &filename);
+            }
+            process::exit(1);
+        }
+    };
+    let compile_ms = t0.elapsed().as_millis();
+
+    // Phase 2: cargo build (Rust crate → dylib)
+    let t1 = Instant::now();
+    let build_output = match build_plugin(&result.crate_dir, &result.package_name) {
+        Ok(o) => o,
+        Err(e) => {
+            if opts.json_format {
+                let json = serde_json::json!({
+                    "status": "error",
+                    "phase": "cargo_build",
+                    "message": e.to_string(),
+                    "cargo_stderr": e.to_string(),
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            } else {
+                eprintln!("muse: build failed: {e}");
+            }
+            process::exit(2);
+        }
+    };
+    let cargo_build_ms = t1.elapsed().as_millis();
+
+    // Phase 3: CLAP bundle assembly
+    let t2 = Instant::now();
+    let clap_bundle = match assemble_clap_bundle(
+        &opts.output_dir,
+        &build_output.dylib_path,
+        &result.plugin_name,
+        &result.clap_id,
+        &result.version,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            if opts.json_format {
+                let json = serde_json::json!({
+                    "status": "error",
+                    "phase": "clap_bundle",
+                    "message": e,
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            } else {
+                eprintln!("muse: CLAP bundle assembly failed: {e}");
+            }
+            process::exit(2);
+        }
+    };
+    let clap_bundle_ms = t2.elapsed().as_millis();
+
+    // Phase 4: VST3 bundle assembly
+    let t3 = Instant::now();
+    let vst3_bundle = match assemble_vst3_bundle(
+        &opts.output_dir,
+        &build_output.dylib_path,
+        &result.plugin_name,
+        &result.vst3_id,
+        &result.version,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            if opts.json_format {
+                let json = serde_json::json!({
+                    "status": "error",
+                    "phase": "vst3_bundle",
+                    "message": e,
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            } else {
+                eprintln!("muse: VST3 bundle assembly failed: {e}");
+            }
+            process::exit(2);
+        }
+    };
+    let vst3_bundle_ms = t3.elapsed().as_millis();
+
+    // Phase 5: codesign CLAP bundle
+    let t4 = Instant::now();
+    if let Err(e) = codesign_bundle(&clap_bundle) {
+        if opts.json_format {
+            let json = serde_json::json!({
+                "status": "error",
+                "phase": "codesign_clap",
+                "message": e,
+            });
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        } else {
+            eprintln!("muse: CLAP codesign failed: {e}");
+        }
+        process::exit(2);
+    }
+    let codesign_clap_ms = t4.elapsed().as_millis();
+
+    // Phase 6: codesign VST3 bundle
+    let t5 = Instant::now();
+    if let Err(e) = codesign_bundle(&vst3_bundle) {
+        if opts.json_format {
+            let json = serde_json::json!({
+                "status": "error",
+                "phase": "codesign_vst3",
+                "message": e,
+            });
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        } else {
+            eprintln!("muse: VST3 codesign failed: {e}");
+        }
+        process::exit(2);
+    }
+    let codesign_vst3_ms = t5.elapsed().as_millis();
+
+    // Compute artifact sizes (binary inside bundle is >99% of bundle size)
+    let clap_binary = clap_bundle.join("Contents").join("MacOS").join(&result.plugin_name);
+    let vst3_binary = vst3_bundle.join("Contents").join("MacOS").join(&result.plugin_name);
+    let clap_size = std::fs::metadata(&clap_binary).map(|m| m.len()).unwrap_or(0);
+    let vst3_size = std::fs::metadata(&vst3_binary).map(|m| m.len()).unwrap_or(0);
+
+    if opts.json_format {
+        let json = serde_json::json!({
+            "status": "ok",
+            "plugin_name": result.plugin_name,
+            "package_name": result.package_name,
+            "phases": {
+                "compile": { "duration_ms": compile_ms },
+                "cargo_build": { "duration_ms": cargo_build_ms },
+                "clap_bundle": { "duration_ms": clap_bundle_ms },
+                "vst3_bundle": { "duration_ms": vst3_bundle_ms },
+                "codesign_clap": { "duration_ms": codesign_clap_ms },
+                "codesign_vst3": { "duration_ms": codesign_vst3_ms },
+            },
+            "artifacts": {
+                "clap": {
+                    "path": format!("{}.clap", result.plugin_name),
+                    "size_bytes": clap_size,
+                },
+                "vst3": {
+                    "path": format!("{}.vst3", result.plugin_name),
+                    "size_bytes": vst3_size,
+                },
+                "crate_dir": result.crate_dir.display().to_string(),
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+    } else {
+        eprintln!(
+            "Built '{}' → {}.clap + {}.vst3",
+            result.plugin_name, result.plugin_name, result.plugin_name
+        );
+    }
+    process::exit(0);
 }
 
 fn cmd_compile(args: &[String]) {
@@ -660,17 +907,19 @@ fn print_human_results(results: &TestRunResults) {
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]");
+    eprintln!("  muse build <file> [--output-dir <dir>] [--format json]");
     eprintln!("  muse check <file> [--format json]");
     eprintln!("  muse test <file> [--output-dir <dir>] [--format json]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compile    Parse, resolve, and generate a Rust/nih-plug crate from a .muse file");
+    eprintln!("  build      Compile, build, bundle (CLAP + VST3), and codesign a .muse plugin");
     eprintln!("  check      Parse and resolve a .muse file, reporting any errors");
     eprintln!("  test       Compile and run in-language test blocks, reporting pass/fail results");
     eprintln!();
     eprintln!("Options:");
-    eprintln!("  --output-dir <dir>  Directory to place generated crate (default: current dir)");
-    eprintln!("  --format json       Output structured JSON diagnostics instead of human-readable");
+    eprintln!("  --output-dir <dir>  Directory to place generated crate/bundles (default: current dir)");
+    eprintln!("  --format json       Output structured JSON (telemetry for build, diagnostics for others)");
     eprintln!("  --no-build          Generate Rust crate only, skip cargo build (compile only)");
     eprintln!("  --release           Build in release mode (default: debug)");
     eprintln!();
