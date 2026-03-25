@@ -70,8 +70,8 @@ fn cargo_toml_contains_cdylib() {
     let source = include_str!("../examples/gain.muse");
     let (cargo_toml, _) = generate_code_strings(source);
     assert!(
-        cargo_toml.contains(r#"crate-type = ["cdylib"]"#),
-        "Cargo.toml should contain cdylib crate-type, got:\n{}",
+        cargo_toml.contains(r#"crate-type = ["cdylib", "lib"]"#),
+        "Cargo.toml should contain cdylib + lib crate-type, got:\n{}",
         cargo_toml
     );
 }

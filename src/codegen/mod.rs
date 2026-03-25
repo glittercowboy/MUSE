@@ -9,6 +9,7 @@ pub mod midi;
 pub mod params;
 pub mod plugin;
 pub mod process;
+pub mod test;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,13 @@ pub fn generate_plugin(
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
     // Assemble the full lib.rs
-    let lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code);
+    let mut lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code);
+
+    // If the plugin has test blocks, append a #[cfg(test)] module
+    let test_module = test::generate_test_module(plugin, &process_info);
+    if !test_module.is_empty() {
+        lib_rs.push_str(&test_module);
+    }
 
     // Write files to disk
     let crate_dir = output_dir.to_path_buf();

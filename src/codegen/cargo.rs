@@ -17,7 +17,7 @@ version = "{version}"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
 
 [dependencies]
 nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149ec4d" }}
