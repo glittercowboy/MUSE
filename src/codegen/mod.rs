@@ -5,6 +5,7 @@
 
 pub mod cargo;
 pub mod dsp;
+pub mod gui;
 pub mod midi;
 pub mod params;
 pub mod plugin;
