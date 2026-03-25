@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Warm Gain — Muse Editor</title>
+<style>
+:root {
+  --bg: #1a1a1a;
+  --fg: #e0e0e0;
+  --accent: #E8A87C;
+  --knob-bg: #2a2a2a;
+  --knob-track: #3a3a3a;
+  --knob-size: 80px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.editor-header {
+  padding: 12px 16px 8px;
+  text-align: center;
+}
+
+.editor-header h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.8;
+}
+
+.knob-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  justify-items: center;
+  align-content: start;
+  flex: 1;
+}
+
+.knob-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.knob-cell canvas {
+  cursor: grab;
+}
+
+.knob-cell canvas:active {
+  cursor: grabbing;
+}
+
+.knob-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+  min-height: 16px;
+}
+
+.knob-label {
+  font-size: 11px;
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+</style>
+</head>
+<body data-theme="dark">
+<header class="editor-header"><h1>Warm Gain</h1></header>
+<div class="knob-grid">
+  <div class="knob-cell" data-param="gain">
+    <canvas id="knob-gain" width="80" height="80"></canvas>
+    <div class="knob-value" id="value-gain">0.00 dB</div>
+    <div class="knob-label">Gain</div>
+  </div>
+</div>
+<script>
+// --- MuseKnob canvas widget ---
+class MuseKnob {
+  constructor(id, canvas, opts) {
+    this.id = id;
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.min = opts.min;
+    this.max = opts.max;
+    this.defaultValue = opts.default;
+    this.value = opts.value; // normalized 0..1
+    this.unit = opts.unit || '';
+    this.isInt = opts.isInt || false;
+    this.dragging = false;
+    this.dragStartY = 0;
+    this.dragStartValue = 0;
+
+    // Arc geometry
+    this.startAngle = 0.75 * Math.PI;
+    this.endAngle = 2.25 * Math.PI;
+    this.radius = 30;
+    this.lineWidth = 4;
+
+    // Read CSS variables
+    const style = getComputedStyle(document.documentElement);
+    this.accentColor = style.getPropertyValue('--accent').trim();
+    this.trackColor = style.getPropertyValue('--knob-track').trim();
+    this.bgColor = style.getPropertyValue('--knob-bg').trim();
+
+    this.draw();
+    this.bindEvents();
+  }
+
+  get realValue() {
+    const v = this.min + this.value * (this.max - this.min);
+    return this.isInt ? Math.round(v) : v;
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Background circle
+    ctx.beginPath();
+    ctx.arc(cx, cy, this.radius, 0, 2 * Math.PI);
+    ctx.fillStyle = this.bgColor;
+    ctx.fill();
+
+    // Track arc (full range)
+    ctx.beginPath();
+    ctx.arc(cx, cy, this.radius, this.startAngle, this.endAngle);
+    ctx.strokeStyle = this.trackColor;
+    ctx.lineWidth = this.lineWidth;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Value arc
+    const valueAngle = this.startAngle + this.value * (this.endAngle - this.startAngle);
+    if (this.value > 0.001) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, this.radius, this.startAngle, valueAngle);
+      ctx.strokeStyle = this.accentColor;
+      ctx.lineWidth = this.lineWidth;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+
+    // Pointer dot
+    const dotX = cx + Math.cos(valueAngle) * (this.radius - 10);
+    const dotY = cy + Math.sin(valueAngle) * (this.radius - 10);
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 3, 0, 2 * Math.PI);
+    ctx.fillStyle = this.accentColor;
+    ctx.fill();
+  }
+
+  updateDisplay() {
+    const el = document.getElementById('value-' + this.id);
+    if (el) {
+      const v = this.realValue;
+      const display = this.isInt ? v.toString() : v.toFixed(2);
+      el.textContent = this.unit ? display + ' ' + this.unit : display;
+    }
+  }
+
+  bindEvents() {
+    this.canvas.addEventListener('mousedown', (e) => {
+      this.dragging = true;
+      this.dragStartY = e.clientY;
+      this.dragStartValue = this.value;
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!this.dragging) return;
+      const dy = this.dragStartY - e.clientY;
+      const sensitivity = e.shiftKey ? 0.001 : 0.005;
+      this.value = Math.max(0, Math.min(1, this.dragStartValue + dy * sensitivity));
+      this.draw();
+      this.updateDisplay();
+      sendParam(this.id, this.value);
+    });
+
+    document.addEventListener('mouseup', () => {
+      this.dragging = false;
+    });
+
+    // Double-click resets to default
+    this.canvas.addEventListener('dblclick', () => {
+      if ((this.max - this.min) > 0) {
+        this.value = (this.defaultValue - this.min) / (this.max - this.min);
+      } else {
+        this.value = 0;
+      }
+      this.draw();
+      this.updateDisplay();
+      sendParam(this.id, this.value);
+    });
+  }
+
+  setNormalized(v) {
+    this.value = Math.max(0, Math.min(1, v));
+    this.draw();
+    this.updateDisplay();
+  }
+}
+// --- MuseXyPad canvas widget ---
+class MuseXyPad {
+  constructor(canvas, paramX, paramY) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.paramX = paramX;
+    this.paramY = paramY;
+    this.x = 0.5;
+    this.y = 0.5;
+    this.dragging = false;
+
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.bg = style.getPropertyValue('--knob-bg').trim();
+    this.track = style.getPropertyValue('--knob-track').trim();
+
+    this.draw();
+    this.bindEvents();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Crosshair guides
+    const px = this.x * w;
+    const py = (1 - this.y) * h;
+    ctx.strokeStyle = this.track;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Position dot
+    ctx.beginPath();
+    ctx.arc(px, py, 8, 0, 2 * Math.PI);
+    ctx.fillStyle = this.accent;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  update(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    this.x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    this.y = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
+    this.draw();
+    sendParam(this.paramX, this.x);
+    sendParam(this.paramY, this.y);
+  }
+
+  bindEvents() {
+    this.canvas.addEventListener('mousedown', (e) => { this.dragging = true; this.update(e); });
+    document.addEventListener('mousemove', (e) => { if (this.dragging) this.update(e); });
+    document.addEventListener('mouseup', () => { this.dragging = false; });
+  }
+}
+// --- MuseSpectrum canvas widget ---
+class MuseSpectrum {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.bg = style.getPropertyValue('--knob-bg').trim();
+    this.bars = new Float32Array(32);
+    for (let i = 0; i < 32; i++) this.bars[i] = Math.random() * 0.6 + 0.1;
+    this.animate();
+  }
+
+  animate() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const barW = w / this.bars.length;
+    for (let i = 0; i < this.bars.length; i++) {
+      this.bars[i] += (Math.random() - 0.5) * 0.08;
+      this.bars[i] = Math.max(0.05, Math.min(1, this.bars[i]));
+      const barH = this.bars[i] * h;
+      ctx.fillStyle = this.accent;
+      ctx.globalAlpha = 0.7 + this.bars[i] * 0.3;
+      ctx.fillRect(i * barW + 1, h - barH, barW - 2, barH);
+    }
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(() => this.animate());
+  }
+}
+// --- MuseWaveform canvas widget ---
+class MuseWaveform {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.phase = 0;
+    this.animate();
+  }
+
+  animate() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.strokeStyle = this.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w * 4 * Math.PI + this.phase;
+      const y = h / 2 + Math.sin(t) * (h * 0.35) + Math.sin(t * 2.7) * (h * 0.1);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    this.phase += 0.03;
+    requestAnimationFrame(() => this.animate());
+  }
+}
+// --- MuseEnvelope canvas widget ---
+class MuseEnvelope {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.track = style.getPropertyValue('--knob-track').trim();
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Static ADSR shape
+    const a = 0.15, d = 0.25, s = 0.6, r = 0.35;
+    const points = [
+      [0, h],
+      [a * w, h * 0.05],
+      [(a + d) * w, h * (1 - s)],
+      [(1 - r) * w, h * (1 - s)],
+      [w, h],
+    ];
+
+    // Filled area
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (const [x, y] of points) ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fillStyle = this.accent;
+    ctx.globalAlpha = 0.15;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Outline
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (const [x, y] of points) ctx.lineTo(x, y);
+    ctx.strokeStyle = this.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Phase labels
+    ctx.fillStyle = this.track;
+    ctx.font = '10px sans-serif';
+    ctx.fillText('A', a * w * 0.4, h - 4);
+    ctx.fillText('D', (a + d * 0.4) * w, h - 4);
+    ctx.fillText('S', (a + d + (1 - r - a - d) * 0.4) * w, h - 4);
+    ctx.fillText('R', (1 - r * 0.5) * w, h - 4);
+  }
+}
+// --- MuseEqCurve canvas widget ---
+class MuseEqCurve {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.track = style.getPropertyValue('--knob-track').trim();
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = this.track;
+    ctx.lineWidth = 0.5;
+    ctx.globalAlpha = 0.3;
+    for (let y = 0; y < h; y += h / 4) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // 0 dB reference line
+    ctx.strokeStyle = this.track;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Mock EQ curve (low shelf + parametric peak + high shelf)
+    ctx.strokeStyle = this.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w;
+      const lowShelf = 3 * Math.exp(-t * 8);
+      const peak = 6 * Math.exp(-Math.pow((t - 0.4) * 8, 2));
+      const highShelf = -2 * (1 - Math.exp(-(t - 0.7) * 5));
+      const db = lowShelf + peak + highShelf;
+      const y = h / 2 - (db / 12) * (h / 2);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Filled area
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w;
+      const lowShelf = 3 * Math.exp(-t * 8);
+      const peak = 6 * Math.exp(-Math.pow((t - 0.4) * 8, 2));
+      const highShelf = -2 * (1 - Math.exp(-(t - 0.7) * 5));
+      const db = lowShelf + peak + highShelf;
+      const y = h / 2 - (db / 12) * (h / 2);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, h / 2);
+    ctx.lineTo(0, h / 2);
+    ctx.closePath();
+    ctx.fillStyle = this.accent;
+    ctx.globalAlpha = 0.1;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+// --- MuseReduction bar widget ---
+class MuseReduction {
+  constructor(svgEl) {
+    this.svg = svgEl;
+    this.fill = svgEl.querySelector('.reduction-fill');
+    if (!this.fill) return;
+    this.value = 0;
+    this.animate();
+  }
+
+  animate() {
+    // Simulate gain reduction bouncing
+    this.value += (Math.random() - 0.45) * 0.1;
+    this.value = Math.max(0, Math.min(0.8, this.value));
+    const h = this.value * 100;
+    this.fill.setAttribute('height', h.toFixed(1));
+    this.fill.setAttribute('y', (100 - h).toFixed(1));
+    requestAnimationFrame(() => this.animate());
+  }
+}
+// --- Parameter bridge ---
+function sendParam(id, normalizedValue) {
+  try {
+    window.webkit.messageHandlers.paramBridge.postMessage(
+      JSON.stringify({ id: id, value: normalizedValue })
+    );
+  } catch (e) {
+    // Fallback: no native bridge (preview mode)
+    console.log('paramBridge:', id, normalizedValue);
+  }
+}
+
+// Called from Rust via evaluateJavaScript
+window.updateParam = function(id, normalizedValue) {
+  if (knobs[id]) {
+    knobs[id].setNormalized(normalizedValue);
+  }
+};
+// --- Widget initialization ---
+const knobs = {};
+document.addEventListener('DOMContentLoaded', () => {
+  knobs["gain"] = new MuseKnob("gain", document.getElementById("knob-gain"), {
+    min: -30,
+    max: 30,
+    default: 0,
+    value: 0.500000,
+    unit: "dB",
+    isInt: false
+  });
+  // --- Slider IPC binding ---
+  document.querySelectorAll('.slider-cell[data-param]').forEach(cell => {
+    const paramId = cell.getAttribute('data-param');
+    const input = cell.querySelector('input[type="range"]');
+    const display = cell.querySelector('.slider-value');
+    if (input) {
+      input.addEventListener('input', () => {
+        const min = parseFloat(input.min);
+        const max = parseFloat(input.max);
+        const val = parseFloat(input.value);
+        const normalized = (max - min) > 0 ? (val - min) / (max - min) : 0;
+        if (display) display.textContent = input.step === '1' ? val.toString() : val.toFixed(2);
+        sendParam(paramId, normalized);
+      });
+    }
+  });
+  // --- Switch IPC binding ---
+  document.querySelectorAll('.switch-cell[data-param]').forEach(cell => {
+    const paramId = cell.getAttribute('data-param');
+    const input = cell.querySelector('input[type="checkbox"]');
+    if (input) {
+      input.addEventListener('change', () => {
+        sendParam(paramId, input.checked ? 1.0 : 0.0);
+      });
+    }
+  });
+  // --- XY Pad instances ---
+  document.querySelectorAll('.xy-pad-cell').forEach(cell => {
+    const canvas = cell.querySelector('canvas');
+    const px = cell.getAttribute('data-param-x');
+    const py = cell.getAttribute('data-param-y');
+    if (canvas && px && py) new MuseXyPad(canvas, px, py);
+  });
+  // --- Visualization widget instances ---
+  document.querySelectorAll('.spectrum-cell canvas').forEach(c => new MuseSpectrum(c));
+  document.querySelectorAll('.waveform-cell canvas').forEach(c => new MuseWaveform(c));
+  document.querySelectorAll('.envelope-cell canvas').forEach(c => new MuseEnvelope(c));
+  document.querySelectorAll('.eq-curve-cell canvas').forEach(c => new MuseEqCurve(c));
+  document.querySelectorAll('.reduction-cell .reduction-meter').forEach(s => new MuseReduction(s));
+});
+
+</script>
+</body>
+</html>
