@@ -1,0 +1,57 @@
+// Distortion — wavefold + bitcrush for aggressive digital distortion.
+// Demonstrates the fold and bitcrush DSP primitives in an effect chain.
+
+plugin "Crunch Box" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.crunch-box"
+    description "A crunchy digital distortion effect"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseCrunchBox1"
+    subcategories   [Fx, Distortion]
+  }
+
+  input  stereo
+  output stereo
+
+  param drive: float = 3.0 in 1.0..10.0 {
+    smoothing logarithmic 50ms
+    unit "x"
+  }
+
+  param bits: float = 8.0 in 1.0..16.0 {
+    smoothing logarithmic 50ms
+    unit "bits"
+  }
+
+  param mix_amt: float = 0.5 in 0.0..1.0 {
+    smoothing linear 10ms
+  }
+
+  process {
+    input -> fold(param.drive) -> bitcrush(param.bits) -> gain(param.mix_amt) -> output
+  }
+
+  test "signal passes through with content" {
+    input  sine 440Hz 1024 samples
+    set    param.drive = 3.0
+    set    param.bits = 8.0
+    set    param.mix_amt = 1.0
+    assert output.peak > 0.0
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    set    param.drive = 3.0
+    set    param.bits = 8.0
+    assert output.rms < -120dB
+  }
+}

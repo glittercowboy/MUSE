@@ -7,11 +7,12 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_16_functions() {
+fn registry_contains_all_23_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
         "adsr", "ar", "gain", "pan", "delay", "mix", "clip", "tanh",
+        "fold", "bitcrush", "lfo", "pulse", "chorus", "compressor",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
     for name in &expected {
@@ -196,6 +197,65 @@ fn tanh_signature() {
     assert_eq!(f.params.len(), 0);
     assert_eq!(f.return_type, DspType::Processor);
     assert_eq!(f.primitive, DspPrimitive::Tanh);
+}
+
+// ── New primitives ───────────────────────────────────────────
+
+#[test]
+fn fold_signature() {
+    let f = lookup("fold");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "amount", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Fold);
+}
+
+#[test]
+fn bitcrush_signature() {
+    let f = lookup("bitcrush");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "bits", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Bitcrush);
+}
+
+#[test]
+fn lfo_signature() {
+    let f = lookup("lfo");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "rate", DspType::Rate, false);
+    assert_eq!(f.return_type, DspType::Signal);
+    assert_eq!(f.primitive, DspPrimitive::Lfo);
+}
+
+#[test]
+fn pulse_signature() {
+    let f = lookup("pulse");
+    assert_eq!(f.params.len(), 2);
+    assert_param(&f.params[0], "freq", DspType::Frequency, false);
+    assert_param(&f.params[1], "width", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Signal);
+    assert_eq!(f.primitive, DspPrimitive::Pulse);
+}
+
+#[test]
+fn chorus_signature() {
+    let f = lookup("chorus");
+    assert_eq!(f.params.len(), 2);
+    assert_param(&f.params[0], "rate", DspType::Rate, false);
+    assert_param(&f.params[1], "depth", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Chorus);
+}
+
+#[test]
+fn compressor_signature() {
+    let f = lookup("compressor");
+    assert_eq!(f.params.len(), 2);
+    assert_param(&f.params[0], "threshold", DspType::Gain, false);
+    assert_param(&f.params[1], "ratio", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Compressor);
 }
 
 // ── Type compatibility ───────────────────────────────────────

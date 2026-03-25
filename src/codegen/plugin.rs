@@ -60,7 +60,9 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     let needs_any_biquad = needs_top_level_biquad || !branch_biquad_fields.is_empty();
     let has_oscillators = process_info.oscillator_count > 0;
     let has_adsr = process_info.has_adsr;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators;
+    let has_chorus = process_info.chorus_count > 0;
+    let has_compressor = process_info.compressor_count > 0;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
 
     let mut out = String::new();
@@ -87,6 +89,14 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     // ADSR state (instruments and effects with envelope modulation)
     if has_adsr {
         out.push_str("    adsr_state: AdsrState,\n");
+    }
+    // Chorus state fields (one per chorus call site)
+    for i in 0..process_info.chorus_count {
+        out.push_str(&format!("    chorus_state_{}: ChorusState,\n", i));
+    }
+    // Compressor state fields (one per compressor call site)
+    for i in 0..process_info.compressor_count {
+        out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
     }
     // Instrument-specific state fields
     if is_instrument {
@@ -121,6 +131,12 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
     if has_adsr {
         out.push_str("            adsr_state: AdsrState::default(),\n");
+    }
+    for i in 0..process_info.chorus_count {
+        out.push_str(&format!("            chorus_state_{}: ChorusState::default(),\n", i));
+    }
+    for i in 0..process_info.compressor_count {
+        out.push_str(&format!("            compressor_state_{}: CompressorState::default(),\n", i));
     }
     if is_instrument {
         out.push_str("            active_note: None,\n");

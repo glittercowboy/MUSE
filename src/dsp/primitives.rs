@@ -47,6 +47,12 @@ pub enum DspPrimitive {
     Clip,
     Tanh,
     Noise,
+    Fold,
+    Bitcrush,
+    Lfo,
+    Pulse,
+    Chorus,
+    Compressor,
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -176,6 +182,58 @@ pub fn builtin_registry() -> DspRegistry {
             params: vec![],
             return_type: DspType::Processor,
             primitive: DspPrimitive::Tanh,
+        },
+        // ── New DSP primitives ──
+        // fold(amount: Number) → Processor — wavefolder distortion
+        DspFunction {
+            name: "fold".into(),
+            params: vec![param("amount", DspType::Number)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Fold,
+        },
+        // bitcrush(bits: Number) → Processor — bit depth reducer
+        DspFunction {
+            name: "bitcrush".into(),
+            params: vec![param("bits", DspType::Number)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Bitcrush,
+        },
+        // lfo(rate: Rate) → Signal — low-frequency oscillator (sine)
+        DspFunction {
+            name: "lfo".into(),
+            params: vec![param("rate", DspType::Rate)],
+            return_type: DspType::Signal,
+            primitive: DspPrimitive::Lfo,
+        },
+        // pulse(freq: Frequency, width: Number) → Signal — pulse wave oscillator
+        DspFunction {
+            name: "pulse".into(),
+            params: vec![
+                param("freq", DspType::Frequency),
+                param("width", DspType::Number),
+            ],
+            return_type: DspType::Signal,
+            primitive: DspPrimitive::Pulse,
+        },
+        // chorus(rate: Rate, depth: Number) → Processor — chorus effect
+        DspFunction {
+            name: "chorus".into(),
+            params: vec![
+                param("rate", DspType::Rate),
+                param("depth", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Chorus,
+        },
+        // compressor(threshold: Gain, ratio: Number) → Processor — dynamics compressor
+        DspFunction {
+            name: "compressor".into(),
+            params: vec![
+                param("threshold", DspType::Gain),
+                param("ratio", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Compressor,
         },
     ];
 

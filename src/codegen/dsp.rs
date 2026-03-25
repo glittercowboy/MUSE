@@ -57,7 +57,7 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
 
     // ── Oscillators ──────────────────────────────────────────
     let needs_any_osc = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(_))
+        matches!(p, DspPrimitive::Oscillator(_) | DspPrimitive::Lfo | DspPrimitive::Pulse)
     });
 
     if needs_any_osc {
@@ -72,7 +72,7 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         matches!(p, DspPrimitive::Oscillator(OscKind::Square))
     });
     let needs_sine = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(OscKind::Sine))
+        matches!(p, DspPrimitive::Oscillator(OscKind::Sine) | DspPrimitive::Lfo)
     });
     let needs_triangle = used_primitives.iter().any(|p| {
         matches!(p, DspPrimitive::Oscillator(OscKind::Triangle))
@@ -95,6 +95,14 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         out.push('\n');
     }
 
+    let needs_pulse = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Pulse)
+    });
+    if needs_pulse {
+        out.push_str(&generate_process_osc_pulse());
+        out.push('\n');
+    }
+
     // ── Envelopes ────────────────────────────────────────────
     let needs_adsr = used_primitives.iter().any(|p| {
         matches!(p, DspPrimitive::Envelope(EnvKind::Adsr))
@@ -104,6 +112,30 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         out.push_str(&generate_adsr_state());
         out.push('\n');
         out.push_str(&generate_process_adsr());
+        out.push('\n');
+    }
+
+    // ── Chorus ───────────────────────────────────────────────
+    let needs_chorus = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Chorus)
+    });
+
+    if needs_chorus {
+        out.push_str(&generate_chorus_state());
+        out.push('\n');
+        out.push_str(&generate_process_chorus());
+        out.push('\n');
+    }
+
+    // ── Compressor ───────────────────────────────────────────
+    let needs_compressor = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Compressor)
+    });
+
+    if needs_compressor {
+        out.push_str(&generate_compressor_state());
+        out.push('\n');
+        out.push_str(&generate_process_compressor());
         out.push('\n');
     }
 
@@ -354,6 +386,21 @@ fn process_osc_triangle(state: &mut OscState, frequency: f32, sample_rate: f32) 
     .to_string()
 }
 
+/// Generate the pulse oscillator processing function (variable duty cycle).
+fn generate_process_osc_pulse() -> String {
+    r#"/// Process one sample of a pulse oscillator with variable width.
+///
+/// `width` controls the duty cycle: 0.5 = square wave, 0.1 = narrow pulse.
+fn process_osc_pulse(state: &mut OscState, frequency: f32, width: f32, sample_rate: f32) -> f32 {
+    let output = if state.phase < width { 1.0_f32 } else { -1.0_f32 };
+    state.phase += frequency / sample_rate;
+    state.phase -= state.phase.floor();
+    output
+}
+"#
+    .to_string()
+}
+
 // ══════════════════════════════════════════════════════════════
 // ADSR envelope helper
 // ══════════════════════════════════════════════════════════════
@@ -446,6 +493,122 @@ fn process_adsr(
     }
 
     state.level
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Chorus helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the ChorusState struct.
+fn generate_chorus_state() -> String {
+    r#"/// Per-call-site chorus effect state (delay line + internal LFO).
+struct ChorusState {
+    buffer: [f32; 1323], // ~30ms at 44100 Hz
+    write_pos: usize,
+    lfo_phase: f32,
+}
+
+impl Default for ChorusState {
+    fn default() -> Self {
+        Self {
+            buffer: [0.0; 1323],
+            write_pos: 0,
+            lfo_phase: 0.0,
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_chorus function.
+fn generate_process_chorus() -> String {
+    r#"/// Process one sample through a chorus effect.
+///
+/// Uses a short delay line modulated by an internal LFO.
+/// `rate` is LFO frequency in Hz, `depth` is modulation depth (0.0..1.0).
+fn process_chorus(state: &mut ChorusState, input: f32, rate: f32, depth: f32, sample_rate: f32) -> f32 {
+    let buf_len = state.buffer.len();
+
+    // Write input to delay line
+    state.buffer[state.write_pos] = input;
+    state.write_pos = (state.write_pos + 1) % buf_len;
+
+    // LFO modulates the read position
+    let lfo = (state.lfo_phase * std::f32::consts::TAU).sin();
+    state.lfo_phase += rate / sample_rate;
+    state.lfo_phase -= state.lfo_phase.floor();
+
+    // Delay time: center ~15ms, modulated by depth
+    let center_delay = buf_len as f32 * 0.5;
+    let mod_amount = center_delay * depth.clamp(0.0, 1.0);
+    let delay_samples = center_delay + lfo * mod_amount;
+
+    // Read from delay line with linear interpolation
+    let read_pos = state.write_pos as f32 - delay_samples;
+    let read_pos = if read_pos < 0.0 { read_pos + buf_len as f32 } else { read_pos };
+    let idx0 = read_pos.floor() as usize % buf_len;
+    let idx1 = (idx0 + 1) % buf_len;
+    let frac = read_pos.fract();
+    let delayed = state.buffer[idx0] * (1.0 - frac) + state.buffer[idx1] * frac;
+
+    // Mix dry + wet (50/50)
+    (input + delayed) * 0.5
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Compressor helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the CompressorState struct.
+fn generate_compressor_state() -> String {
+    r#"/// Per-call-site compressor state (envelope follower).
+struct CompressorState {
+    envelope: f32,
+}
+
+impl Default for CompressorState {
+    fn default() -> Self {
+        Self { envelope: 0.0 }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_compressor function.
+fn generate_process_compressor() -> String {
+    r#"/// Process one sample through a dynamics compressor.
+///
+/// `threshold` is in linear gain (not dB). `ratio` is compression ratio (e.g. 4.0 = 4:1).
+/// Uses a simple envelope follower with fixed attack/release.
+fn process_compressor(state: &mut CompressorState, input: f32, threshold: f32, ratio: f32, sample_rate: f32) -> f32 {
+    let attack_coeff = (-1.0 / (0.01 * sample_rate)).exp();  // ~10ms attack
+    let release_coeff = (-1.0 / (0.1 * sample_rate)).exp();  // ~100ms release
+
+    let abs_input = input.abs();
+    if abs_input > state.envelope {
+        state.envelope = attack_coeff * state.envelope + (1.0 - attack_coeff) * abs_input;
+    } else {
+        state.envelope = release_coeff * state.envelope + (1.0 - release_coeff) * abs_input;
+    }
+
+    // Compute gain reduction
+    let threshold = threshold.max(0.0001); // prevent division by zero
+    let ratio = ratio.max(1.0);
+    if state.envelope > threshold {
+        let over = state.envelope / threshold;
+        let gain = (over.powf(1.0 / ratio - 1.0)).min(1.0);
+        input * gain
+    } else {
+        input
+    }
 }
 "#
     .to_string()

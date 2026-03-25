@@ -29,6 +29,10 @@ pub struct ProcessInfo {
     pub oscillator_count: usize,
     /// Whether ADSR envelope state is needed.
     pub has_adsr: bool,
+    /// Number of chorus state fields needed (one per chorus call site).
+    pub chorus_count: usize,
+    /// Number of compressor state fields needed (one per compressor call site).
+    pub compressor_count: usize,
 }
 
 /// Generate the process() body (the code that replaces `{PROCESS_BODY}` in the Plugin trait).
@@ -48,6 +52,8 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
             is_instrument: false,
             oscillator_count: 0,
             has_adsr: false,
+            chorus_count: 0,
+            compressor_count: 0,
         }),
     };
 
@@ -67,6 +73,8 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
         matches!(p, DspPrimitive::Envelope(EnvKind::Adsr))
     });
     let oscillator_count = ctx.oscillator_counter;
+    let chorus_count = ctx.chorus_counter;
+    let compressor_count = ctx.compressor_counter;
 
     if is_instrument {
         // ── Instrument mode: MIDI event loop, mono output, KeepAlive ──
@@ -108,6 +116,8 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
             is_instrument: true,
             oscillator_count,
             has_adsr,
+            chorus_count,
+            compressor_count,
         };
         (out, info)
     } else {
@@ -153,6 +163,8 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
             is_instrument: false,
             oscillator_count,
             has_adsr,
+            chorus_count,
+            compressor_count,
         };
         (out, info)
     }
@@ -196,6 +208,10 @@ struct ProcessContext {
     diagnostics: Vec<crate::diagnostic::Diagnostic>,
     /// Counter for generating unique oscillator state field names (osc_state_0, osc_state_1, ...).
     oscillator_counter: usize,
+    /// Counter for generating unique chorus state field names (chorus_state_0, chorus_state_1, ...).
+    chorus_counter: usize,
+    /// Counter for generating unique compressor state field names (compressor_state_0, ...).
+    compressor_counter: usize,
     /// True when generating for an instrument plugin (affects output/input codegen).
     is_instrument: bool,
 }
@@ -212,6 +228,8 @@ impl ProcessContext {
             branch_filters: Vec::new(),
             diagnostics: Vec::new(),
             oscillator_counter: 0,
+            chorus_counter: 0,
+            compressor_counter: 0,
             is_instrument: false,
         }
     }
@@ -362,6 +380,22 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                     } else {
                         input_code.to_string()
                     }
+                }
+                "fold" => {
+                    ctx.used_primitives.insert(DspPrimitive::Fold);
+                    let amount = generate_expr_as_param(&args[0].0, ctx);
+                    format!("({} * {}).sin()", input_code, amount)
+                }
+                "bitcrush" => {
+                    ctx.used_primitives.insert(DspPrimitive::Bitcrush);
+                    let bits = generate_expr_as_param(&args[0].0, ctx);
+                    format!("{{ let step = 2.0_f32.powi({} as i32); ({} * step).round() / step }}", bits, input_code)
+                }
+                "chorus" => {
+                    return generate_chorus_call_with_input(input_code, args, ctx);
+                }
+                "compressor" => {
+                    return generate_compressor_call_with_input(input_code, args, ctx);
                 }
                 _ => format!("{}({})", fn_name, input_code),
             };
@@ -650,6 +684,32 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "saw" | "square" | "sine" | "triangle" => {
                         return generate_osc_call(fn_name, args, ctx);
                     }
+                    // ── LFO (sine-based, uses OscState) ──
+                    "lfo" => {
+                        return generate_lfo_call(args, ctx);
+                    }
+                    // ── Pulse oscillator (variable width, uses OscState) ──
+                    "pulse" => {
+                        return generate_pulse_call(args, ctx);
+                    }
+                    // ── Fold / Bitcrush (standalone, apply to *sample) ──
+                    "fold" => {
+                        ctx.used_primitives.insert(DspPrimitive::Fold);
+                        let amount = generate_expr_as_param(&args[0].0, ctx);
+                        return format!("(*sample * {}).sin()", amount);
+                    }
+                    "bitcrush" => {
+                        ctx.used_primitives.insert(DspPrimitive::Bitcrush);
+                        let bits = generate_expr_as_param(&args[0].0, ctx);
+                        return format!("{{ let step = 2.0_f32.powi({} as i32); (*sample * step).round() / step }}", bits);
+                    }
+                    // ── Chorus / Compressor (standalone, apply to *sample) ──
+                    "chorus" => {
+                        return generate_chorus_call_with_input("*sample", args, ctx);
+                    }
+                    "compressor" => {
+                        return generate_compressor_call_with_input("*sample", args, ctx);
+                    }
                     // ── ADSR envelope ──
                     "adsr" => {
                         return generate_adsr_call(args, ctx);
@@ -811,6 +871,57 @@ fn generate_osc_call(fn_name: &str, args: &[Spanned<Expr>], ctx: &mut ProcessCon
     )
 }
 
+/// Generate code for an LFO call: `lfo(rate)`.
+///
+/// Uses sine oscillator internally via `process_osc_sine`. Each call site gets its
+/// own OscState via the oscillator counter (same pattern as K014).
+fn generate_lfo_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Lfo);
+    // LFO reuses the sine oscillator helper
+    ctx.used_primitives.insert(DspPrimitive::Oscillator(crate::dsp::primitives::OscKind::Sine));
+
+    let osc_idx = ctx.oscillator_counter;
+    ctx.oscillator_counter += 1;
+
+    let rate = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "1.0_f32".to_string()
+    };
+
+    format!(
+        "process_osc_sine(&mut self.osc_state_{}, {}, self.sample_rate)",
+        osc_idx, rate
+    )
+}
+
+/// Generate code for a pulse oscillator call: `pulse(freq, width)`.
+///
+/// Each call site gets its own OscState via the oscillator counter (K014 pattern).
+fn generate_pulse_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Pulse);
+
+    let osc_idx = ctx.oscillator_counter;
+    ctx.oscillator_counter += 1;
+
+    let freq = if !args.is_empty() {
+        generate_expr(&args[0].0, ctx)
+    } else {
+        "440.0_f32".to_string()
+    };
+
+    let width = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    format!(
+        "process_osc_pulse(&mut self.osc_state_{}, {}, {}, self.sample_rate)",
+        osc_idx, freq, width
+    )
+}
+
 /// Generate code for an ADSR envelope call: `adsr(attack, decay, sustain, release)`.
 ///
 /// Maps to `process_adsr(&mut self.adsr_state, gate, attack, decay, sustain, release, sample_rate)`.
@@ -856,4 +967,60 @@ fn generate_expr_as_param(expr: &Expr, ctx: &mut ProcessContext) -> String {
         }
     }
     generate_expr(expr, ctx)
+}
+
+/// Generate code for a chorus call: `chorus(rate, depth)` applied to an input signal.
+///
+/// Each call site gets a unique ChorusState field (`self.chorus_state_0`, etc.)
+/// via the chorus counter on ProcessContext.
+fn generate_chorus_call_with_input(input_code: &str, args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Chorus);
+
+    let chorus_idx = ctx.chorus_counter;
+    ctx.chorus_counter += 1;
+
+    let rate = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "1.0_f32".to_string()
+    };
+
+    let depth = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    format!(
+        "process_chorus(&mut self.chorus_state_{}, {}, {}, {}, self.sample_rate)",
+        chorus_idx, input_code, rate, depth
+    )
+}
+
+/// Generate code for a compressor call: `compressor(threshold, ratio)` applied to an input signal.
+///
+/// Each call site gets a unique CompressorState field (`self.compressor_state_0`, etc.)
+/// via the compressor counter on ProcessContext.
+fn generate_compressor_call_with_input(input_code: &str, args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Compressor);
+
+    let comp_idx = ctx.compressor_counter;
+    ctx.compressor_counter += 1;
+
+    let threshold = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    let ratio = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "4.0_f32".to_string()
+    };
+
+    format!(
+        "process_compressor(&mut self.compressor_state_{}, {}, {}, {}, self.sample_rate)",
+        comp_idx, input_code, threshold, ratio
+    )
 }

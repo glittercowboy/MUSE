@@ -1,0 +1,49 @@
+// Chorus Effect — a simple chorus using a modulated delay line.
+// Demonstrates the chorus DSP primitive as an effect plugin.
+
+plugin "Silk Chorus" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.silk-chorus"
+    description "A silky smooth chorus effect"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseSilkChrs1"
+    subcategories   [Fx, Modulation]
+  }
+
+  input  stereo
+  output stereo
+
+  param rate: float = 1.5 in 0.1..10.0 {
+    smoothing linear 5ms
+    unit "Hz"
+  }
+
+  param depth: float = 0.4 in 0.0..1.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    input -> chorus(param.rate, param.depth) -> output
+  }
+
+  test "chorus produces output" {
+    input  sine 440Hz 1024 samples
+    set    param.rate = 1.5
+    set    param.depth = 0.4
+    assert output.peak > 0.0
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
