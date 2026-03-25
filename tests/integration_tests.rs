@@ -647,7 +647,8 @@ fn compile_synth_pipeline() {
     let result = muse_lang::compile(&source, "synth.muse", &tmp);
     assert!(result.is_ok(), "compile() should succeed for synth.muse: {:?}", result.err());
 
-    let crate_dir = result.unwrap();
+    let cr = result.unwrap();
+    let crate_dir = &cr.crate_dir;
     assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml should exist");
     assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs should exist");
 
@@ -671,7 +672,8 @@ fn compile_function_produces_output() {
     let result = muse_lang::compile(&source, "gain.muse", &tmp);
     assert!(result.is_ok(), "compile() should succeed for gain.muse: {:?}", result.err());
 
-    let crate_dir = result.unwrap();
+    let cr = result.unwrap();
+    let crate_dir = &cr.crate_dir;
     assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml should exist");
     assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs should exist");
 }

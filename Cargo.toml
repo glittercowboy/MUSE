@@ -3,6 +3,10 @@ name = "muse-lang"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "muse"
+path = "src/main.rs"
+
 [dependencies]
 logos = "0.16"
 chumsky = "=1.0.0-alpha.8"

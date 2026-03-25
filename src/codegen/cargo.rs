@@ -28,7 +28,7 @@ nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149
 /// Convert a plugin display name to a Cargo package name.
 ///
 /// "Warm Gain" → "warm-gain"
-fn plugin_name_to_package(name: &str) -> String {
+pub fn plugin_name_to_package(name: &str) -> String {
     name.to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })
