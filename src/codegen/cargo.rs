@@ -40,6 +40,8 @@ nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149
         toml.push_str("\n[dev-dependencies]\nrustfft = \"6\"\n");
     }
 
+    toml.push_str("\n[features]\npreview = []\n");
+
     toml
 }
 

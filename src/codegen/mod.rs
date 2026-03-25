@@ -11,6 +11,7 @@ pub mod midi;
 pub mod params;
 pub mod plugin;
 pub mod presets;
+pub mod preview;
 pub mod process;
 pub mod test;
 
@@ -65,6 +66,10 @@ pub fn generate_plugin(
     if !test_module.is_empty() {
         lib_rs.push_str(&test_module);
     }
+
+    // Preview C-ABI exports (behind #[cfg(feature = "preview")])
+    let preview_module = preview::generate_preview_exports(plugin, &process_info);
+    lib_rs.push_str(&preview_module);
 
     // GUI editor module: generate HTML assets and Rust editor code
     let mut editor_html: Option<String> = None;

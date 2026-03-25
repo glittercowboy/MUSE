@@ -1146,3 +1146,134 @@ fn gui_spectrum_cargo_check() {
     // ── Full cargo check ──
     assert_cargo_check(&crate_dir);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Preview C-ABI exports
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn assert_cargo_check_features(crate_dir: &std::path::Path, features: &str) {
+    let output = Command::new("cargo")
+        .arg("check")
+        .arg("--features")
+        .arg(features)
+        .current_dir(crate_dir)
+        .output()
+        .expect("failed to run cargo check --features");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        eprintln!("=== cargo check --features {} FAILED ===", features);
+        eprintln!("stdout:\n{}", stdout);
+        eprintln!("stderr:\n{}", stderr);
+        panic!(
+            "cargo check --features {} failed with exit code {:?}",
+            features,
+            output.status.code()
+        );
+    }
+
+    eprintln!(
+        "cargo check --features {} passed for {}",
+        features,
+        crate_dir.display()
+    );
+}
+
+#[test]
+fn preview_exports_in_generated_code() {
+    let source = include_str!("../examples/gain.muse");
+    let (cargo_toml, lib_rs) = generate_code_strings(source);
+
+    // Cargo.toml has the preview feature
+    assert!(
+        cargo_toml.contains("[features]"),
+        "Cargo.toml should contain [features] section"
+    );
+    assert!(
+        cargo_toml.contains("preview = []"),
+        "Cargo.toml should contain preview feature"
+    );
+
+    // Feature gate
+    assert!(
+        lib_rs.contains("#[cfg(feature = \"preview\")]"),
+        "lib.rs should contain #[cfg(feature = \"preview\")]"
+    );
+
+    // All 9 extern "C" functions
+    let expected_fns = [
+        "fn muse_preview_create(sample_rate: f32) -> *mut u8",
+        "fn muse_preview_destroy(ptr: *mut u8)",
+        "fn muse_preview_process(",
+        "fn muse_preview_get_param_count() -> u32",
+        "fn muse_preview_get_param_name(index: u32, buf: *mut u8, buf_len: u32) -> u32",
+        "fn muse_preview_get_param_default(index: u32) -> f32",
+        "fn muse_preview_set_param(ptr: *mut u8, index: u32, value: f32)",
+        "fn muse_preview_get_param(ptr: *mut u8, index: u32) -> f32",
+        "fn muse_preview_get_num_channels() -> u32",
+    ];
+
+    for func_sig in &expected_fns {
+        assert!(
+            lib_rs.contains(func_sig),
+            "lib.rs should contain '{}'\n\nGenerated lib.rs tail:\n{}",
+            func_sig,
+            &lib_rs[lib_rs.len().saturating_sub(2000)..],
+        );
+    }
+
+    // All functions have #[no_mangle]
+    let no_mangle_count = lib_rs.matches("#[no_mangle]").count();
+    assert!(
+        no_mangle_count >= 9,
+        "Expected at least 9 #[no_mangle] attributes in preview module, found {}",
+        no_mangle_count
+    );
+
+    // Param count is 1 for gain
+    assert!(
+        lib_rs.contains("fn muse_preview_get_param_count() -> u32 {\n        1\n    }"),
+        "Param count should be 1 for gain plugin"
+    );
+
+    // Channel count is 2 for stereo
+    assert!(
+        lib_rs.contains("fn muse_preview_get_num_channels() -> u32 {\n        2\n    }"),
+        "Channel count should be 2 for stereo plugin"
+    );
+
+    // Param name contains "gain"
+    assert!(
+        lib_rs.contains("0 => \"gain\""),
+        "Param name at index 0 should be \"gain\""
+    );
+}
+
+#[test]
+fn preview_cargo_check_gain() {
+    let source = include_str!("../examples/gain.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-preview-gain");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // Standard check still passes
+    assert_cargo_check(&crate_dir);
+
+    // Preview feature check passes
+    assert_cargo_check_features(&crate_dir, "preview");
+}
+
+#[test]
+fn preview_cargo_check_filter() {
+    let source = include_str!("../examples/filter.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-preview-filter");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert_cargo_check_features(&crate_dir, "preview");
+}
