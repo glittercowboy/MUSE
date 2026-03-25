@@ -11,6 +11,9 @@ pub mod resolve;
 pub use ast::PluginDef;
 pub use diagnostic::{Diagnostic, Severity, diagnostics_to_json, render_ariadne};
 pub use parser::{parse, parse_to_diagnostics};
+pub use resolve::{ResolvedPlugin, resolve_plugin};
+pub use dsp::{DspRegistry, builtin_registry};
+pub use types::DspType;
 
 /// Convenience function: parse source and emit diagnostics.
 ///
@@ -19,17 +22,29 @@ pub use parser::{parse, parse_to_diagnostics};
 ///
 /// Returns `true` if the source parsed without errors.
 pub fn compile_check(source: &str, filename: &str, json_output: bool) -> bool {
-    let (ast, diagnostics) = parse_to_diagnostics(source);
+    let (ast, parse_diags) = parse_to_diagnostics(source);
 
-    if diagnostics.is_empty() {
-        return ast.is_some();
+    if !parse_diags.is_empty() {
+        if json_output {
+            println!("{}", diagnostics_to_json(&parse_diags));
+        } else {
+            render_ariadne(&parse_diags, source, filename);
+        }
+        return false;
     }
 
-    if json_output {
-        println!("{}", diagnostics_to_json(&diagnostics));
-    } else {
-        render_ariadne(&diagnostics, source, filename);
-    }
+    let Some(plugin) = ast else { return false };
 
-    false
+    let registry = dsp::builtin_registry();
+    match resolve::resolve_plugin(&plugin, &registry) {
+        Ok(_resolved) => true,
+        Err(resolve_diags) => {
+            if json_output {
+                println!("{}", diagnostics_to_json(&resolve_diags));
+            } else {
+                render_ariadne(&resolve_diags, source, filename);
+            }
+            false
+        }
+    }
 }

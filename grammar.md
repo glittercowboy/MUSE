@@ -407,6 +407,94 @@ Standard library functions available in process blocks. These are DSP primitives
 | `clip` | `(min, max) -> processor` | Hard clip signal to range |
 | `tanh` | `() -> processor` | Soft saturation via hyperbolic tangent |
 
+## Type System
+
+The Muse compiler uses a domain-specific type system to validate DSP expressions at compile time. Types flow through expressions — number literals carry types inferred from unit suffixes, function calls produce typed outputs, and the chain operator enforces signal-flow rules.
+
+### Type Variants
+
+| Type | Description |
+|------|-------------|
+| `Signal` | An audio signal (mono or stereo stream of samples) |
+| `Processor` | A signal processor — receives a signal via `->`, produces a signal |
+| `Envelope` | A time-varying control signal (0.0–1.0), usable as a numeric modifier |
+| `Frequency` | A frequency value (Hz, kHz) |
+| `Gain` | A gain/amplitude value (dB, linear) |
+| `Time` | A time duration (ms, s) |
+| `Rate` | A rate value (%, st) |
+| `Param` | A declared plugin parameter reference |
+| `Bool` | A boolean value (true/false) |
+| `Number` | An untyped numeric value |
+
+### Type Compatibility
+
+`Number` is compatible with all numeric-domain types — a bare `0.5` can be passed where `Frequency`, `Gain`, `Time`, or `Rate` is expected. However, numeric-domain types are **not** cross-compatible: you cannot pass a `Frequency` where a `Time` is expected. This prevents accidental domain mismatches (e.g., passing a cutoff frequency as a delay time).
+
+`Envelope` is compatible with numeric-domain types — envelopes produce 0.0–1.0 control signals that are musically meaningful as gain, rate, or time modifiers. This enables patterns like `gain(env)` where `env` is an ADSR envelope.
+
+### Unit Suffix Types
+
+Unit suffixes on number literals carry type information into the type system:
+
+| Suffix | Resolves To | Example |
+|--------|-------------|---------|
+| `Hz` | `Frequency` | `440Hz` |
+| `kHz` | `Frequency` | `4kHz` |
+| `dB` | `Gain` | `-12dB` |
+| `ms` | `Time` | `50ms` |
+| `s` | `Time` | `0.5s` |
+| `%` | `Rate` | `50%` |
+| `st` | `Rate` | `2st` (semitones) |
+
+A bare number like `0.5` resolves to `Number`, which is compatible with any numeric-domain type.
+
+### Chain Operator Types
+
+The `->` operator enforces signal-flow semantics:
+
+| Left Type | Right Type | Result | Description |
+|-----------|------------|--------|-------------|
+| `Signal` | `Processor` | `Signal` | Standard audio chain — signal flows through processor |
+| `Signal` | `Signal` | `Signal` | Output destination — `... -> output` |
+| `Processor` | `Processor` | `Processor` | Processor chaining |
+| `Signal` | `Envelope` | `Signal` | Envelope modulation of a signal |
+
+Invalid combinations (e.g., `Number -> Processor`, `Signal -> Gain`) produce an E006 diagnostic.
+
+## Error Codes
+
+The Muse compiler uses structured error codes for all diagnostics. Parse-phase errors use E001–E002; semantic resolution errors use E003–E006.
+
+### Parse Errors
+
+| Code | Phase | Description |
+|------|-------|-------------|
+| `E001` | Parse | Unexpected token — the parser encountered a token it cannot handle in the current context |
+| `E002` | Parse | Unterminated or malformed construct (e.g., missing closing brace, incomplete expression) |
+
+### Semantic Errors
+
+| Code | Phase | Description |
+|------|-------|-------------|
+| `E003` | Resolve | Unknown function — the called function is not in the DSP registry. Includes "did you mean?" suggestions for close matches. |
+| `E004` | Resolve | Wrong argument count — the function was called with too few or too many arguments (accounting for optional parameters). |
+| `E005` | Resolve | Type mismatch — an argument's type is not compatible with the parameter's expected type. |
+| `E006` | Resolve | Invalid chain operand — the `->` operator was used with incompatible types (e.g., chaining a Number into a Processor). |
+
+All diagnostics are emitted as structured JSON with the following contract:
+
+```json
+{
+  "code": "E003",
+  "span": [42, 54],
+  "severity": "error",
+  "message": "Unknown function 'frobnicator'",
+  "suggestion": "Did you mean 'triangle'?"
+}
+```
+
+The `span` is a `[start, end]` byte-offset pair into the source text. The `suggestion` field is optional.
+
 ## Complete Example
 
 A minimal gain plugin demonstrating the full structure:

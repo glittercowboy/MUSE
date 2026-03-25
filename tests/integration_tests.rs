@@ -6,6 +6,7 @@
 use muse_lang::ast::*;
 use muse_lang::diagnostic::diagnostics_to_json;
 use muse_lang::parser::parse_to_diagnostics;
+use muse_lang::{resolve_plugin, builtin_registry};
 
 /// Helper: read an example file and parse it, asserting zero errors.
 fn parse_example(filename: &str) -> PluginDef {
@@ -410,4 +411,129 @@ fn gain_vst3_block() {
         _ => false,
     });
     assert!(has_id, "vst3 block should have id 'MuseWarmGain1'");
+}
+
+// ── Resolve integration: parse → resolve → verify types ──────
+
+/// Helper: read an example file, parse it, then resolve it against the builtin registry.
+fn resolve_example(filename: &str) -> muse_lang::ResolvedPlugin<'static> {
+    let path = format!("examples/{filename}");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+    // Leak source to get 'static lifetime for the test helper
+    let source: &'static str = Box::leak(source.into_boxed_str());
+    let (ast, diags) = parse_to_diagnostics(source);
+    assert!(
+        diags.is_empty(),
+        "{filename} should parse without errors, got: {}",
+        diagnostics_to_json(&diags)
+    );
+    let plugin = ast.unwrap_or_else(|| panic!("{filename} should produce an AST"));
+    // Leak the plugin too so we can return ResolvedPlugin with 'static
+    let plugin: &'static PluginDef = Box::leak(Box::new(plugin));
+    let registry = builtin_registry();
+    resolve_plugin(plugin, &registry)
+        .unwrap_or_else(|diags| {
+            panic!(
+                "{filename} should resolve without errors, got: {}",
+                diagnostics_to_json(&diags)
+            )
+        })
+}
+
+#[test]
+fn resolve_gain_example() {
+    let resolved = resolve_example("gain.muse");
+    assert!(
+        !resolved.type_map.is_empty(),
+        "gain.muse resolve should produce a non-empty type map"
+    );
+}
+
+#[test]
+fn resolve_filter_example() {
+    let resolved = resolve_example("filter.muse");
+    assert!(
+        !resolved.type_map.is_empty(),
+        "filter.muse resolve should produce a non-empty type map"
+    );
+}
+
+#[test]
+fn resolve_synth_example() {
+    let resolved = resolve_example("synth.muse");
+    assert!(
+        !resolved.type_map.is_empty(),
+        "synth.muse resolve should produce a non-empty type map"
+    );
+}
+
+#[test]
+fn resolve_error_json_format() {
+    // Use an unknown function to trigger E003
+    let src = r#"plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> frobnicator(440Hz) -> output
+  }
+}"#;
+    let (ast, parse_diags) = parse_to_diagnostics(src);
+    assert!(parse_diags.is_empty(), "should parse without errors");
+    let plugin = ast.expect("should produce an AST");
+    let registry = builtin_registry();
+    let resolve_diags = resolve_plugin(&plugin, &registry).unwrap_err();
+
+    let json = diagnostics_to_json(&resolve_diags);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&json).expect("should be valid JSON");
+    assert!(!parsed.is_empty(), "should have at least one diagnostic");
+
+    for entry in &parsed {
+        // Verify diagnostic contract: code, span, severity, message
+        assert!(entry["code"].is_string(), "diagnostic should have 'code' string");
+        assert!(entry["span"].is_array(), "diagnostic should have 'span' array");
+        assert!(entry["severity"].is_string(), "diagnostic should have 'severity' string");
+        assert!(entry["message"].is_string(), "diagnostic should have 'message' string");
+
+        let code = entry["code"].as_str().unwrap();
+        assert!(
+            code.starts_with('E'),
+            "error code should start with 'E', got: {code}"
+        );
+
+        let span = entry["span"].as_array().unwrap();
+        assert_eq!(span.len(), 2, "span should have 2 elements");
+    }
+}
+
+#[test]
+fn compile_check_with_resolve() {
+    // compile_check should catch parse errors
+    let parse_err_src = r#"plugin "Test" { process { 123 + } }"#;
+    assert!(
+        !muse_lang::compile_check(parse_err_src, "test.muse", true),
+        "compile_check should return false for parse errors"
+    );
+
+    // compile_check should catch resolve errors (unknown function)
+    let resolve_err_src = r#"plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> blorp(440Hz) -> output
+  }
+}"#;
+    assert!(
+        !muse_lang::compile_check(resolve_err_src, "test.muse", true),
+        "compile_check should return false for resolve errors"
+    );
+
+    // compile_check should pass for valid source
+    let valid_src = std::fs::read_to_string("examples/gain.muse")
+        .expect("should read gain.muse");
+    assert!(
+        muse_lang::compile_check(&valid_src, "gain.muse", false),
+        "compile_check should return true for valid source"
+    );
 }
