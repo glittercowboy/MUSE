@@ -2,11 +2,12 @@
 //!
 //! These tests parse .muse files, resolve them, generate Rust/nih-plug crates,
 //! and run `cargo check` to prove the generated code compiles.
+//! Also includes unit tests for generated code structure and diagnostic tests.
 
 use std::path::PathBuf;
 use std::process::Command;
 
-use muse_lang::{builtin_registry, generate_plugin, parse, resolve_plugin};
+use muse_lang::{builtin_registry, diagnostics_to_json, generate_plugin, parse, resolve_plugin};
 
 /// Helper: parse + resolve + codegen from source, return the generated crate path.
 fn generate_from_source(source: &str, output_dir: &std::path::Path) -> PathBuf {
@@ -16,6 +17,24 @@ fn generate_from_source(source: &str, output_dir: &std::path::Path) -> PathBuf {
     let registry = builtin_registry();
     let resolved = resolve_plugin(&ast, &registry).expect("resolve failed");
     generate_plugin(&resolved, &registry, output_dir).expect("codegen failed")
+}
+
+/// Helper: parse + resolve + codegen from source, return generated Cargo.toml and lib.rs as strings.
+fn generate_code_strings(source: &str) -> (String, String) {
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-codegen-test-strings-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    let cargo_toml = std::fs::read_to_string(crate_dir.join("Cargo.toml")).unwrap();
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    (cargo_toml, lib_rs)
 }
 
 /// Helper: run `cargo check` on a generated crate and assert it succeeds.
@@ -42,11 +61,123 @@ fn assert_cargo_check(crate_dir: &std::path::Path) {
     eprintln!("cargo check passed for {}", crate_dir.display());
 }
 
+// ══════════════════════════════════════════════════════════════
+// Unit tests: verify generated code structure (string assertions)
+// ══════════════════════════════════════════════════════════════
+
 #[test]
-fn test_gain_muse_codegen_cargo_check() {
+fn cargo_toml_contains_cdylib() {
+    let source = include_str!("../examples/gain.muse");
+    let (cargo_toml, _) = generate_code_strings(source);
+    assert!(
+        cargo_toml.contains(r#"crate-type = ["cdylib"]"#),
+        "Cargo.toml should contain cdylib crate-type, got:\n{}",
+        cargo_toml
+    );
+}
+
+#[test]
+fn cargo_toml_contains_nih_plug_dep() {
+    let source = include_str!("../examples/gain.muse");
+    let (cargo_toml, _) = generate_code_strings(source);
+    assert!(
+        cargo_toml.contains("nih_plug"),
+        "Cargo.toml should depend on nih_plug"
+    );
+    assert!(
+        cargo_toml.contains("github.com/robbert-vdh/nih-plug.git"),
+        "Cargo.toml should reference nih-plug git repo"
+    );
+}
+
+#[test]
+fn params_struct_has_derive_params() {
+    let source = include_str!("../examples/gain.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    assert!(
+        lib_rs.contains("#[derive(Params)]"),
+        "Generated lib.rs should contain #[derive(Params)]"
+    );
+}
+
+#[test]
+fn params_float_has_id_attribute() {
+    let source = include_str!("../examples/gain.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    assert!(
+        lib_rs.contains(r#"#[id = "gain"]"#),
+        "Generated lib.rs should contain #[id = \"gain\"] for the gain param"
+    );
+}
+
+#[test]
+fn params_enum_generates_derive_enum() {
+    let source = include_str!("../examples/filter.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    assert!(
+        lib_rs.contains("#[derive(Enum,"),
+        "Generated lib.rs should contain #[derive(Enum, ...)] for enum param types, got:\n{}",
+        &lib_rs[..lib_rs.len().min(500)]
+    );
+}
+
+#[test]
+fn plugin_struct_has_arc_params() {
+    let source = include_str!("../examples/gain.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    assert!(
+        lib_rs.contains("params: Arc<PluginParams>"),
+        "Plugin struct should have params: Arc<PluginParams>"
+    );
+}
+
+#[test]
+fn clap_features_map_correctly() {
+    let source = include_str!("../examples/gain.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    // gain.muse has features [audio_effect, stereo, utility]
+    assert!(
+        lib_rs.contains("ClapFeature::AudioEffect"),
+        "Should map audio_effect to ClapFeature::AudioEffect"
+    );
+    assert!(
+        lib_rs.contains("ClapFeature::Stereo"),
+        "Should map stereo to ClapFeature::Stereo"
+    );
+    assert!(
+        lib_rs.contains("ClapFeature::Utility"),
+        "Should map utility to ClapFeature::Utility"
+    );
+}
+
+#[test]
+fn vst3_class_id_is_16_bytes() {
+    let source = include_str!("../examples/gain.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+    // VST3_CLASS_ID should be a byte literal with exactly 16 bytes
+    // gain.muse has vst3 id "MuseWarmGain1" (13 chars, padded to 16 with spaces)
+    let marker = r#"const VST3_CLASS_ID: [u8; 16] = *b""#;
+    let idx = lib_rs.find(marker).expect("should contain VST3_CLASS_ID");
+    let after = &lib_rs[idx + marker.len()..];
+    let end_quote = after.find('"').expect("should have closing quote");
+    let class_id_str = &after[..end_quote];
+    assert_eq!(
+        class_id_str.len(),
+        16,
+        "VST3_CLASS_ID byte literal should be exactly 16 bytes, got {} bytes: {:?}",
+        class_id_str.len(),
+        class_id_str
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Integration tests: cargo check on generated crates
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn codegen_gain_cargo_check() {
     let source = include_str!("../examples/gain.muse");
 
-    // Use a stable temp directory so cargo can cache between runs
     let tmp = std::env::temp_dir().join("muse-codegen-test-gain");
     if tmp.exists() {
         std::fs::remove_dir_all(&tmp).ok();
@@ -54,27 +185,56 @@ fn test_gain_muse_codegen_cargo_check() {
 
     let crate_dir = generate_from_source(source, &tmp);
 
-    // Verify generated files exist
     assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
     assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
 
-    // Print generated code for debugging
     let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
     eprintln!("=== Generated src/lib.rs ===\n{}\n=== END ===", lib_rs);
 
-    let cargo_toml = std::fs::read_to_string(crate_dir.join("Cargo.toml")).unwrap();
-    eprintln!(
-        "=== Generated Cargo.toml ===\n{}\n=== END ===",
-        cargo_toml
-    );
-
-    // The real proof: cargo check against nih-plug
     assert_cargo_check(&crate_dir);
 }
 
 #[test]
-fn test_codegen_missing_metadata_produces_diagnostics() {
-    // A plugin missing vendor, clap, vst3 blocks should produce E010 diagnostics
+fn codegen_filter_cargo_check() {
+    let source = include_str!("../examples/filter.muse");
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-filter");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn codegen_multiband_cargo_check() {
+    let source = include_str!("../examples/multiband.muse");
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-multiband");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    assert_cargo_check(&crate_dir);
+}
+
+// ══════════════════════════════════════════════════════════════
+// Diagnostic tests: E010 / E011 error codes and JSON format
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn codegen_missing_clap_id_produces_e010() {
+    // Plugin missing vendor, clap, vst3 blocks should produce E010 diagnostics
     let source = r#"plugin "Bare" {
   input stereo
   output stereo
@@ -89,24 +249,76 @@ fn test_codegen_missing_metadata_produces_diagnostics() {
     let registry = builtin_registry();
     let resolved = resolve_plugin(&ast, &registry).expect("resolve failed");
 
-    let tmp = std::env::temp_dir().join("muse-codegen-test-bare");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-e010");
     let result = generate_plugin(&resolved, &registry, &tmp);
 
     assert!(result.is_err(), "expected codegen to fail for bare plugin");
     let diags = result.unwrap_err();
+
+    // Should have E010 for missing vendor, clap, vst3
+    let e010_count = diags.iter().filter(|d| d.code == "E010").count();
     assert!(
-        diags.iter().any(|d| d.code == "E010"),
-        "expected E010 diagnostic, got: {:?}",
+        e010_count >= 3,
+        "expected at least 3 E010 diagnostics (vendor, clap, vst3), got {}: {:?}",
+        e010_count,
         diags
     );
-    eprintln!(
-        "Correctly rejected bare plugin with {} diagnostics",
-        diags.len()
-    );
+
+    // Each E010 should have a suggestion
+    for d in &diags {
+        if d.code == "E010" {
+            assert!(
+                d.suggestion.is_some(),
+                "E010 diagnostic should include a suggestion: {:?}",
+                d
+            );
+        }
+    }
 }
 
 #[test]
-fn test_codegen_generate_plugin_returns_path() {
+fn codegen_diagnostic_json_format() {
+    // Verify E010 diagnostics serialize correctly via diagnostics_to_json
+    let source = r#"plugin "Bare" {
+  input stereo
+  output stereo
+  process {
+    input -> output
+  }
+}"#;
+
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty());
+    let ast = ast.expect("parse returned None");
+    let registry = builtin_registry();
+    let resolved = resolve_plugin(&ast, &registry).expect("resolve failed");
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-json-format");
+    let result = generate_plugin(&resolved, &registry, &tmp);
+    let diags = result.unwrap_err();
+
+    // Serialize to JSON
+    let json = diagnostics_to_json(&diags);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&json).expect("should be valid JSON array");
+
+    assert!(!parsed.is_empty(), "should have diagnostics");
+
+    for entry in &parsed {
+        // Same contract as parse/resolve diagnostics
+        let code = entry["code"].as_str().expect("code should be string");
+        assert!(code.starts_with('E'), "error code should start with 'E'");
+
+        let span = entry["span"].as_array().expect("span should be array");
+        assert_eq!(span.len(), 2, "span should have 2 elements");
+
+        assert!(entry["severity"].is_string(), "severity should be string");
+        assert!(entry["message"].is_string(), "message should be string");
+    }
+}
+
+#[test]
+fn codegen_generate_plugin_returns_path() {
     let source = include_str!("../examples/gain.muse");
     let tmp = std::env::temp_dir().join("muse-codegen-test-path");
     if tmp.exists() {
@@ -115,51 +327,4 @@ fn test_codegen_generate_plugin_returns_path() {
 
     let crate_dir = generate_from_source(source, &tmp);
     assert_eq!(crate_dir, tmp);
-}
-
-#[test]
-fn test_filter_muse_codegen_cargo_check() {
-    let source = include_str!("../examples/filter.muse");
-
-    // Use a stable temp directory so cargo can cache between runs
-    let tmp = std::env::temp_dir().join("muse-codegen-test-filter");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    let crate_dir = generate_from_source(source, &tmp);
-
-    // Verify generated files exist
-    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
-    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
-
-    // Print generated code for debugging
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated filter src/lib.rs ===\n{}\n=== END ===", lib_rs);
-
-    // The real proof: cargo check against nih-plug
-    assert_cargo_check(&crate_dir);
-}
-
-#[test]
-fn test_multiband_muse_codegen_cargo_check() {
-    let source = include_str!("../examples/multiband.muse");
-
-    let tmp = std::env::temp_dir().join("muse-codegen-test-multiband");
-    if tmp.exists() {
-        std::fs::remove_dir_all(&tmp).ok();
-    }
-
-    let crate_dir = generate_from_source(source, &tmp);
-
-    // Verify generated files exist
-    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
-    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
-
-    // Print generated code for debugging
-    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
-    eprintln!("=== Generated multiband src/lib.rs ===\n{}\n=== END ===", lib_rs);
-
-    // The real proof: cargo check against nih-plug
-    assert_cargo_check(&crate_dir);
 }

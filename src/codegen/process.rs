@@ -21,6 +21,8 @@ pub struct ProcessInfo {
     pub branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
     /// Whether any code needs per-channel indexing (e.g. filter state).
     pub needs_channel_idx: bool,
+    /// Diagnostics collected during process generation (E011 unsupported constructs).
+    pub diagnostics: Vec<crate::diagnostic::Diagnostic>,
 }
 
 /// Generate the process() body (the code that replaces `{PROCESS_BODY}` in the Plugin trait).
@@ -34,6 +36,7 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
             used_primitives: HashSet::new(),
             branch_filters: Vec::new(),
             needs_channel_idx: false,
+            diagnostics: Vec::new(),
         }),
     };
 
@@ -85,6 +88,7 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
         used_primitives: ctx.used_primitives,
         branch_filters: ctx.branch_filters,
         needs_channel_idx,
+        diagnostics: ctx.diagnostics,
     };
     (out, info)
 }
@@ -118,6 +122,8 @@ struct ProcessContext {
     /// Records (split_id, branch_idx, FilterKind) for all filter uses inside branches.
     /// Used by plugin.rs to generate per-branch state fields.
     branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
+    /// Diagnostics collected during process generation (E011 unsupported constructs).
+    diagnostics: Vec<crate::diagnostic::Diagnostic>,
 }
 
 impl ProcessContext {
@@ -130,6 +136,7 @@ impl ProcessContext {
             split_counter: 0,
             current_branch: None,
             branch_filters: Vec::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -588,7 +595,14 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                 sum
             }
         }
-        _ => "todo!()".to_string(),
+        _ => {
+            ctx.diagnostics.push(crate::diagnostic::Diagnostic::error(
+                "E011",
+                crate::span::Span::new(0, 0),
+                format!("Unsupported expression in codegen: {:?}", std::mem::discriminant(expr)),
+            ).with_suggestion("This language construct is not yet supported in code generation"));
+            "0.0_f32 /* unsupported */".to_string()
+        }
     }
 }
 

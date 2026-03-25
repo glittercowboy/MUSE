@@ -631,3 +631,65 @@ fn compile_check_catches_routing_errors() {
         "compile_check should return true for valid multiband source"
     );
 }
+
+// ── compile() pipeline integration ───────────────────────────
+
+#[test]
+fn compile_function_produces_output() {
+    let source = std::fs::read_to_string("examples/gain.muse")
+        .expect("should read gain.muse");
+
+    let tmp = std::env::temp_dir().join("muse-compile-test-output");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let result = muse_lang::compile(&source, "gain.muse", &tmp);
+    assert!(result.is_ok(), "compile() should succeed for gain.muse: {:?}", result.err());
+
+    let crate_dir = result.unwrap();
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml should exist");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs should exist");
+}
+
+#[test]
+fn compile_with_parse_error_produces_diagnostics() {
+    let source = r#"plugin "Test" { process { 123 + } }"#;
+    let tmp = std::env::temp_dir().join("muse-compile-test-parse-err");
+
+    let result = muse_lang::compile(source, "test.muse", &tmp);
+    assert!(result.is_err(), "compile() should fail for broken source");
+
+    let diags = result.unwrap_err();
+    assert!(!diags.is_empty(), "should produce parse diagnostics");
+    // Verify the diagnostics are valid JSON-serializable
+    let json = muse_lang::diagnostics_to_json(&diags);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&json).expect("diagnostics should be valid JSON");
+    assert!(!parsed.is_empty());
+}
+
+#[test]
+fn compile_with_codegen_error_produces_json() {
+    // Plugin that parses and resolves but fails codegen (missing vendor/clap/vst3)
+    let source = r#"plugin "Bare" {
+  input stereo
+  output stereo
+  process {
+    input -> output
+  }
+}"#;
+    let tmp = std::env::temp_dir().join("muse-compile-test-codegen-err");
+
+    let result = muse_lang::compile(source, "test.muse", &tmp);
+    assert!(result.is_err(), "compile() should fail for bare plugin");
+
+    let diags = result.unwrap_err();
+    let json = muse_lang::diagnostics_to_json(&diags);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&json).expect("diagnostics should be valid JSON");
+
+    // Should contain E010 codegen errors
+    let has_e010 = parsed.iter().any(|e| e["code"].as_str() == Some("E010"));
+    assert!(has_e010, "compile() codegen errors should include E010, got: {}", json);
+}

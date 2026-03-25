@@ -46,6 +46,11 @@ pub fn generate_plugin(
     // Generate process body — also collects which DSP primitives are used
     let (process_body, process_info) = process::generate_process(plugin);
 
+    // Check for codegen diagnostics from process generation (E011 unsupported constructs)
+    if !process_info.diagnostics.is_empty() {
+        return Err(process_info.diagnostics);
+    }
+
     // Generate DSP helpers based on which primitives are actually used
     let dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
 
