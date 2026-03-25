@@ -298,6 +298,72 @@ plugin "Multiband FX" {
 
 ---
 
+## Recipe 5: LFO Modulation (Tremolo)
+
+An effect that uses an oscillator as an LFO to modulate amplitude over time.
+
+**Source:** `examples/tremolo.muse`
+
+```muse
+plugin "Velvet Tremolo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.velvet-tremolo"
+    description "A smooth amplitude tremolo effect"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseVelvetTrm"
+    subcategories   [Fx, Modulation]
+  }
+
+  input  stereo
+  output stereo
+
+  param rate: float = 4.0 in 0.1..20.0 {
+    smoothing linear 5ms
+    unit "Hz"
+  }
+
+  param depth: float = 0.5 in 0.0..1.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    let lfo = sine(param.rate)
+    let mod_gain = 1.0 - param.depth + param.depth * lfo
+    input -> gain(mod_gain) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    set    param.depth = 0.5
+    assert output.rms < -120dB
+  }
+
+  test "depth modulates signal level" {
+    input  sine 440Hz 1024 samples
+    set    param.depth = 0.5
+    assert output.peak > 0.0
+  }
+}
+```
+
+**Key points:**
+- `sine(param.rate)` creates an LFO — oscillators work in effect plugins, not just instruments
+- The modulation formula `1.0 - depth + depth * lfo` scales from unity (depth=0) to full modulation (depth=1)
+- LFO oscillators maintain per-call-site phase state, same as instrument oscillators
+- Any oscillator (`sine`, `saw`, `square`, `triangle`) can be used as an LFO
+- Use `smoothing` on rate/depth params for click-free automation
+
+---
+
 ## Choosing a Pattern
 
 | I want to... | Use recipe |
@@ -306,3 +372,4 @@ plugin "Multiband FX" {
 | Add conditional processing paths | Recipe 2 (Filter) |
 | Build an instrument that responds to MIDI | Recipe 3 (Synth) |
 | Process different frequency bands independently | Recipe 4 (Multiband) |
+| Add time-varying modulation (tremolo, vibrato, chorus) | Recipe 5 (Tremolo) |

@@ -1,5 +1,5 @@
-// Velvet Tremolo — an amplitude-modulating effect.
-// Depth controls signal attenuation; rate is exposed for host automation.
+// Velvet Tremolo — sine LFO modulates amplitude for a classic tremolo effect.
+// Rate controls LFO speed, depth controls modulation intensity.
 
 plugin "Velvet Tremolo" {
   vendor   "Muse Audio"
@@ -23,13 +23,18 @@ plugin "Velvet Tremolo" {
   output stereo
 
   param rate: float = 4.0 in 0.1..20.0 {
+    smoothing linear 5ms
     unit "Hz"
   }
 
-  param depth: float = 0.5 in 0.0..1.0 {}
+  param depth: float = 0.5 in 0.0..1.0 {
+    smoothing linear 5ms
+  }
 
   process {
-    input -> gain(param.depth) -> output
+    let lfo = sine(param.rate)
+    let mod_gain = 1.0 - param.depth + param.depth * lfo
+    input -> gain(mod_gain) -> output
   }
 
   test "silence in produces silence out" {

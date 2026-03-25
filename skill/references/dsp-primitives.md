@@ -17,14 +17,19 @@ Generate audio signals. Return type: `Signal`.
 ### Usage
 
 ```muse
-// Standalone (instrument mode — frequency from MIDI)
+// Instrument mode — frequency from MIDI
 let osc = saw(note.pitch)
 
 // With literal frequency
 let tone = sine(440Hz)
+
+// LFO in effect plugins — use as modulation source
+let lfo = sine(param.rate)
+let mod_gain = 1.0 - param.depth + param.depth * lfo
+input -> gain(mod_gain) -> output
 ```
 
-Oscillators are typically used in instrument plugins with MIDI. Each call site maintains its own phase state.
+Oscillators work in both instrument and effect plugins. Each call site maintains its own phase state. In effect plugins, oscillators are commonly used as LFOs (low-frequency oscillators) for modulation effects like tremolo, vibrato, and chorus.
 
 ## Filters
 

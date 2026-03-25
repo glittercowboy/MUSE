@@ -58,7 +58,9 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
 
     let needs_any_biquad = needs_top_level_biquad || !branch_biquad_fields.is_empty();
-    let needs_sample_rate = needs_any_biquad || is_instrument;
+    let has_oscillators = process_info.oscillator_count > 0;
+    let has_adsr = process_info.has_adsr;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
 
     let mut out = String::new();
@@ -78,14 +80,16 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
             split_id, branch_idx, num_channels
         ));
     }
+    // Oscillator state fields (instruments and effects with LFOs)
+    for i in 0..process_info.oscillator_count {
+        out.push_str(&format!("    osc_state_{}: OscState,\n", i));
+    }
+    // ADSR state (instruments and effects with envelope modulation)
+    if has_adsr {
+        out.push_str("    adsr_state: AdsrState,\n");
+    }
     // Instrument-specific state fields
     if is_instrument {
-        for i in 0..process_info.oscillator_count {
-            out.push_str(&format!("    osc_state_{}: OscState,\n", i));
-        }
-        if process_info.has_adsr {
-            out.push_str("    adsr_state: AdsrState,\n");
-        }
         out.push_str("    active_note: Option<u8>,\n");
         out.push_str("    note_freq: f32,\n");
         out.push_str("    velocity: f32,\n");
@@ -112,13 +116,13 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
             split_id, branch_idx, num_channels
         ));
     }
+    for i in 0..process_info.oscillator_count {
+        out.push_str(&format!("            osc_state_{}: OscState::default(),\n", i));
+    }
+    if has_adsr {
+        out.push_str("            adsr_state: AdsrState::default(),\n");
+    }
     if is_instrument {
-        for i in 0..process_info.oscillator_count {
-            out.push_str(&format!("            osc_state_{}: OscState::default(),\n", i));
-        }
-        if process_info.has_adsr {
-            out.push_str("            adsr_state: AdsrState::default(),\n");
-        }
         out.push_str("            active_note: None,\n");
         out.push_str("            note_freq: 440.0,\n");
         out.push_str("            velocity: 0.0,\n");
