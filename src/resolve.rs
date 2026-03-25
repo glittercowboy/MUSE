@@ -1,8 +1,13 @@
 //! Semantic resolution pass for the Muse language.
 //!
 //! Walks the parsed AST and validates DSP function calls against the registry.
-//! Produces structured `Diagnostic`s with error codes E003–E006 for semantic
+//! Produces structured `Diagnostic`s with error codes E003–E009 for semantic
 //! errors and a side-table mapping expression spans to their resolved `DspType`.
+//!
+//! Routing validation:
+//! - E007: split without merge — every split must be paired with merge
+//! - E008: merge without preceding split
+//! - E009: feedback body must be a signal processing chain
 
 use std::collections::HashMap;
 
@@ -30,7 +35,7 @@ pub struct ResolvedPlugin<'a> {
 /// Resolve and validate a parsed plugin definition against the DSP registry.
 ///
 /// Returns `Ok(ResolvedPlugin)` when all DSP calls are valid, or
-/// `Err(Vec<Diagnostic>)` with E003–E006 diagnostics on failure.
+/// `Err(Vec<Diagnostic>)` with E003–E009 diagnostics on failure.
 pub fn resolve_plugin<'a>(
     plugin: &'a PluginDef,
     registry: &DspRegistry,
@@ -62,6 +67,10 @@ struct Resolver<'a> {
     type_map: HashMap<(usize, usize), DspType>,
     /// Accumulated diagnostics
     diagnostics: Vec<Diagnostic>,
+    /// Nesting depth of split blocks in the current chain context.
+    /// Incremented when `Expr::Split` is resolved in a chain, decremented
+    /// when `Expr::Merge` is encountered. Used to validate E007/E008.
+    split_depth: usize,
 }
 
 impl<'a> Resolver<'a> {
@@ -73,6 +82,7 @@ impl<'a> Resolver<'a> {
             scope: HashMap::new(),
             type_map: HashMap::new(),
             diagnostics: Vec::new(),
+            split_depth: 0,
         }
     }
 
@@ -136,18 +146,78 @@ impl<'a> Resolver<'a> {
     fn resolve_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Let { name, value } => {
+                let saved_depth = self.split_depth;
+                self.split_depth = 0;
                 if let Some(ty) = self.resolve_expr(value) {
                     self.scope.insert(name.clone(), ty);
                 }
+                if self.split_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E007",
+                            value.1,
+                            "split without merge — add `-> merge` after the split block",
+                        )
+                        .with_suggestion(
+                            "Every split must be followed by merge in the same chain.",
+                        ),
+                    );
+                }
+                self.split_depth = saved_depth;
             }
             Statement::Assign { value, .. } => {
+                let saved_depth = self.split_depth;
+                self.split_depth = 0;
                 self.resolve_expr(value);
+                if self.split_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E007",
+                            value.1,
+                            "split without merge — add `-> merge` after the split block",
+                        )
+                        .with_suggestion(
+                            "Every split must be followed by merge in the same chain.",
+                        ),
+                    );
+                }
+                self.split_depth = saved_depth;
             }
             Statement::Return(expr) => {
+                let saved_depth = self.split_depth;
+                self.split_depth = 0;
                 self.resolve_expr(expr);
+                if self.split_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E007",
+                            expr.1,
+                            "split without merge — add `-> merge` after the split block",
+                        )
+                        .with_suggestion(
+                            "Every split must be followed by merge in the same chain.",
+                        ),
+                    );
+                }
+                self.split_depth = saved_depth;
             }
             Statement::Expr(expr) => {
+                let saved_depth = self.split_depth;
+                self.split_depth = 0;
                 self.resolve_expr(expr);
+                if self.split_depth > 0 {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E007",
+                            expr.1,
+                            "split without merge — add `-> merge` after the split block",
+                        )
+                        .with_suggestion(
+                            "Every split must be followed by merge in the same chain.",
+                        ),
+                    );
+                }
+                self.split_depth = saved_depth;
             }
         }
     }
@@ -191,10 +261,91 @@ impl<'a> Resolver<'a> {
                 then_ty // use then-branch type for now
             }
             Expr::Grouped(inner) => self.resolve_expr(inner),
-            // Routing constructs — full resolution implemented in S03/T03
-            Expr::Split { .. } | Expr::Merge | Expr::Feedback { .. } => None,
+            // ── Routing constructs ─────────────────────────────────
+            Expr::Split { branches } => self.resolve_split(branches, span),
+            Expr::Merge => self.resolve_merge(span),
+            Expr::Feedback { body } => self.resolve_feedback(body, span),
             Expr::Error => None,
         }
+    }
+
+    // ── Routing construct resolution ────────────────────────
+
+    /// Resolve a split block: validate each branch independently.
+    /// Split produces Signal (conceptually a multi-channel fan-out).
+    fn resolve_split(
+        &mut self,
+        branches: &[Vec<Spanned<Statement>>],
+        _span: Span,
+    ) -> Option<DspType> {
+        for branch in branches {
+            self.resolve_statements(branch);
+        }
+        self.split_depth += 1;
+        Some(DspType::Signal)
+    }
+
+    /// Resolve a merge keyword. Merge is a combiner: Processor (signal→signal).
+    /// Validates that we're inside a split context (split_depth > 0),
+    /// otherwise emits E008.
+    fn resolve_merge(&mut self, span: Span) -> Option<DspType> {
+        if self.split_depth == 0 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E008",
+                    span,
+                    "merge without preceding split — merge must follow a split block in a chain",
+                )
+                .with_suggestion("Add a split { ... } block before merge in the chain."),
+            );
+            return None;
+        }
+        self.split_depth -= 1;
+        Some(DspType::Processor)
+    }
+
+    /// Resolve a feedback block: the body must be a valid signal processing
+    /// chain (should resolve without errors). Feedback wraps a chain as a
+    /// Processor (signal→signal with implicit one-sample delay).
+    fn resolve_feedback(
+        &mut self,
+        body: &[Spanned<Statement>],
+        span: Span,
+    ) -> Option<DspType> {
+        // Resolve all body statements
+        self.resolve_statements(body);
+
+        // Check that the body's last expression produces Signal or Processor
+        let last_ty = body.last().and_then(|(stmt, _)| match stmt {
+            Statement::Expr(expr) => self.type_map.get(&(expr.1.start, expr.1.end)).copied(),
+            Statement::Let { value, .. } => {
+                self.type_map.get(&(value.1.start, value.1.end)).copied()
+            }
+            Statement::Return(expr) => {
+                self.type_map.get(&(expr.1.start, expr.1.end)).copied()
+            }
+            Statement::Assign { value, .. } => {
+                self.type_map.get(&(value.1.start, value.1.end)).copied()
+            }
+        });
+
+        match last_ty {
+            Some(DspType::Signal) | Some(DspType::Processor) => {}
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "E009",
+                        span,
+                        "feedback body must be a signal processing chain",
+                    )
+                    .with_suggestion(
+                        "The feedback body should end with a Signal or Processor expression.",
+                    ),
+                );
+            }
+        }
+
+        Some(DspType::Processor)
     }
 
     // ── Identifier resolution ────────────────────────────────

@@ -1,0 +1,26 @@
+// Multiband Processor — demonstrates signal routing constructs.
+// Splits input into low/mid/high bands, processes each independently,
+// merges back, and applies a feedback delay loop.
+
+plugin "Multiband FX" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  input  stereo
+  output stereo
+
+  param drive: float = 0.5 in 0.0..1.0 {}
+  param mix: float = 0.7 in 0.0..1.0 {}
+  param delay_time: float = 100.0 in 10.0..500.0 {
+    unit "ms"
+  }
+
+  process {
+    input -> split {
+      lowpass(400Hz) -> gain(param.drive) -> tanh()
+      bandpass(2000Hz) -> gain(0.8)
+      highpass(4000Hz) -> gain(0.6) -> tanh()
+    } -> merge -> gain(param.mix) -> output
+  }
+}

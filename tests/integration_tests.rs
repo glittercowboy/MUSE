@@ -347,7 +347,7 @@ fn json_diagnostic_output_from_broken_input() {
 
 #[test]
 fn all_examples_parse_without_errors() {
-    for filename in &["gain.muse", "filter.muse", "synth.muse"] {
+    for filename in &["gain.muse", "filter.muse", "synth.muse", "multiband.muse"] {
         let path = format!("examples/{filename}");
         let source = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
@@ -535,5 +535,99 @@ fn compile_check_with_resolve() {
     assert!(
         muse_lang::compile_check(&valid_src, "gain.muse", false),
         "compile_check should return true for valid source"
+    );
+}
+
+// ── Multiband example integration ────────────────────────────
+
+#[test]
+fn resolve_multiband_example() {
+    let resolved = resolve_example("multiband.muse");
+    assert!(
+        !resolved.type_map.is_empty(),
+        "multiband.muse resolve should produce a non-empty type map"
+    );
+}
+
+#[test]
+fn routing_error_json_format() {
+    // Use merge without split to trigger E008 routing error
+    let src = r#"plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> merge -> output
+  }
+}"#;
+    let (ast, parse_diags) = parse_to_diagnostics(src);
+    assert!(parse_diags.is_empty(), "should parse without errors");
+    let plugin = ast.expect("should produce an AST");
+    let registry = builtin_registry();
+    let resolve_diags = resolve_plugin(&plugin, &registry).unwrap_err();
+
+    let json = diagnostics_to_json(&resolve_diags);
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&json).expect("should be valid JSON");
+    assert!(!parsed.is_empty(), "should have at least one diagnostic");
+
+    // Find the E008 entry
+    let e008 = parsed
+        .iter()
+        .find(|e| e["code"].as_str() == Some("E008"))
+        .expect("should contain E008 diagnostic");
+
+    // Verify it follows the diagnostic contract
+    assert!(e008["span"].is_array(), "E008 should have span array");
+    assert_eq!(e008["severity"].as_str(), Some("error"), "E008 should be error severity");
+    assert!(
+        e008["message"]
+            .as_str()
+            .unwrap()
+            .contains("merge without preceding split"),
+        "E008 message should describe the routing error"
+    );
+    assert!(
+        e008["suggestion"].is_string(),
+        "E008 should include a suggestion"
+    );
+}
+
+#[test]
+fn compile_check_catches_routing_errors() {
+    // E007: split without merge
+    let split_no_merge = r#"plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> split {
+      lowpass(400Hz)
+      highpass(4000Hz)
+    } -> output
+  }
+}"#;
+    assert!(
+        !muse_lang::compile_check(split_no_merge, "test.muse", true),
+        "compile_check should return false for split without merge"
+    );
+
+    // E008: merge without split
+    let merge_no_split = r#"plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> merge -> output
+  }
+}"#;
+    assert!(
+        !muse_lang::compile_check(merge_no_split, "test.muse", true),
+        "compile_check should return false for merge without split"
+    );
+
+    // Valid: multiband.muse should pass
+    let valid_src = std::fs::read_to_string("examples/multiband.muse")
+        .expect("should read multiband.muse");
+    assert!(
+        muse_lang::compile_check(&valid_src, "multiband.muse", false),
+        "compile_check should return true for valid multiband source"
     );
 }

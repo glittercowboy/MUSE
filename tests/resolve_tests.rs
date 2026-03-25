@@ -486,3 +486,124 @@ plugin "Test" {
         "JSON should contain the function name"
     );
 }
+
+// ── Split/Merge/Feedback routing ─────────────────────────────
+
+#[test]
+fn split_branches_resolve() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> split {
+      lowpass(400Hz) -> gain(0.5)
+      highpass(4000Hz) -> gain(0.8)
+    } -> merge -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
+}
+
+#[test]
+fn merge_after_split() {
+    // A valid split→merge chain should resolve without errors
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> split {
+      lowpass(1000Hz)
+      highpass(2000Hz)
+    } -> merge -> gain(0.5) -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn feedback_body_resolves() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> feedback {
+      delay(100ms) -> gain(0.5)
+    } -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
+}
+
+#[test]
+fn error_e007_split_without_merge() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> split {
+      lowpass(400Hz)
+      highpass(4000Hz)
+    } -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e007 = find_error(&diags, "E007");
+    assert!(
+        e007.message.contains("split without merge"),
+        "E007 message should mention split without merge, got: {}",
+        e007.message
+    );
+}
+
+#[test]
+fn error_e008_merge_without_split() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> merge -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e008 = find_error(&diags, "E008");
+    assert!(
+        e008.message.contains("merge without preceding split"),
+        "E008 message should mention merge without split, got: {}",
+        e008.message
+    );
+}
+
+#[test]
+fn error_e009_feedback_type_error() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    input -> feedback {
+      42.0
+    } -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e009 = find_error(&diags, "E009");
+    assert!(
+        e009.message.contains("feedback body must be a signal processing chain"),
+        "E009 message should describe feedback body error, got: {}",
+        e009.message
+    );
+}
