@@ -360,10 +360,71 @@ where
                 })
         });
 
+        // ── Signal routing atoms ─────────────────────────
+        // merge — zero-argument keyword producing Expr::Merge
+        let merge_expr = just(Token::Merge)
+            .map_with(|_, e| (Expr::Merge, e.span()));
+
+        // split { branch1_chain  branch2_chain  ... }
+        // Body is parsed as stmt.repeated(); each top-level Statement::Expr
+        // becomes one branch (a Vec of one statement). Let bindings stay
+        // attached to the branch they precede.
+        let split_expr = just(Token::Split)
+            .ignore_then(
+                stmt.clone()
+                    .repeated()
+                    .collect::<Vec<Spanned<Statement>>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with(|stmts, e| {
+                // Partition statements into branches: each expression-statement
+                // starts a new branch. Let statements accumulate into the
+                // current branch.
+                let mut branches: Vec<Vec<Spanned<Statement>>> = Vec::new();
+                for s in stmts {
+                    match &s.0 {
+                        Statement::Expr(_) => {
+                            // Each expression-statement is its own branch
+                            branches.push(vec![s]);
+                        }
+                        Statement::Let { .. } | Statement::Assign { .. } => {
+                            // Attach let/assign to the next branch (or start one)
+                            if branches.is_empty() || {
+                                let last = branches.last().unwrap();
+                                matches!(last.last().map(|s| &s.0), Some(Statement::Expr(_)))
+                            } {
+                                branches.push(vec![s]);
+                            } else {
+                                branches.last_mut().unwrap().push(s);
+                            }
+                        }
+                        Statement::Return(_) => {
+                            // Treat return as expression-like — own branch
+                            branches.push(vec![s]);
+                        }
+                    }
+                }
+                (Expr::Split { branches }, e.span())
+            });
+
+        // feedback { body }
+        // Same parse shape as a process block body.
+        let feedback_expr = just(Token::Feedback)
+            .ignore_then(
+                stmt.clone()
+                    .repeated()
+                    .collect::<Vec<Spanned<Statement>>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with(|body, e| (Expr::Feedback { body }, e.span()));
+
         // ── Primary expressions (atoms) ──────────────────
         let atom = number_with_unit()
             .or(string_lit())
             .or(bool_lit())
+            .or(merge_expr)
+            .or(split_expr)
+            .or(feedback_expr)
             .or(ident_expr())
             .or(if_expr)
             .or(expr

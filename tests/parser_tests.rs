@@ -593,3 +593,152 @@ fn parse_vst3_block() {
 
     assert_eq!(vst3.items.len(), 2);
 }
+
+// ── Signal routing expression tests ──────────────────────────
+
+#[test]
+fn split_basic_parses() {
+    let expr = parse_process_expr(
+        "split { lowpass(400Hz) highpass(4000Hz) }",
+    );
+    match &expr.0 {
+        Expr::Split { branches } => {
+            assert_eq!(branches.len(), 2, "Expected 2 branches, got {}", branches.len());
+            // Each branch is a single expression-statement
+            assert_eq!(branches[0].len(), 1);
+            assert_eq!(branches[1].len(), 1);
+            // First branch: lowpass(400Hz)
+            match &branches[0][0].0 {
+                Statement::Expr((Expr::FnCall { callee, args }, _)) => {
+                    assert!(matches!(callee.0, Expr::Ident(ref s) if s == "lowpass"));
+                    assert_eq!(args.len(), 1);
+                }
+                other => panic!("Expected FnCall in first branch, got {:?}", other),
+            }
+            // Second branch: highpass(4000Hz)
+            match &branches[1][0].0 {
+                Statement::Expr((Expr::FnCall { callee, args }, _)) => {
+                    assert!(matches!(callee.0, Expr::Ident(ref s) if s == "highpass"));
+                    assert_eq!(args.len(), 1);
+                }
+                other => panic!("Expected FnCall in second branch, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Split, got {:?}", other),
+    }
+}
+
+#[test]
+fn merge_as_expression() {
+    let expr = parse_process_expr("merge");
+    assert!(
+        matches!(expr.0, Expr::Merge),
+        "Expected Expr::Merge, got {:?}",
+        expr.0
+    );
+}
+
+#[test]
+fn feedback_basic_parses() {
+    let expr = parse_process_expr(
+        "feedback { delay(100ms) -> lowpass(2000Hz) }",
+    );
+    match &expr.0 {
+        Expr::Feedback { body } => {
+            assert_eq!(body.len(), 1, "Expected 1 statement in feedback body");
+            // The body statement should be an expression containing a chain
+            match &body[0].0 {
+                Statement::Expr((Expr::Binary { op: BinOp::Chain, .. }, _)) => {}
+                other => panic!("Expected chain expression in feedback body, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Feedback, got {:?}", other),
+    }
+}
+
+#[test]
+fn split_merge_chain() {
+    // input -> split { lowpass(400Hz) highpass(4000Hz) } -> merge -> output
+    let expr = parse_process_expr(
+        "input -> split { lowpass(400Hz) highpass(4000Hz) } -> merge -> output",
+    );
+    // Structure: (((input -> split{...}) -> merge) -> output)
+    match &expr.0 {
+        Expr::Binary { op: BinOp::Chain, left, right } => {
+            // right = output
+            assert!(matches!(right.0, Expr::Ident(ref s) if s == "output"));
+            // left = (input -> split{...}) -> merge
+            match &left.0 {
+                Expr::Binary { op: BinOp::Chain, left: inner_left, right: inner_right } => {
+                    // inner_right = merge
+                    assert!(matches!(inner_right.0, Expr::Merge));
+                    // inner_left = input -> split{...}
+                    match &inner_left.0 {
+                        Expr::Binary { op: BinOp::Chain, left: chain_left, right: chain_right } => {
+                            assert!(matches!(chain_left.0, Expr::Ident(ref s) if s == "input"));
+                            assert!(matches!(chain_right.0, Expr::Split { .. }));
+                        }
+                        other => panic!("Expected inner chain, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected chain with merge, got {:?}", other),
+            }
+        }
+        other => panic!("Expected top-level chain, got {:?}", other),
+    }
+}
+
+#[test]
+fn feedback_in_chain() {
+    // input -> feedback { delay(100ms) } -> output
+    let expr = parse_process_expr(
+        "input -> feedback { delay(100ms) } -> output",
+    );
+    // Structure: ((input -> feedback{...}) -> output)
+    match &expr.0 {
+        Expr::Binary { op: BinOp::Chain, left, right } => {
+            assert!(matches!(right.0, Expr::Ident(ref s) if s == "output"));
+            match &left.0 {
+                Expr::Binary { op: BinOp::Chain, left: inner_left, right: inner_right } => {
+                    assert!(matches!(inner_left.0, Expr::Ident(ref s) if s == "input"));
+                    match &inner_right.0 {
+                        Expr::Feedback { body } => {
+                            assert_eq!(body.len(), 1);
+                        }
+                        other => panic!("Expected Feedback, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected inner chain, got {:?}", other),
+            }
+        }
+        other => panic!("Expected chain, got {:?}", other),
+    }
+}
+
+#[test]
+fn nested_split() {
+    // split inside a split branch should parse
+    let expr = parse_process_expr(
+        "split { split { lowpass(400Hz) highpass(4000Hz) } bandpass(1000Hz) }",
+    );
+    match &expr.0 {
+        Expr::Split { branches } => {
+            assert_eq!(branches.len(), 2, "Expected 2 branches in outer split");
+            // First branch: inner split
+            match &branches[0][0].0 {
+                Statement::Expr((Expr::Split { branches: inner }, _)) => {
+                    assert_eq!(inner.len(), 2, "Expected 2 branches in inner split");
+                }
+                other => panic!("Expected inner Split in first branch, got {:?}", other),
+            }
+            // Second branch: bandpass call
+            match &branches[1][0].0 {
+                Statement::Expr((Expr::FnCall { callee, .. }, _)) => {
+                    assert!(matches!(callee.0, Expr::Ident(ref s) if s == "bandpass"));
+                }
+                other => panic!("Expected FnCall in second branch, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Split, got {:?}", other),
+    }
+}
