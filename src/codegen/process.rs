@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 
 use crate::ast::{BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp};
-use crate::dsp::primitives::DspPrimitive;
+use crate::dsp::primitives::{DspPrimitive, EnvKind, OscKind};
 
 /// Information collected during process generation that downstream codegen needs.
 pub struct ProcessInfo {
@@ -23,6 +23,12 @@ pub struct ProcessInfo {
     pub needs_channel_idx: bool,
     /// Diagnostics collected during process generation (E011 unsupported constructs).
     pub diagnostics: Vec<crate::diagnostic::Diagnostic>,
+    /// True when the plugin has a MidiDecl — triggers instrument mode codegen.
+    pub is_instrument: bool,
+    /// Number of oscillator state fields needed (one per oscillator call site).
+    pub oscillator_count: usize,
+    /// Whether ADSR envelope state is needed.
+    pub has_adsr: bool,
 }
 
 /// Generate the process() body (the code that replaces `{PROCESS_BODY}` in the Plugin trait).
@@ -30,6 +36,8 @@ pub struct ProcessInfo {
 /// Also collects which DSP primitives are used so the caller can generate
 /// appropriate state structs and helper functions.
 pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
+    let is_instrument = find_midi_decl(plugin);
+
     let process_block = match find_process_block(plugin) {
         Some(pb) => pb,
         None => return ("        ProcessStatus::Normal".to_string(), ProcessInfo {
@@ -37,10 +45,14 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
             branch_filters: Vec::new(),
             needs_channel_idx: false,
             diagnostics: Vec::new(),
+            is_instrument: false,
+            oscillator_count: 0,
+            has_adsr: false,
         }),
     };
 
     let mut ctx = ProcessContext::new();
+    ctx.is_instrument = is_instrument;
 
     // First pass: collect all statements' code
     // All statements execute per-sample inside the inner loop.
@@ -51,46 +63,96 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
         stmt_lines.extend(lines);
     }
 
-    // Build the full process body
-    let mut out = String::new();
-
-    // Use enumerate() only when we need per-channel state (e.g. biquad filter)
-    let needs_channel_idx = ctx.used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(_))
+    let has_adsr = ctx.used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Envelope(EnvKind::Adsr))
     });
+    let oscillator_count = ctx.oscillator_counter;
 
-    if needs_channel_idx {
-        out.push_str("        for (channel_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
+    if is_instrument {
+        // ── Instrument mode: MIDI event loop, mono output, KeepAlive ──
+        let mut out = String::new();
+
+        out.push_str("        let mut next_event = context.next_event();\n");
+        out.push_str("        for (sample_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
+
+        // Per-sample parameter smoothing
+        for param_name in &ctx.smoothed_params {
+            out.push_str(&format!(
+                "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
+            ));
+        }
+
+        // MIDI event loop (sample-accurate)
+        let midi_loop = crate::codegen::midi::generate_midi_event_loop();
+        for line in midi_loop.lines() {
+            out.push_str("            ");
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        // Process block statements — compute the mono output
+        for line in &stmt_lines {
+            out.push_str("            ");
+            out.push_str(line);
+            out.push('\n');
+        }
+
+        out.push_str("        }\n");
+        out.push_str("        ProcessStatus::KeepAlive");
+
+        let info = ProcessInfo {
+            used_primitives: ctx.used_primitives,
+            branch_filters: ctx.branch_filters,
+            needs_channel_idx: false, // instrument mode doesn't use per-channel indexing
+            diagnostics: ctx.diagnostics,
+            is_instrument: true,
+            oscillator_count,
+            has_adsr,
+        };
+        (out, info)
     } else {
-        out.push_str("        for channel_samples in buffer.iter_samples() {\n");
-    }
+        // ── Effect mode: unchanged from original ──
+        let mut out = String::new();
 
-    // Per-sample parameter smoothing — read all smoothed params once per sample
-    // These must be inside the outer loop so they advance each sample.
-    for param_name in &ctx.smoothed_params {
-        out.push_str(&format!(
-            "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
-        ));
-    }
+        let needs_channel_idx = ctx.used_primitives.iter().any(|p| {
+            matches!(p, DspPrimitive::Filter(_))
+        });
 
-    // Inner per-sample loop
-    out.push_str("            for sample in channel_samples {\n");
-    for line in &stmt_lines {
-        out.push_str("                ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out.push_str("            }\n");
-    out.push_str("        }\n");
-    out.push_str("        ProcessStatus::Normal");
+        if needs_channel_idx {
+            out.push_str("        for (channel_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
+        } else {
+            out.push_str("        for channel_samples in buffer.iter_samples() {\n");
+        }
 
-    let info = ProcessInfo {
-        used_primitives: ctx.used_primitives,
-        branch_filters: ctx.branch_filters,
-        needs_channel_idx,
-        diagnostics: ctx.diagnostics,
-    };
-    (out, info)
+        // Per-sample parameter smoothing
+        for param_name in &ctx.smoothed_params {
+            out.push_str(&format!(
+                "            let {param_name} = self.params.{param_name}.smoothed.next();\n"
+            ));
+        }
+
+        // Inner per-sample loop
+        out.push_str("            for sample in channel_samples {\n");
+        for line in &stmt_lines {
+            out.push_str("                ");
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str("            }\n");
+        out.push_str("        }\n");
+        out.push_str("        ProcessStatus::Normal");
+
+        let info = ProcessInfo {
+            used_primitives: ctx.used_primitives,
+            branch_filters: ctx.branch_filters,
+            needs_channel_idx,
+            diagnostics: ctx.diagnostics,
+            is_instrument: false,
+            oscillator_count,
+            has_adsr,
+        };
+        (out, info)
+    }
 }
 
 /// Find the process block in the plugin's items.
@@ -101,6 +163,11 @@ fn find_process_block(plugin: &PluginDef) -> Option<&ProcessBlock> {
         }
     }
     None
+}
+
+/// Check if the plugin has a MidiDecl item, indicating instrument mode.
+fn find_midi_decl(plugin: &PluginDef) -> bool {
+    plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::MidiDecl(_)))
 }
 
 /// Tracks state during process body generation.
@@ -124,6 +191,10 @@ struct ProcessContext {
     branch_filters: Vec<(usize, usize, crate::dsp::primitives::FilterKind)>,
     /// Diagnostics collected during process generation (E011 unsupported constructs).
     diagnostics: Vec<crate::diagnostic::Diagnostic>,
+    /// Counter for generating unique oscillator state field names (osc_state_0, osc_state_1, ...).
+    oscillator_counter: usize,
+    /// True when generating for an instrument plugin (affects output/input codegen).
+    is_instrument: bool,
 }
 
 impl ProcessContext {
@@ -137,6 +208,8 @@ impl ProcessContext {
             current_branch: None,
             branch_filters: Vec::new(),
             diagnostics: Vec::new(),
+            oscillator_counter: 0,
+            is_instrument: false,
         }
     }
 
@@ -171,9 +244,9 @@ fn generate_statement(
         }
         Statement::Expr(expr) => {
             // Check if this is a chain ending in `output` — that's a write to the output buffer
-            if let Some(source) = extract_output_chain(&expr.0, ctx) {
+            if let Some(output_lines) = extract_output_chain(&expr.0, ctx) {
                 let mut lines = ctx.drain_pending();
-                lines.push(format!("*sample = {};", source));
+                lines.extend(output_lines);
                 lines
             } else if is_last_in_block {
                 // Last expression in block — might still need to become an output write
@@ -205,11 +278,20 @@ fn generate_statement(
 
 /// Try to extract `X -> output` as a chain where the final step is writing to the output buffer.
 /// Returns the generated code for X if this is an output chain, None otherwise.
-fn extract_output_chain(expr: &Expr, ctx: &mut ProcessContext) -> Option<String> {
+fn extract_output_chain(expr: &Expr, ctx: &mut ProcessContext) -> Option<Vec<String>> {
     // Match: anything -> output
     if let Expr::Binary { left, op: BinOp::Chain, right } = expr {
         if matches!(&right.0, Expr::Ident(name) if name == "output") {
-            return Some(generate_chain_value(&left.0, ctx));
+            let source = generate_chain_value(&left.0, ctx);
+            if ctx.is_instrument {
+                // Instrument mode: compute mono output, write to all channels
+                return Some(vec![
+                    format!("let output_sample = {};", source),
+                    "for sample in channel_samples { *sample = output_sample; }".to_string(),
+                ]);
+            } else {
+                return Some(vec![format!("*sample = {};", source)]);
+            }
         }
     }
     None
@@ -285,6 +367,22 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
     generate_expr(expr, ctx)
 }
 
+/// Get the biquad state field reference, accounting for branch context and instrument mode.
+fn biquad_state_field(ctx: &mut ProcessContext, filter_kind: crate::dsp::primitives::FilterKind) -> String {
+    if let Some((split_id, branch_idx)) = ctx.current_branch {
+        ctx.branch_filters.push((split_id, branch_idx, filter_kind));
+        if ctx.is_instrument {
+            format!("self.split{}_branch{}_biquad[0]", split_id, branch_idx)
+        } else {
+            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
+        }
+    } else if ctx.is_instrument {
+        "self.biquad_state[0]".to_string()
+    } else {
+        "self.biquad_state[channel_idx]".to_string()
+    }
+}
+
 /// Generate a biquad filter call (lowpass, bandpass, highpass) with branch-aware state naming.
 fn generate_filter_call(
     input_code: &str,
@@ -307,13 +405,8 @@ fn generate_filter_call(
         "0.707".to_string()
     };
 
-    // Determine the state field name based on branch context
-    let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
-        ctx.branch_filters.push((split_id, branch_idx, filter_kind));
-        format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
-    } else {
-        "self.biquad_state[channel_idx]".to_string()
-    };
+    // Determine the state field name based on branch context and instrument mode
+    let state_field = biquad_state_field(ctx, filter_kind);
 
     // Use filter-type-specific function for the correct coefficient formula
     let fn_name = match filter_name {
@@ -429,6 +522,14 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     ctx.use_smoothed_param(field);
                     return field.clone();
                 }
+                if base_name == "note" {
+                    return match field.as_str() {
+                        "pitch" => "self.note_freq".to_string(),
+                        "velocity" => "self.velocity".to_string(),
+                        "gate" => "if self.active_note.is_some() { 1.0_f32 } else { 0.0_f32 }".to_string(),
+                        _ => format!("self.{}", field),
+                    };
+                }
             }
             format!("{}.{}", generate_expr(&base.0, ctx), field)
         }
@@ -465,12 +566,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
-                            ctx.branch_filters.push((split_id, branch_idx, crate::dsp::primitives::FilterKind::Lowpass));
-                            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
-                        } else {
-                            "self.biquad_state[channel_idx]".to_string()
-                        };
+                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Lowpass);
                         return format!(
                             "process_biquad(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -490,12 +586,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
-                            ctx.branch_filters.push((split_id, branch_idx, crate::dsp::primitives::FilterKind::Bandpass));
-                            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
-                        } else {
-                            "self.biquad_state[channel_idx]".to_string()
-                        };
+                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Bandpass);
                         return format!(
                             "process_biquad_bandpass(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -515,12 +606,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         } else {
                             "0.707".to_string()
                         };
-                        let state_field = if let Some((split_id, branch_idx)) = ctx.current_branch {
-                            ctx.branch_filters.push((split_id, branch_idx, crate::dsp::primitives::FilterKind::Highpass));
-                            format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
-                        } else {
-                            "self.biquad_state[channel_idx]".to_string()
-                        };
+                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Highpass);
                         return format!(
                             "process_biquad_highpass(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
@@ -533,6 +619,14 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                             return format!("({}).tanh()", input);
                         }
                         return "0.0_f32.tanh()".to_string();
+                    }
+                    // ── Oscillators (standalone call) ──
+                    "saw" | "square" | "sine" | "triangle" => {
+                        return generate_osc_call(fn_name, args, ctx);
+                    }
+                    // ── ADSR envelope ──
+                    "adsr" => {
+                        return generate_adsr_call(args, ctx);
                     }
                     _ => {}
                 }
@@ -652,6 +746,77 @@ fn generate_if_expr(
     }
 
     s
+}
+
+/// Generate code for an oscillator call: `saw(freq)`, `square(freq)`, etc.
+///
+/// Each call site gets a unique state field (`self.osc_state_0`, `self.osc_state_1`, ...)
+/// via the oscillator counter on ProcessContext.
+fn generate_osc_call(fn_name: &str, args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    let osc_kind = match fn_name {
+        "saw" => OscKind::Saw,
+        "square" => OscKind::Square,
+        "sine" => OscKind::Sine,
+        "triangle" => OscKind::Triangle,
+        _ => unreachable!(),
+    };
+    ctx.used_primitives.insert(DspPrimitive::Oscillator(osc_kind));
+
+    let osc_idx = ctx.oscillator_counter;
+    ctx.oscillator_counter += 1;
+
+    let freq = if !args.is_empty() {
+        generate_expr(&args[0].0, ctx)
+    } else {
+        "440.0_f32".to_string()
+    };
+
+    let process_fn = match fn_name {
+        "saw" => "process_osc_saw",
+        "square" => "process_osc_square",
+        "sine" => "process_osc_sine",
+        "triangle" => "process_osc_triangle",
+        _ => unreachable!(),
+    };
+
+    format!(
+        "{}(&mut self.osc_state_{}, {}, self.sample_rate)",
+        process_fn, osc_idx, freq
+    )
+}
+
+/// Generate code for an ADSR envelope call: `adsr(attack, decay, sustain, release)`.
+///
+/// Maps to `process_adsr(&mut self.adsr_state, gate, attack, decay, sustain, release, sample_rate)`.
+fn generate_adsr_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Envelope(EnvKind::Adsr));
+
+    let attack = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "10.0_f32".to_string()
+    };
+    let decay = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "100.0_f32".to_string()
+    };
+    let sustain = if args.len() > 2 {
+        generate_expr_as_param(&args[2].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+    let release = if args.len() > 3 {
+        generate_expr_as_param(&args[3].0, ctx)
+    } else {
+        "200.0_f32".to_string()
+    };
+
+    // Gate is based on active_note state
+    format!(
+        "process_adsr(&mut self.adsr_state, if self.active_note.is_some() {{ 1.0_f32 }} else {{ 0.0_f32 }}, {}, {}, {}, {}, self.sample_rate)",
+        attack, decay, sustain, release
+    )
 }
 
 /// Generate a parameter expression — handles `param.X` field access by using the smoothed local.

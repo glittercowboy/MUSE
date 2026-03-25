@@ -41,6 +41,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     let vst3 = extract_vst3_info(plugin);
 
     let used_primitives = &process_info.used_primitives;
+    let is_instrument = process_info.is_instrument;
 
     // Check for non-branch (top-level) biquad usage
     let needs_top_level_biquad = used_primitives.iter().any(|p| {
@@ -57,6 +58,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
 
     let needs_any_biquad = needs_top_level_biquad || !branch_biquad_fields.is_empty();
+    let needs_sample_rate = needs_any_biquad || is_instrument;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
 
     let mut out = String::new();
@@ -76,7 +78,19 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
             split_id, branch_idx, num_channels
         ));
     }
-    if needs_any_biquad {
+    // Instrument-specific state fields
+    if is_instrument {
+        for i in 0..process_info.oscillator_count {
+            out.push_str(&format!("    osc_state_{}: OscState,\n", i));
+        }
+        if process_info.has_adsr {
+            out.push_str("    adsr_state: AdsrState,\n");
+        }
+        out.push_str("    active_note: Option<u8>,\n");
+        out.push_str("    note_freq: f32,\n");
+        out.push_str("    velocity: f32,\n");
+    }
+    if needs_sample_rate {
         out.push_str("    sample_rate: f32,\n");
     }
     out.push_str("}\n\n");
@@ -98,13 +112,24 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
             split_id, branch_idx, num_channels
         ));
     }
-    if needs_any_biquad {
+    if is_instrument {
+        for i in 0..process_info.oscillator_count {
+            out.push_str(&format!("            osc_state_{}: OscState::default(),\n", i));
+        }
+        if process_info.has_adsr {
+            out.push_str("            adsr_state: AdsrState::default(),\n");
+        }
+        out.push_str("            active_note: None,\n");
+        out.push_str("            note_freq: 440.0,\n");
+        out.push_str("            velocity: 0.0,\n");
+    }
+    if needs_sample_rate {
         out.push_str("            sample_rate: 44100.0,\n");
     }
     out.push_str("        }\n    }\n}\n\n");
 
     // Plugin trait impl
-    out.push_str(&generate_plugin_trait(&info, needs_any_biquad));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument));
 
     // ClapPlugin trait impl + export macro
     if let Some(ref clap) = clap {
@@ -216,12 +241,12 @@ fn extract_vst3_info(plugin: &PluginDef) -> Option<Vst3Info> {
     None
 }
 
-fn generate_plugin_trait(info: &PluginInfo, needs_biquad: bool) -> String {
+fn generate_plugin_trait(info: &PluginInfo, needs_sample_rate: bool, is_instrument: bool) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
     let out_ch = info.output_channels;
 
-    let initialize_fn = if needs_biquad {
+    let initialize_fn = if needs_sample_rate {
         r#"
     fn initialize(
         &mut self,
@@ -238,6 +263,21 @@ fn generate_plugin_trait(info: &PluginInfo, needs_biquad: bool) -> String {
         String::new()
     };
 
+    let midi_config = if is_instrument {
+        "MidiConfig::Basic"
+    } else {
+        "MidiConfig::None"
+    };
+
+    let main_input = if is_instrument {
+        "            main_input_channels: None,".to_string()
+    } else {
+        format!("            main_input_channels: NonZeroU32::new({}),", in_ch)
+    };
+
+    // In instrument mode, context is used (for MIDI events); in effect mode it's unused
+    let context_param = if is_instrument { "context" } else { "_context" };
+
     format!(
         r#"impl Plugin for {s} {{
     const NAME: &'static str = "{name}";
@@ -248,13 +288,13 @@ fn generate_plugin_trait(info: &PluginInfo, needs_biquad: bool) -> String {
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
         AudioIOLayout {{
-            main_input_channels: NonZeroU32::new({in_ch}),
+{main_input}
             main_output_channels: NonZeroU32::new({out_ch}),
             ..AudioIOLayout::const_default()
         }},
     ];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::None;
+    const MIDI_INPUT: MidiConfig = {midi_config};
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -268,7 +308,7 @@ fn generate_plugin_trait(info: &PluginInfo, needs_biquad: bool) -> String {
         &mut self,
         buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        {context_param}: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {{
         {{PROCESS_BODY}}
     }}

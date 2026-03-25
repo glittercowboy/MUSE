@@ -9,15 +9,17 @@
 /// Returns a String containing the event-processing loop body that should be
 /// placed inside the per-sample loop. The loop advances through MIDI events
 /// whose timing matches the current sample index, dispatching NoteOn/NoteOff
-/// to update voice state.
+/// to update voice state on `self`.
 ///
 /// The generated code expects these variables to be in scope:
 /// - `next_event`: `Option<NoteEvent<()>>` — the next buffered MIDI event
 /// - `sample_idx`: `usize` — current sample index within the buffer
 /// - `context`: the nih-plug `ProcessContext` — used to fetch subsequent events
 ///
-/// Voice state variables (`note_pitch`, `note_velocity`, `note_gate`) are
-/// updated by the generated match arms.
+/// Voice state fields on `self`:
+/// - `active_note: Option<u8>` — currently held MIDI note number
+/// - `note_freq: f32` — frequency of the active note
+/// - `velocity: f32` — velocity of the active note
 pub fn generate_midi_event_loop() -> String {
     r#"// Sample-accurate MIDI event processing
 while let Some(event) = next_event {
@@ -26,14 +28,14 @@ while let Some(event) = next_event {
     }
     match event {
         NoteEvent::NoteOn { note, velocity, .. } => {
-            note_pitch = util::midi_note_to_freq(note);
-            note_velocity = velocity;
-            note_gate = 1.0;
+            self.active_note = Some(note);
+            self.note_freq = util::midi_note_to_freq(note);
+            self.velocity = velocity;
         }
         NoteEvent::NoteOff { note, .. } => {
             // Only release if this is the currently playing note
-            if (util::midi_note_to_freq(note) - note_pitch).abs() < 0.01 {
-                note_gate = 0.0;
+            if self.active_note == Some(note) {
+                self.active_note = None;
             }
         }
         _ => {}
@@ -81,6 +83,23 @@ mod tests {
         assert!(
             code.contains("context.next_event()"),
             "MIDI loop should advance to next event"
+        );
+    }
+
+    #[test]
+    fn midi_event_loop_uses_struct_fields() {
+        let code = generate_midi_event_loop();
+        assert!(
+            code.contains("self.active_note"),
+            "MIDI loop should use self.active_note for note tracking"
+        );
+        assert!(
+            code.contains("self.note_freq"),
+            "MIDI loop should set self.note_freq from MIDI note"
+        );
+        assert!(
+            code.contains("self.velocity"),
+            "MIDI loop should capture velocity into self.velocity"
         );
     }
 }

@@ -229,6 +229,74 @@ fn codegen_multiband_cargo_check() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Integration test: instrument mode (synth) cargo check
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn codegen_synth_cargo_check() {
+    let source = include_str!("../examples/synth.muse");
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-synth");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    eprintln!("=== Generated synth src/lib.rs ===\n{}\n=== END ===", lib_rs);
+
+    // Verify instrument-mode codegen markers
+    assert!(lib_rs.contains("MidiConfig::Basic"), "Instrument should use MidiConfig::Basic");
+    assert!(lib_rs.contains("ProcessStatus::KeepAlive"), "Instrument should use KeepAlive");
+    assert!(lib_rs.contains("main_input_channels: None"), "Instrument should have no main input");
+    assert!(lib_rs.contains("active_note: Option<u8>"), "Should have active_note field");
+    assert!(lib_rs.contains("note_freq: f32"), "Should have note_freq field");
+    assert!(lib_rs.contains("velocity: f32"), "Should have velocity field");
+    assert!(lib_rs.contains("osc_state_0: OscState"), "Should have first oscillator state");
+    assert!(lib_rs.contains("osc_state_1: OscState"), "Should have second oscillator state");
+    assert!(lib_rs.contains("adsr_state: AdsrState"), "Should have ADSR state");
+    assert!(lib_rs.contains("process_osc_saw"), "Should have saw oscillator function");
+    assert!(lib_rs.contains("process_osc_square"), "Should have square oscillator function");
+    assert!(lib_rs.contains("process_adsr"), "Should have ADSR function");
+    assert!(lib_rs.contains("context.next_event()"), "Should have MIDI event processing");
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn codegen_synth_has_instrument_struct_fields() {
+    let source = include_str!("../examples/synth.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(lib_rs.contains("osc_state_0: OscState"), "Missing osc_state_0");
+    assert!(lib_rs.contains("osc_state_1: OscState"), "Missing osc_state_1");
+    assert!(lib_rs.contains("adsr_state: AdsrState"), "Missing adsr_state");
+    assert!(lib_rs.contains("active_note: Option<u8>"), "Missing active_note");
+    assert!(lib_rs.contains("note_freq: f32"), "Missing note_freq");
+    assert!(lib_rs.contains("velocity: f32"), "Missing velocity");
+    assert!(lib_rs.contains("sample_rate: f32"), "Missing sample_rate");
+}
+
+#[test]
+fn codegen_effect_unchanged_after_instrument_mode() {
+    // Ensure gain.muse still generates identical effect-mode code
+    let source = include_str!("../examples/gain.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(lib_rs.contains("MidiConfig::None"), "Effect should use MidiConfig::None");
+    assert!(lib_rs.contains("ProcessStatus::Normal"), "Effect should use ProcessStatus::Normal");
+    assert!(!lib_rs.contains("active_note"), "Effect should not have instrument fields");
+    assert!(!lib_rs.contains("OscState"), "Effect should not have oscillator state");
+    assert!(!lib_rs.contains("AdsrState"), "Effect should not have ADSR state");
+    assert!(!lib_rs.contains("KeepAlive"), "Effect should not use KeepAlive");
+    assert!(lib_rs.contains("main_input_channels: NonZeroU32::new(2)"), "Effect should have stereo input");
+}
+
+// ══════════════════════════════════════════════════════════════
 // Diagnostic tests: E010 / E011 error codes and JSON format
 // ══════════════════════════════════════════════════════════════
 
@@ -458,16 +526,16 @@ fn midi_event_loop_generates_non_empty_code() {
         "Should handle NoteOff events"
     );
     assert!(
-        code.contains("note_gate"),
-        "Should set note_gate for envelope control"
+        code.contains("self.active_note"),
+        "Should use self.active_note for note tracking"
     );
     assert!(
-        code.contains("note_pitch"),
-        "Should set note_pitch from MIDI note"
+        code.contains("self.note_freq"),
+        "Should set self.note_freq from MIDI note"
     );
     assert!(
-        code.contains("note_velocity"),
-        "Should capture velocity from NoteOn"
+        code.contains("self.velocity"),
+        "Should capture velocity from NoteOn into self.velocity"
     );
 }
 
