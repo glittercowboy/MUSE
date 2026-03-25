@@ -27,6 +27,7 @@ pub enum PluginItem {
     ParamDecl(Box<ParamDef>),
     MidiDecl(MidiDecl),
     VoiceDecl(VoiceConfig),
+    UnisonDecl(UnisonConfig),
     ProcessBlock(ProcessBlock),
     TestBlock(TestBlock),
 }
@@ -133,6 +134,14 @@ pub enum MidiItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VoiceConfig {
     pub count: u32,
+    pub span: Span,
+}
+
+/// `unison { count 3 detune 15 }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnisonConfig {
+    pub count: u32,
+    pub detune_cents: f64,
     pub span: Span,
 }
 

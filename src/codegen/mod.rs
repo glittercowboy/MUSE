@@ -19,6 +19,13 @@ use crate::diagnostic::Diagnostic;
 use crate::resolve::ResolvedPlugin;
 use crate::span::Span;
 
+/// Codegen-side unison configuration extracted from the AST.
+#[derive(Debug, Clone)]
+pub struct CodegenUnisonConfig {
+    pub count: u32,
+    pub detune_cents: f64,
+}
+
 pub fn generate_plugin(
     resolved: &ResolvedPlugin,
     _registry: &crate::dsp::primitives::DspRegistry,
@@ -35,7 +42,8 @@ pub fn generate_plugin(
     let cargo_toml = cargo::generate_cargo_toml(plugin);
     let params_code = params::generate_params(plugin);
     let voice_count = find_voice_count(plugin);
-    let (process_body, process_info) = process::generate_process(plugin, voice_count);
+    let unison_config = find_unison_config(plugin);
+    let (process_body, process_info) = process::generate_process(plugin, voice_count, unison_config.as_ref());
 
     if !process_info.diagnostics.is_empty() {
         return Err(process_info.diagnostics);
@@ -45,7 +53,7 @@ pub fn generate_plugin(
     let plugin_code = plugin::generate_plugin_struct(plugin, &process_info);
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
-    let mut lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code, voice_count.is_some());
+    let mut lib_rs = assemble_lib_rs(&params_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref());
 
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
@@ -86,6 +94,19 @@ fn find_voice_count(plugin: &PluginDef) -> Option<u32> {
     plugin.items.iter().find_map(|(item, _)| {
         if let PluginItem::VoiceDecl(voice) = item {
             Some(voice.count)
+        } else {
+            None
+        }
+    })
+}
+
+fn find_unison_config(plugin: &PluginDef) -> Option<CodegenUnisonConfig> {
+    plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::UnisonDecl(unison) = item {
+            Some(CodegenUnisonConfig {
+                count: unison.count,
+                detune_cents: unison.detune_cents,
+            })
         } else {
             None
         }
@@ -173,6 +194,7 @@ fn assemble_lib_rs(
     dsp_helpers: &str,
     plugin_code: &str,
     include_poly_helpers: bool,
+    unison_config: Option<&CodegenUnisonConfig>,
 ) -> String {
     let mut out = String::new();
 
@@ -183,6 +205,10 @@ fn assemble_lib_rs(
     out.push('\n');
 
     out.push_str("const MAX_BLOCK_SIZE: usize = 64;\n\n");
+
+    if unison_config.is_some() {
+        out.push_str("const UNISON_MAX: i32 = 16;\n\n");
+    }
 
     if !dsp_helpers.is_empty() {
         out.push_str(dsp_helpers);

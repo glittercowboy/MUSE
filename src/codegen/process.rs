@@ -30,7 +30,7 @@ pub struct ProcessInfo {
     pub compressor_count: usize,
 }
 
-pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>) -> (String, ProcessInfo) {
+pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> (String, ProcessInfo) {
     let is_instrument = find_midi_decl(plugin);
 
     let process_block = match find_process_block(plugin) {
@@ -74,7 +74,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>) -> (String
     let compressor_count = ctx.compressor_counter;
 
     let process_body = if ctx.is_polyphonic {
-        generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines)
+        generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
     } else if is_instrument {
         generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines)
     } else {
@@ -137,7 +137,7 @@ fn generate_monophonic_instrument_process(
     out
 }
 
-fn generate_polyphonic_process(smoothed_params: &[String], stmt_lines: &[String]) -> String {
+fn generate_polyphonic_process(smoothed_params: &[String], stmt_lines: &[String], unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> String {
     let mut out = String::new();
     out.push_str("        let num_samples = buffer.samples();\n");
     out.push_str("        let output = buffer.as_slice();\n");
@@ -146,7 +146,7 @@ fn generate_polyphonic_process(smoothed_params: &[String], stmt_lines: &[String]
     out.push_str("        let mut block_end: usize = MAX_BLOCK_SIZE.min(num_samples);\n");
     out.push_str("        while block_start < num_samples {\n");
 
-    let poly_handler = crate::codegen::midi::generate_polyphonic_event_handler();
+    let poly_handler = crate::codegen::midi::generate_polyphonic_event_handler(unison_config);
     for line in poly_handler.lines() {
         out.push_str("            ");
         out.push_str(line);

@@ -31,95 +31,119 @@ while let Some(event) = next_event {
 }
 
 /// Generate the Rust code for a block-oriented MIDI event loop for polyphonic instruments.
-pub fn generate_polyphonic_event_handler() -> String {
-    r#"let this_block_internal_voice_id_start = self.next_internal_voice_id;
-'events: loop {
-    match next_event {
-        Some(event) if (event.timing() as usize) <= block_start => {
-            match event {
-                NoteEvent::NoteOn {
+pub fn generate_polyphonic_event_handler(unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> String {
+    let note_on_body = if let Some(unison) = unison_config {
+        let count = unison.count;
+        let detune = unison.detune_cents;
+        format!(
+            r#"                    let base_freq = util::midi_note_to_freq(note);
+                    let base_vid = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
+                    for u_idx in 0..{count}u32 {{
+                        let detune_spread = if {count} > 1 {{
+                            let t = u_idx as f32 / ({count} as f32 - 1.0);
+                            (t - 0.5) * 2.0 * {detune}_f32
+                        }} else {{
+                            0.0_f32
+                        }};
+                        let detuned_freq = base_freq * 2.0_f32.powf(detune_spread / 1200.0);
+                        let unison_vid = Some(base_vid.wrapping_mul(UNISON_MAX).wrapping_add(u_idx as i32));
+                        let voice = self.start_voice(context, timing, unison_vid, channel, note);
+                        voice.note_freq = detuned_freq;
+                        voice.velocity = velocity;
+                        voice.releasing = false;
+                    }}"#
+        )
+    } else {
+        r#"                    let voice = self.start_voice(context, timing, voice_id, channel, note);
+                    voice.note_freq = util::midi_note_to_freq(note);
+                    voice.velocity = velocity;
+                    voice.releasing = false;"#.to_string()
+    };
+
+    format!(r#"let this_block_internal_voice_id_start = self.next_internal_voice_id;
+'events: loop {{
+    match next_event {{
+        Some(event) if (event.timing() as usize) <= block_start => {{
+            match event {{
+                NoteEvent::NoteOn {{
                     timing,
                     voice_id,
                     channel,
                     note,
                     velocity,
-                } => {
-                    let voice = self.start_voice(context, timing, voice_id, channel, note);
-                    voice.note_freq = util::midi_note_to_freq(note);
-                    voice.velocity = velocity;
-                    voice.releasing = false;
-                }
-                NoteEvent::NoteOff {
+                }} => {{
+{note_on_body}
+                }}
+                NoteEvent::NoteOff {{
                     voice_id,
                     channel,
                     note,
                     ..
-                } => {
+                }} => {{
                     self.start_release_for_voices(voice_id, channel, note);
-                }
-                NoteEvent::Choke {
+                }}
+                NoteEvent::Choke {{
                     timing,
                     voice_id,
                     channel,
                     note,
-                } => {
+                }} => {{
                     self.choke_voices(context, timing, voice_id, channel, note);
-                }
-                NoteEvent::PolyPressure {
+                }}
+                NoteEvent::PolyPressure {{
                     voice_id,
                     note,
                     channel,
                     pressure,
                     ..
-                } => {
+                }} => {{
                     let search_id = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
-                    if let Some(idx) = self.get_voice_idx(search_id) {
-                        if let Some(ref mut voice) = self.voices[idx] {
+                    if let Some(idx) = self.get_voice_idx(search_id) {{
+                        if let Some(ref mut voice) = self.voices[idx] {{
                             voice.pressure = pressure;
-                        }
-                    }
-                }
-                NoteEvent::PolyTuning {
+                        }}
+                    }}
+                }}
+                NoteEvent::PolyTuning {{
                     voice_id,
                     note,
                     channel,
                     tuning,
                     ..
-                } => {
+                }} => {{
                     let search_id = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
-                    if let Some(idx) = self.get_voice_idx(search_id) {
-                        if let Some(ref mut voice) = self.voices[idx] {
+                    if let Some(idx) = self.get_voice_idx(search_id) {{
+                        if let Some(ref mut voice) = self.voices[idx] {{
                             voice.tuning = tuning;
-                        }
-                    }
-                }
-                NoteEvent::PolyBrightness {
+                        }}
+                    }}
+                }}
+                NoteEvent::PolyBrightness {{
                     voice_id,
                     note,
                     channel,
                     brightness,
                     ..
-                } => {
+                }} => {{
                     let search_id = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
-                    if let Some(idx) = self.get_voice_idx(search_id) {
-                        if let Some(ref mut voice) = self.voices[idx] {
+                    if let Some(idx) = self.get_voice_idx(search_id) {{
+                        if let Some(ref mut voice) = self.voices[idx] {{
                             voice.slide = brightness;
-                        }
-                    }
-                }
-                _ => {}
-            }
+                        }}
+                    }}
+                }}
+                _ => {{}}
+            }}
             next_event = context.next_event();
-        }
-        Some(event) if (event.timing() as usize) < block_end => {
+        }}
+        Some(event) if (event.timing() as usize) < block_end => {{
             block_end = event.timing() as usize;
             break 'events;
-        }
+        }}
         _ => break 'events,
-    }
-}
-"#
-        .to_string()
+    }}
+}}
+"#)
 }
 
 /// Generate helper methods for polyphonic voice allocation and release.
@@ -307,7 +331,7 @@ mod tests {
 
     #[test]
     fn polyphonic_event_handler_contains_block_splitting() {
-        let code = generate_polyphonic_event_handler();
+        let code = generate_polyphonic_event_handler(None);
         assert!(code.contains("block_start"));
         assert!(code.contains("block_end"));
         assert!(code.contains("this_block_internal_voice_id_start"));

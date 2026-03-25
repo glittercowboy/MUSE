@@ -1,0 +1,81 @@
+// Unison Synth — a polyphonic synthesizer with 3-voice unison detuning.
+// Demonstrates voice stacking: each note spawns 3 detuned voices for a thick sound.
+
+plugin "Unison Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.unison-synth"
+    description "A polyphonic synthesizer with 3-voice unison detuning"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseUniSyn01___"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 16
+
+  unison {
+    count 3
+    detune 15
+  }
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  param attack: float = 5.0 in 0.5..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param decay: float = 150.0 in 1.0..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param sustain: float = 0.6 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  param release: float = 250.0 in 1.0..10000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param cutoff: float = 3000.0 in 20.0..20000.0 {
+    smoothing logarithmic 15ms
+    unit "Hz"
+  }
+
+  param resonance: float = 0.4 in 0.0..1.0 {
+    smoothing linear 10ms
+  }
+
+  param volume: float = -6.0 in -60.0..0.0 {
+    unit "dB"
+  }
+
+  process {
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    let osc = saw(note.pitch)
+    osc -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(param.volume) -> output
+  }
+
+  test "no note produces silence" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}

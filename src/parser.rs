@@ -1145,6 +1145,42 @@ where
         })
 }
 
+// ── Unison block parser ──────────────────────────────────────
+
+fn unison_block_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    // Parse: unison { count N detune X }
+    // "count" and "detune" are parsed as Ident tokens since they aren't keywords.
+    let count_field = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s == "count")
+        .ignore_then(select! { Token::Number(n) => n }.filter(|n: &String| !n.contains('.')))
+        .map(|n| n.parse::<u32>().unwrap_or(0));
+
+    let detune_field = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s == "detune")
+        .ignore_then(select! { Token::Number(n) => n })
+        .map(|n| n.parse::<f64>().unwrap_or(0.0));
+
+    just(Token::Unison)
+        .ignore_then(just(Token::LBrace))
+        .ignore_then(count_field)
+        .then(detune_field)
+        .then_ignore(just(Token::RBrace))
+        .map_with(|(count, detune_cents), e| {
+            (
+                PluginItem::UnisonDecl(UnisonConfig {
+                    count,
+                    detune_cents,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1159,6 +1195,7 @@ where
         param_decl_parser(),
         midi_decl_parser(),
         voice_config_parser(),
+        unison_block_parser(),
         process_block_parser(),
         test_block_parser(),
     ))

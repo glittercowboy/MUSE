@@ -770,3 +770,96 @@ fn mpe_synth_example_resolves_without_errors() {
     let resolved = resolve_expect_ok(source);
     assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
 }
+
+#[test]
+fn unison_synth_example_resolves_without_errors() {
+    let source = include_str!("../examples/unison_synth.muse");
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
+}
+
+#[test]
+fn unison_requires_voices_declaration() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  input mono
+  output stereo
+  midi {
+    note {
+      let freq = note.pitch
+    }
+  }
+  unison {
+    count 3
+    detune 15
+  }
+  process {
+    sine(note.pitch) -> output
+  }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.message.contains("unison requires")),
+        "Should error about unison requiring voices: {:?}", errors
+    );
+}
+
+#[test]
+fn unison_count_must_be_at_least_two() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  input mono
+  output stereo
+  voices 8
+  midi {
+    note {
+      let freq = note.pitch
+    }
+  }
+  unison {
+    count 1
+    detune 15
+  }
+  process {
+    sine(note.pitch) -> output
+  }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.message.contains("unison count must be at least 2")),
+        "Should error about unison count: {:?}", errors
+    );
+}
+
+#[test]
+fn unison_detune_must_be_positive() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  input mono
+  output stereo
+  voices 8
+  midi {
+    note {
+      let freq = note.pitch
+    }
+  }
+  unison {
+    count 3
+    detune 0
+  }
+  process {
+    sine(note.pitch) -> output
+  }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.message.contains("unison detune must be greater than 0")),
+        "Should error about unison detune: {:?}", errors
+    );
+}

@@ -65,6 +65,8 @@ struct Resolver<'a> {
     has_midi_decl: bool,
     /// Whether a voice declaration was seen already
     seen_voice_decl: bool,
+    /// Whether a unison declaration was seen already
+    seen_unison_decl: bool,
     /// let-binding scope: name → resolved DspType
     scope: HashMap<String, DspType>,
     /// Span → DspType map (the output)
@@ -85,6 +87,7 @@ impl<'a> Resolver<'a> {
             has_midi_note: false,
             has_midi_decl: false,
             seen_voice_decl: false,
+            seen_unison_decl: false,
             scope: HashMap::new(),
             type_map: HashMap::new(),
             diagnostics: Vec::new(),
@@ -120,8 +123,14 @@ impl<'a> Resolver<'a> {
 
         // Phase 2: validate plugin-level declarations that depend on full plugin context
         for (item, _span) in &plugin.items {
-            if let PluginItem::VoiceDecl(voice) = item {
-                self.validate_voice_decl(voice);
+            match item {
+                PluginItem::VoiceDecl(voice) => {
+                    self.validate_voice_decl(voice);
+                }
+                PluginItem::UnisonDecl(unison) => {
+                    self.validate_unison_decl(unison, plugin);
+                }
+                _ => {}
             }
         }
 
@@ -184,6 +193,59 @@ impl<'a> Resolver<'a> {
                 .with_suggestion("Choose a voice count in the range 1..=128."),
             );
         }
+    }
+
+    fn validate_unison_decl(&mut self, unison: &UnisonConfig, _plugin: &PluginDef) {
+        if self.seen_unison_decl {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    unison.span,
+                    "duplicate unison declaration — only one `unison` block is allowed",
+                )
+                .with_suggestion("Remove the extra `unison` block from the plugin body."),
+            );
+            return;
+        }
+        self.seen_unison_decl = true;
+
+        // Unison requires voices declaration
+        if !self.seen_voice_decl {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    unison.span,
+                    "unison requires a `voices` declaration — unison is only valid for polyphonic instruments",
+                )
+                .with_suggestion("Add a `voices N` declaration before the `unison` block."),
+            );
+        }
+
+        if unison.count < 2 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    unison.span,
+                    format!("unison count must be at least 2, got {}", unison.count),
+                )
+                .with_suggestion("Set unison count to 2 or more."),
+            );
+        }
+
+        if unison.detune_cents <= 0.0 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E010",
+                    unison.span,
+                    format!("unison detune must be greater than 0, got {}", unison.detune_cents),
+                )
+                .with_suggestion("Set detune to a positive value in cents (e.g. 15)."),
+            );
+        }
+
+        // Note: we intentionally don't warn if voices < unison count here
+        // because the diagnostic system treats all diagnostics as errors.
+        // The user is responsible for sizing the voice pool appropriately.
     }
 
     // ── Statement resolution ─────────────────────────────────

@@ -466,3 +466,25 @@ fn mpe_synth_cargo_check() {
 
     assert_cargo_check(&crate_dir);
 }
+
+#[test]
+fn unison_synth_cargo_check() {
+    let source = include_str!("../examples/unison_synth.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-unison-synth");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+
+    // Verify UNISON_MAX constant
+    assert!(lib_rs.contains("const UNISON_MAX: i32 = 16;"), "Should have UNISON_MAX constant");
+
+    // Verify unison voice allocation in NoteOn
+    assert!(lib_rs.contains("detuned_freq"), "NoteOn should compute detuned frequencies");
+    assert!(lib_rs.contains("unison_vid"), "NoteOn should derive unison voice IDs");
+    assert!(lib_rs.contains("UNISON_MAX"), "NoteOn should use UNISON_MAX for voice ID derivation");
+
+    assert_cargo_check(&crate_dir);
+}

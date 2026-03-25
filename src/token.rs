@@ -98,6 +98,8 @@ pub enum Token {
     Voice,
     #[token("poly")]
     Poly,
+    #[token("unison")]
+    Unison,
     #[token("sample")]
     Sample,
     #[token("import")]
@@ -267,6 +269,7 @@ impl fmt::Display for Token {
             Token::Utility => write!(f, "utility"),
             Token::Voice => write!(f, "voices"),
             Token::Poly => write!(f, "poly"),
+            Token::Unison => write!(f, "unison"),
             Token::Sample => write!(f, "sample"),
             Token::Import => write!(f, "import"),
             Token::Test => write!(f, "test"),

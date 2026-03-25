@@ -1073,3 +1073,67 @@ fn test_block_negative_value() {
         other => panic!("Expected Assert, got {:?}", other),
     }
 }
+
+#[test]
+fn parse_unison_block() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input mono
+        output stereo
+        voices 8
+        unison {
+            count 3
+            detune 15
+        }
+        midi {
+            note {
+                let freq = note.pitch
+            }
+        }
+        process { input -> output }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let unison = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::UnisonDecl(u) = item { Some(u) } else { None }
+    });
+
+    let unison = unison.expect("Should have a UnisonDecl item");
+    assert_eq!(unison.count, 3);
+    assert!((unison.detune_cents - 15.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn parse_unison_block_float_detune() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input mono
+        output stereo
+        voices 8
+        unison {
+            count 4
+            detune 7.5
+        }
+        midi {
+            note {
+                let freq = note.pitch
+            }
+        }
+        process { input -> output }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let unison = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::UnisonDecl(u) = item { Some(u) } else { None }
+    }).expect("Should have a UnisonDecl item");
+    assert_eq!(unison.count, 4);
+    assert!((unison.detune_cents - 7.5).abs() < f64::EPSILON);
+}

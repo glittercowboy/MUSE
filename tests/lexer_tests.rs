@@ -347,3 +347,13 @@ fn test_spans_are_correct() {
     assert_eq!(span2.clone(), 7..12);
     assert_eq!(&source[span2.clone()], "param");
 }
+
+#[test]
+fn test_unison_keyword() {
+    let tokens: Vec<_> = lex("unison")
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .map(|(t, _)| t)
+        .collect();
+    assert_eq!(tokens, vec![Token::Unison]);
+}
