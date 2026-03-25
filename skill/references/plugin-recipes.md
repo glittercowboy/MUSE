@@ -364,12 +364,288 @@ plugin "Velvet Tremolo" {
 
 ---
 
+## Recipe 6: Distortion (Wavefold + Bitcrush)
+
+A digital distortion effect — demonstrates `fold` and `bitcrush` primitives in a chain.
+
+**Pattern:** `input -> fold(drive) -> bitcrush(bits) -> gain(mix) -> output`
+
+**Source:** `examples/distortion.muse`
+
+```muse
+plugin "Crunch Box" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.crunch-box"
+    description "A crunchy digital distortion effect"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseCrunchBox1"
+    subcategories   [Fx, Distortion]
+  }
+
+  input  stereo
+  output stereo
+
+  param drive: float = 3.0 in 1.0..10.0 {
+    smoothing logarithmic 50ms
+  }
+
+  param bits: float = 8.0 in 1.0..16.0 {
+    smoothing logarithmic 50ms
+  }
+
+  param mix_amt: float = 0.5 in 0.0..1.0 {
+    smoothing linear 10ms
+  }
+
+  process {
+    input -> fold(param.drive) -> bitcrush(param.bits) -> gain(param.mix_amt) -> output
+  }
+
+  test "signal passes through with content" {
+    input  sine 440Hz 1024 samples
+    set    param.drive = 3.0
+    set    param.bits = 8.0
+    set    param.mix_amt = 1.0
+    assert output.peak > 0.0
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `fold(amount)` applies sine wavefold distortion — higher values = more aggressive folding
+- `bitcrush(bits)` reduces bit depth — 16 = transparent, 4 = crunchy, 1 = extreme
+- Both are stateless inline processors — no state management needed
+- Chain order matters: fold then bitcrush sounds different from bitcrush then fold
+
+---
+
+## Recipe 7: Chorus Effect
+
+A modulated delay chorus — demonstrates the `chorus` primitive.
+
+**Pattern:** `input -> chorus(rate, depth) -> output`
+
+**Source:** `examples/chorus_effect.muse`
+
+```muse
+plugin "Silk Chorus" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.silk-chorus"
+    description "A silky smooth chorus effect"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseSilkChrs1"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param rate: float = 1.5 in 0.1..10.0 {
+    smoothing linear 5ms
+    unit "Hz"
+  }
+
+  param depth: float = 0.4 in 0.0..1.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    input -> chorus(param.rate, param.depth) -> output
+  }
+
+  test "chorus produces output" {
+    input  sine 440Hz 1024 samples
+    set    param.rate = 1.5
+    set    param.depth = 0.4
+    assert output.peak > 0.0
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `chorus(rate, depth)` is a single-primitive effect with an internal modulated delay line
+- `rate` controls LFO speed in Hz, `depth` controls modulation amount (0.0–1.0)
+- Each call site maintains its own delay buffer and LFO phase
+- For more control, use `lfo()` + manual delay modulation (see Recipe 5 for the LFO pattern)
+
+---
+
+## Recipe 8: Dynamics (Compressor)
+
+A dynamics compressor — demonstrates the `compressor` primitive.
+
+**Pattern:** `input -> compressor(threshold, ratio) -> output`
+
+**Source:** `examples/dynamics.muse`
+
+```muse
+plugin "Smooth Comp" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.smooth-comp"
+    description "A smooth dynamics compressor"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseSmoothCmp1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param threshold: float = 0.5 in 0.01..1.0 {
+    smoothing logarithmic 10ms
+  }
+
+  param ratio: float = 4.0 in 1.0..20.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    input -> compressor(param.threshold, param.ratio) -> output
+  }
+
+  test "compressor reduces peaks" {
+    input  sine 440Hz 1024 samples
+    set    param.threshold = 0.3
+    set    param.ratio = 8.0
+    assert output.peak > 0.0
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `compressor(threshold, ratio)` — threshold is linear gain (0.0–1.0), NOT dB
+- Ratio is compression ratio: 4.0 means 4:1 compression above threshold
+- Attack (~10ms) and release (~100ms) are fixed internally
+- Each call site maintains its own envelope follower state
+- Commonly followed by `gain()` for makeup gain
+
+---
+
+## Recipe 9: Pulse Wave Synth
+
+A MIDI synthesizer using a pulse oscillator — demonstrates `pulse` with variable width.
+
+**Pattern:** `pulse(pitch, width) -> gain(envelope) -> output`
+
+**Source:** `examples/pulse_synth.muse`
+
+```muse
+plugin "Pulse Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.pulse-synth"
+    description "A pulse wave synthesizer"
+    features    [instrument, synthesizer, stereo]
+  }
+
+  vst3 {
+    id              "MusePulseSyn01"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+
+  midi {
+    note {
+      let freq = note.pitch
+      let gate = note.gate
+    }
+  }
+
+  param width: float = 0.3 in 0.01..0.99 {
+    smoothing logarithmic 50ms
+  }
+
+  param attack: float = 5.0 in 0.5..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param decay: float = 100.0 in 1.0..5000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  param sustain: float = 0.7 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  param release: float = 200.0 in 1.0..10000.0 {
+    smoothing linear 5ms
+    unit "ms"
+  }
+
+  process {
+    let osc = pulse(note.pitch, param.width)
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    osc -> gain(env) -> output
+  }
+
+  test "no note produces silence" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `pulse(freq, width)` — width controls duty cycle: 0.5 = square wave, 0.1 = narrow pulse, 0.9 = wide pulse
+- Width as a parameter gives real-time timbral control (pulse width modulation)
+- Same instrument pattern as Recipe 3 (Synth): `midi` block + `category instrument` + envelope
+- Instrument test blocks can only test silence (no MIDI events in test blocks)
+
+---
+
 ## Choosing a Pattern
 
 | I want to... | Use recipe |
 |---|---|
 | Process audio with a simple effect | Recipe 1 (Gain) |
 | Add conditional processing paths | Recipe 2 (Filter) |
-| Build an instrument that responds to MIDI | Recipe 3 (Synth) |
+| Build an instrument that responds to MIDI | Recipe 3 (Synth) or Recipe 9 (Pulse Synth) |
 | Process different frequency bands independently | Recipe 4 (Multiband) |
-| Add time-varying modulation (tremolo, vibrato, chorus) | Recipe 5 (Tremolo) |
+| Add time-varying modulation (tremolo, vibrato) | Recipe 5 (Tremolo) |
+| Add distortion or lo-fi effects | Recipe 6 (Distortion) |
+| Add chorus/detuning | Recipe 7 (Chorus) |
+| Control dynamics (compression) | Recipe 8 (Dynamics) |
+| Build a synth with timbral control | Recipe 9 (Pulse Synth) |

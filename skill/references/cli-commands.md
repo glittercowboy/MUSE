@@ -131,8 +131,20 @@ muse build <file> [--output-dir <dir>] [--format json]
 {
   "status": "ok",
   "plugin_name": "Warm Gain",
-  "clap_bundle": "/path/to/Warm Gain.clap",
-  "vst3_bundle": "/path/to/Warm Gain.vst3"
+  "package_name": "warm-gain",
+  "phases": {
+    "compile": { "duration_ms": 0 },
+    "cargo_build": { "duration_ms": 8200 },
+    "clap_bundle": { "duration_ms": 0 },
+    "vst3_bundle": { "duration_ms": 0 },
+    "codesign_clap": { "duration_ms": 25 },
+    "codesign_vst3": { "duration_ms": 15 }
+  },
+  "artifacts": {
+    "clap": { "path": "Warm Gain.clap", "size_bytes": 1440912 },
+    "vst3": { "path": "Warm Gain.vst3", "size_bytes": 1440896 },
+    "crate_dir": "/path/to/warm-gain"
+  }
 }
 ```
 

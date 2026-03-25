@@ -19,7 +19,7 @@ Extract from the user's description:
   - On/off toggles → `bool`
   - Mode selectors → `enum [option1, option2, ...]`
   - Stepped values → `int` with min..max range
-- **DSP behavior** — what the plugin does to audio. Identify which DSP primitives are needed from the 16 available functions.
+- **DSP behavior** — what the plugin does to audio. Identify which DSP primitives are needed from the 23 available functions.
 
 If the user says "tremolo with rate and depth", that maps to:
 - Category: `effect`
@@ -34,8 +34,12 @@ Select the closest recipe from plugin-recipes.md:
 |---|---|
 | Simple one-knob effect | Recipe 1 (Gain) — `input -> dsp(param) -> output` |
 | Multi-stage effect with conditionals | Recipe 2 (Filter) — `let` bindings + `if` expressions |
-| MIDI instrument / synthesizer | Recipe 3 (Synth) — `midi { note { ... } }` + oscillators + envelopes |
+| MIDI instrument / synthesizer | Recipe 3 (Synth) or Recipe 9 (Pulse Synth) — `midi { note { ... } }` + oscillators + envelopes |
 | Multiband or parallel processing | Recipe 4 (Multiband) — `split { ... } -> merge` |
+| Modulation effects (tremolo, vibrato) | Recipe 5 (Tremolo) — LFO modulating gain |
+| Distortion / lo-fi effects | Recipe 6 (Distortion) — `fold` + `bitcrush` chain |
+| Chorus / detuning effects | Recipe 7 (Chorus) — `chorus(rate, depth)` |
+| Dynamics / compression | Recipe 8 (Dynamics) — `compressor(threshold, ratio)` |
 
 Copy the recipe's structure as your starting skeleton. Modify the metadata, params, process block, and tests.
 
