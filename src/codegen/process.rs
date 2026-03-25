@@ -455,6 +455,8 @@ fn biquad_state_field(
         } else {
             format!("self.split{}_branch{}_biquad[channel_idx]", split_id, branch_idx)
         }
+    } else if ctx.is_polyphonic {
+        "voice.biquad_state".to_string()
     } else if ctx.is_instrument {
         "self.biquad_state[0]".to_string()
     } else {

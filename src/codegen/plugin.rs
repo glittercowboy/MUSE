@@ -67,7 +67,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
 
     out.push_str(&format!("struct {} {{\n", info.struct_name));
     out.push_str("    params: Arc<PluginParams>,\n");
-    if needs_top_level_biquad {
+    if needs_top_level_biquad && !is_polyphonic {
         out.push_str(&format!("    biquad_state: [BiquadState; {}],\n", num_channels));
     }
     for &(split_id, branch_idx) in &branch_biquad_fields {
@@ -109,7 +109,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
         "impl Default for {} {{\n    fn default() -> Self {{\n        Self {{\n            params: Arc::new(PluginParams::default()),\n",
         info.struct_name
     ));
-    if needs_top_level_biquad {
+    if needs_top_level_biquad && !is_polyphonic {
         out.push_str(&format!("            biquad_state: [BiquadState::default(); {}],\n", num_channels));
     }
     for &(split_id, branch_idx) in &branch_biquad_fields {
@@ -191,6 +191,11 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     out.push_str("    tuning: f32,\n");
     out.push_str("    slide: f32,\n");
     out.push_str("    releasing: bool,\n");
+    // Per-voice filter state (if any filters are used)
+    let has_filters = process_info.used_primitives.iter().any(|p| matches!(p, DspPrimitive::Filter(_)));
+    if has_filters {
+        out.push_str("    biquad_state: BiquadState,\n");
+    }
     for i in 0..process_info.oscillator_count {
         out.push_str(&format!("    osc_state_{}: OscState,\n", i));
     }
@@ -209,6 +214,10 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
 
 fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     let mut fields = Vec::new();
+    let has_filters = process_info.used_primitives.iter().any(|p| matches!(p, DspPrimitive::Filter(_)));
+    if has_filters {
+        fields.push("biquad_state: BiquadState::default()".to_string());
+    }
     for i in 0..process_info.oscillator_count {
         fields.push(format!("osc_state_{}: OscState::default()", i));
     }
