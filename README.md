@@ -111,13 +111,14 @@ cp -R "./build/Warm Gain.clap" ~/Library/Audio/Plug-Ins/CLAP/
 
 ## Built-in DSP
 
-17 primitives — oscillators, filters, envelopes, and utilities:
+23 primitives — oscillators, filters, envelopes, dynamics, modulation, and utilities:
 
 ```
-sine  saw  square  triangle  noise
+sine  saw  square  triangle  noise  pulse  lfo
 lowpass  highpass  bandpass  notch
 adsr  ar
-gain  pan  delay  mix  clip  tanh
+gain  pan  delay  mix  clip  tanh  fold  bitcrush
+chorus  compressor
 ```
 
 Numbers carry domain types. The compiler won't let you pass milliseconds where Hertz belong:
@@ -129,7 +130,7 @@ lowpass(500Hz)  // correct
 
 ## Examples
 
-Five working plugins in [`examples/`](examples/):
+Nine working plugins in [`examples/`](examples/):
 
 | Plugin | What it does |
 |--------|-------------|
@@ -138,6 +139,10 @@ Five working plugins in [`examples/`](examples/):
 | [synth.muse](examples/synth.muse) | Subtractive MIDI synthesizer |
 | [multiband.muse](examples/multiband.muse) | Three-band parallel processor |
 | [tremolo.muse](examples/tremolo.muse) | LFO amplitude modulation |
+| [distortion.muse](examples/distortion.muse) | Wavefolder + bitcrusher |
+| [chorus_effect.muse](examples/chorus_effect.muse) | Modulated delay chorus |
+| [dynamics.muse](examples/dynamics.muse) | Compressor with threshold and ratio |
+| [pulse_synth.muse](examples/pulse_synth.muse) | Pulse wave MIDI synthesizer |
 
 Every example compiles to a real plugin binary. Every example has test blocks that pass.
 
@@ -154,7 +159,7 @@ Every example compiles to a real plugin binary. Every example has test blocks th
 
 The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-227 tests. Zero clippy warnings.
+243 tests. Zero clippy warnings.
 
 ## AI Skill File
 
@@ -162,7 +167,7 @@ Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write p
 
 ## What's Next
 
-Expanded DSP (dynamics, delay lines, EQ), declarative GUI system, polyphony, cross-platform builds.
+Polyphony (voice allocation, voice stealing), declarative GUI system, expanded test assertions (FFT, MIDI injection), presets, cross-platform builds.
 
 ## Requirements
 
