@@ -8,15 +8,21 @@ use super::host_plugin::HostPlugin;
 use super::midi::MidiEvent;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream, StreamConfig};
+use rtrb::Consumer;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 /// Shared plugin slot. `None` during hot-swap (outputs silence).
 pub type PluginSlot = Arc<Mutex<Option<HostPlugin>>>;
 
+/// Shared input consumer slot. `None` when no audio input is active.
+/// Can be set after AudioHost starts (e.g. once the device sample rate is known).
+type InputSlot = Arc<Mutex<Option<Consumer<f32>>>>;
+
 /// Manages the CPAL audio stream and the shared plugin reference.
 pub struct AudioHost {
     plugin_slot: PluginSlot,
+    input_slot: InputSlot,
     _stream: Stream,
     sample_rate: f32,
     num_channels: u16,
@@ -30,6 +36,9 @@ impl AudioHost {
     ///
     /// If `midi_rx` is provided, MIDI events are drained each callback and
     /// forwarded to the plugin via `note_on`/`note_off` before `process()`.
+    ///
+    /// Audio input is initially silent. Call `set_input_consumer()` after
+    /// construction to route captured audio into the plugin's input buffers.
     pub fn start(
         initial_plugin: Option<HostPlugin>,
         midi_rx: Option<mpsc::Receiver<MidiEvent>>,
@@ -59,12 +68,14 @@ impl AudioHost {
         let num_channels = device_channels;
         let midi_rx = midi_rx.map(|rx| Arc::new(Mutex::new(rx)));
         let midi_rx_clone = midi_rx.clone();
+        let input_slot: InputSlot = Arc::new(Mutex::new(None));
+        let input_slot_clone = Arc::clone(&input_slot);
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                    audio_callback(data, num_channels, &slot_clone, &midi_rx_clone);
+                    audio_callback(data, num_channels, &slot_clone, &midi_rx_clone, &input_slot_clone);
                 },
                 |err| {
                     eprintln!("[muse preview] audio stream error: {err}");
@@ -84,6 +95,7 @@ impl AudioHost {
 
         Ok(Self {
             plugin_slot,
+            input_slot,
             _stream: stream,
             sample_rate: sample_rate as f32,
             num_channels: device_channels,
@@ -98,6 +110,18 @@ impl AudioHost {
     /// The number of output channels.
     pub fn num_channels(&self) -> u16 {
         self.num_channels
+    }
+
+    /// Set the audio input consumer for effect plugin input.
+    ///
+    /// The Consumer feeds captured audio (interleaved stereo f32) into the
+    /// plugin's input buffers. Call this after construction once the input
+    /// source is started at the correct sample rate.
+    ///
+    /// Pass `None` to revert to silence input.
+    pub fn set_input_consumer(&self, consumer: Option<Consumer<f32>>) {
+        let mut slot = self.input_slot.lock().unwrap();
+        *slot = consumer;
     }
 
     /// Hot-swap the loaded plugin.
@@ -132,11 +156,15 @@ impl AudioHost {
 ///
 /// If a MIDI receiver is provided, pending events are drained and forwarded to
 /// the plugin via `note_on`/`note_off` BEFORE `process()` is called.
+///
+/// If an input consumer is available, captured audio is read from the ring buffer
+/// into the plugin's input buffers. On underrun, input buffers stay silent.
 fn audio_callback(
     data: &mut [f32],
     device_channels: u16,
     slot: &PluginSlot,
     midi_rx: &Option<Arc<Mutex<mpsc::Receiver<MidiEvent>>>>,
+    input_slot: &InputSlot,
 ) {
     let num_device_ch = device_channels as usize;
     if num_device_ch == 0 {
@@ -187,19 +215,36 @@ fn audio_callback(
     let plugin_channels = plugin.num_channels() as usize;
 
     // Allocate de-interleaved buffers for the plugin.
-    // For effect plugins, we'd fill inputs from a source — but for preview
-    // we generate silence as input and let the plugin's process block produce output.
-    // (Instruments ignore input; effects pass through.)
-    let input_bufs: Vec<Vec<f32>> = (0..plugin_channels)
+    // For effect plugins with an input consumer, fill from the ring buffer.
+    // Otherwise (instruments, or no input source), use silence.
+    let mut input_bufs: Vec<Vec<f32>> = (0..plugin_channels)
         .map(|_| vec![0.0; num_frames])
         .collect();
     let mut output_bufs: Vec<Vec<f32>> = (0..plugin_channels)
         .map(|_| vec![0.0; num_frames])
         .collect();
 
-    // For effect plugins, copy interleaved device input into de-interleaved plugin input.
-    // (In preview mode we currently feed silence — a future version could route device input.)
-    // For now: output_bufs are pre-zeroed, plugin writes into them.
+    // Read captured audio from the ring buffer into input buffers.
+    // The ring buffer contains interleaved stereo f32: [L0, R0, L1, R1, ...].
+    // On underrun (empty buffer), samples stay 0.0 (silence).
+    if let Ok(mut input_guard) = input_slot.try_lock() {
+        if let Some(consumer) = input_guard.as_mut() {
+            for frame in 0..num_frames {
+                // Try to read a stereo pair from the ring buffer.
+                let left = consumer.pop().unwrap_or(0.0);
+                let right = consumer.pop().unwrap_or(0.0);
+
+                // Distribute to plugin channels.
+                if plugin_channels >= 1 {
+                    input_bufs[0][frame] = left;
+                }
+                if plugin_channels >= 2 {
+                    input_bufs[1][frame] = right;
+                }
+                // >2 plugin channels: extra channels stay silent.
+            }
+        }
+    }
 
     // Build slice references the plugin expects.
     let input_refs: Vec<&[f32]> = input_bufs.iter().map(|b| b.as_slice()).collect();

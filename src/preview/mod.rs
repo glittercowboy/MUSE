@@ -17,3 +17,6 @@ pub mod reload;
 
 #[cfg(target_os = "macos")]
 pub mod midi;
+
+#[cfg(target_os = "macos")]
+pub mod input;

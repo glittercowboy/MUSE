@@ -5,7 +5,7 @@
 //!   muse build <file> [--output-dir <dir>] [--format json]
 //!   muse check <file> [--format json]
 //!   muse test <file> [--output-dir <dir>] [--format json]
-//!   muse preview <file> [--format json] [--midi-port <name|list>]
+//!   muse preview <file> [--format json] [--midi-port <name|list>] [--input <source>]
 //!
 //! Exit codes:
 //!   0 — success
@@ -19,7 +19,37 @@ use std::time::Instant;
 use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
 
 #[cfg(target_os = "macos")]
-use muse_lang::preview::{audio::AudioHost, midi, reload::ReloadPipeline, watcher::FileWatcher};
+use muse_lang::preview::{audio::AudioHost, input, midi, reload::ReloadPipeline, watcher::FileWatcher};
+
+/// Parsed `--input` flag value.
+#[derive(Debug, Clone)]
+enum InputSource {
+    /// No audio input — plugin receives silence (default for instruments).
+    Silence,
+    /// Microphone capture via CPAL input stream.
+    Mic,
+    /// WAV file playback.
+    File(PathBuf),
+}
+
+impl InputSource {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "silence" => Ok(InputSource::Silence),
+            "mic" => Ok(InputSource::Mic),
+            s if s.starts_with("file:") => {
+                let path = &s[5..];
+                if path.is_empty() {
+                    return Err("--input file: requires a path (e.g. --input file:test.wav)".into());
+                }
+                Ok(InputSource::File(PathBuf::from(path)))
+            }
+            other => Err(format!(
+                "unknown input source '{other}'. Expected: silence, mic, or file:<path>"
+            )),
+        }
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -916,6 +946,7 @@ struct PreviewOpts {
     file: PathBuf,
     json_format: bool,
     midi_port: Option<String>,
+    input_source: InputSource,
 }
 
 fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
@@ -926,6 +957,7 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
     let mut file: Option<PathBuf> = None;
     let mut json_format = false;
     let mut midi_port: Option<String> = None;
+    let mut input_source = InputSource::Silence;
 
     let mut i = 0;
     while i < args.len() {
@@ -947,13 +979,12 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
                 }
                 midi_port = Some(args[i].clone());
             }
-            // Stub: --input flag for future S02/S03 (audio input routing)
             "--input" => {
                 i += 1;
                 if i >= args.len() {
                     return Err("--input requires a value".into());
                 }
-                eprintln!("[muse preview] --input not yet implemented, ignoring");
+                input_source = InputSource::parse(&args[i])?;
             }
             arg if arg.starts_with('-') => {
                 return Err(format!("unknown option '{arg}'"));
@@ -974,6 +1005,7 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
         file,
         json_format,
         midi_port,
+        input_source,
     })
 }
 
@@ -1090,6 +1122,38 @@ fn cmd_preview(args: &[String]) {
             }
         }
     }
+
+    // Start audio input source for effect plugins (after device rate is known).
+    // Instruments generate audio from MIDI — no input routing needed.
+    // _audio_input must live until the end of the function to keep the stream alive.
+    let _audio_input = if !is_instrument {
+        match &opts.input_source {
+            InputSource::Silence => None,
+            InputSource::Mic => {
+                match input::start_mic_input(device_rate as u32) {
+                    Ok(Some((audio_input, consumer))) => {
+                        audio_host.set_input_consumer(Some(consumer));
+                        Some(audio_input)
+                    }
+                    Ok(None) => None, // fallback to silence (warnings already printed)
+                    Err(e) => {
+                        eprintln!("[muse preview] warning: {e}");
+                        None
+                    }
+                }
+            }
+            InputSource::File(_path) => {
+                // T02 implements file playback
+                eprintln!("[muse preview] --input file:<path> is not yet implemented, using silence");
+                None
+            }
+        }
+    } else {
+        if matches!(opts.input_source, InputSource::Mic | InputSource::File(_)) {
+            eprintln!("[muse preview] --input ignored: plugin is an instrument (uses MIDI)");
+        }
+        None
+    };
 
     if opts.json_format {
         let json = serde_json::json!({
@@ -1213,14 +1277,14 @@ fn print_usage() {
     eprintln!("  muse build <file> [--output-dir <dir>] [--format json]");
     eprintln!("  muse check <file> [--format json]");
     eprintln!("  muse test <file> [--output-dir <dir>] [--format json]");
-    eprintln!("  muse preview <file> [--format json] [--midi-port <name|list>]");
+    eprintln!("  muse preview <file> [--format json] [--midi-port <name|list>] [--input <source>]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compile    Parse, resolve, and generate a Rust/nih-plug crate from a .muse file");
     eprintln!("  build      Compile, build, bundle (CLAP + VST3), and codesign a .muse plugin");
     eprintln!("  check      Parse and resolve a .muse file, reporting any errors");
     eprintln!("  test       Compile and run in-language test blocks, reporting pass/fail results");
-    eprintln!("  preview    Open a native preview window showing the plugin GUI (macOS only)");
+    eprintln!("  preview    Live audio preview with hot-reload (macOS only)");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --output-dir <dir>  Directory to place generated crate/bundles (default: current dir)");
@@ -1229,6 +1293,7 @@ fn print_usage() {
     eprintln!("  --release           Build in release mode (default: debug)");
     eprintln!("  --midi-port <name>  Connect to a specific MIDI input port (preview only)");
     eprintln!("  --midi-port list    List available MIDI input ports and exit");
+    eprintln!("  --input <source>    Audio input for effect preview: silence (default), mic, file:<path>");
     eprintln!();
     eprintln!("Exit codes:");
     eprintln!("  0  Success");
