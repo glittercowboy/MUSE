@@ -16,7 +16,9 @@ plugin "Name" {
   // metadata: vendor, version, url, email, category
   // format blocks: clap { ... }, vst3 { ... }
   // I/O: input stereo, output stereo
-  // midi { note { ... } cc N { ... } }    (instruments only)
+  // voices N                                (polyphony, instruments only)
+  // unison { count N detune X }             (voice stacking, requires voices)
+  // midi { note { ... } cc N { ... } }      (instruments only)
   // param name: type = default in min..max { smoothing/unit/display }
   // process { signal chain }
   // test "name" { input/set/assert }
@@ -39,7 +41,9 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 - **Unit suffixes on numbers:** `440Hz`, `50ms`, `0.5s`, `-12dB`, `50%`, `2st`. No space between number and suffix.
 - **`->` is lowest precedence.** Arithmetic binds tighter than signal chains.
 - **`split`/`merge` must pair.** Every `split { ... }` needs a `-> merge` in the same chain.
-- **Instruments need a `midi` block** with `note { ... }` to receive MIDI. Implicit bindings: `note.pitch`, `note.velocity`, `note.gate`.
+- **Instruments need a `midi` block** with `note { ... }` to receive MIDI. Implicit bindings: `note.pitch`, `note.velocity`, `note.gate`, `note.pressure`, `note.bend`, `note.slide`.
+- **`voices N` enables polyphony.** Process block runs per-voice. All DSP state is automatically per-voice. Requires `midi` block.
+- **`unison { count N detune X }` stacks voices.** Each note spawns N detuned voices. Requires `voices`.
 - **Process block implicit bindings:** `input`, `output`, `sample_rate`.
 
 ## Known Limitations
@@ -47,7 +51,7 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 - **No MIDI test events.** Test blocks cannot inject `note_on`/`note_off` — you cannot test instrument plugins via test blocks. Use `assert output.rms < -120dB` for silence tests on instruments.
 - **macOS only.** The build pipeline (`muse build`) produces macOS CLAP + VST3 bundles. No Linux or Windows support.
 - **No GUI.** Plugins get the host's generic parameter UI. No custom editor/view support.
-- **No polyphony.** Instrument plugins are monophonic (one voice). Polyphony is planned.
+- **Polyphony is per-voice mono.** Each voice outputs mono, summed to the output bus. No per-voice stereo panning yet.
 - **Avoid Rust reserved words as variable names.** Don't use `mod`, `fn`, `type`, etc. as `let` binding names in process blocks — they'll break the generated Rust code.
 
 ## CLI Quick Reference

@@ -40,6 +40,9 @@ Select the closest recipe from plugin-recipes.md:
 | Distortion / lo-fi effects | Recipe 6 (Distortion) — `fold` + `bitcrush` chain |
 | Chorus / detuning effects | Recipe 7 (Chorus) — `chorus(rate, depth)` |
 | Dynamics / compression | Recipe 8 (Dynamics) — `compressor(threshold, ratio)` |
+| Polyphonic instrument (chords) | Recipe 10 (Poly Synth) — add `voices 8` |
+| MPE-enabled instrument | Recipe 11 (MPE Synth) — `note.pressure`/`bend`/`slide` |
+| Thick unison sound | Recipe 12 (Unison Synth) — `unison { count 3 detune 15 }` |
 
 Copy the recipe's structure as your starting skeleton. Modify the metadata, params, process block, and tests.
 

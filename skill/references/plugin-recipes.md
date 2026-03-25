@@ -636,16 +636,233 @@ plugin "Pulse Synth" {
 
 ---
 
+## Recipe 10: Polyphonic Synth
+
+An 8-voice polyphonic subtractive synth — demonstrates `voices N` for polyphony.
+
+**Pattern:** `voices N` + same process block as mono (DSP state is automatically per-voice)
+
+**Source:** `examples/poly_synth.muse`
+
+```muse
+plugin "Poly Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.poly-synth"
+    description "An 8-voice polyphonic subtractive synthesizer"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MusePolySyn01"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  param attack: float = 10.0 in 0.5..5000.0 { smoothing linear 5ms  unit "ms" }
+  param decay: float = 200.0 in 1.0..5000.0 { smoothing linear 5ms  unit "ms" }
+  param sustain: float = 0.7 in 0.0..1.0 { display "percentage" }
+  param release: float = 300.0 in 1.0..10000.0 { smoothing linear 5ms  unit "ms" }
+  param cutoff: float = 4000.0 in 20.0..20000.0 { smoothing logarithmic 15ms  unit "Hz" }
+  param resonance: float = 0.3 in 0.0..1.0 { smoothing linear 10ms }
+  param osc_mix: float = 0.5 in 0.0..1.0 { display "percentage" }
+  param volume: float = -6.0 in -60.0..0.0 { unit "dB" }
+
+  process {
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    let osc1 = saw(note.pitch)
+    let osc2 = square(note.pitch)
+    let tone = mix(osc1, osc2) -> gain(param.osc_mix)
+    tone -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(param.volume) -> output
+  }
+
+  test "no note produces silence" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `voices 8` is the only addition vs a mono synth — everything else is identical
+- The process block runs per-voice automatically. Each voice gets its own oscillators, filter, and envelope.
+- Oldest-voice stealing when all 8 voices are in use
+- Voice count 1–128, requires `midi` block
+- Instrument test blocks can only test silence (no MIDI events in test blocks)
+
+---
+
+## Recipe 11: MPE Synth
+
+An MPE-enabled polyphonic synth — demonstrates per-note expression (pressure, bend, slide).
+
+**Pattern:** `voices N` + `note.pressure`/`note.bend`/`note.slide` in the process block
+
+**Source:** `examples/mpe_synth.muse`
+
+```muse
+plugin "MPE Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.mpe-synth"
+    description "An 8-voice MPE-enabled polyphonic synthesizer"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseMpeSyn01_"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel = note.velocity
+      let gate = note.gate
+      let press = note.pressure
+      let bend = note.bend
+      let brightness = note.slide
+    }
+  }
+
+  param attack: float = 10.0 in 0.5..5000.0 { smoothing linear 5ms  unit "ms" }
+  param decay: float = 200.0 in 1.0..5000.0 { smoothing linear 5ms  unit "ms" }
+  param sustain: float = 0.7 in 0.0..1.0 { display "percentage" }
+  param release: float = 300.0 in 1.0..10000.0 { smoothing linear 5ms  unit "ms" }
+  param cutoff: float = 4000.0 in 20.0..20000.0 { smoothing logarithmic 15ms  unit "Hz" }
+  param resonance: float = 0.3 in 0.0..1.0 { smoothing linear 10ms }
+  param volume: float = -6.0 in -60.0..0.0 { unit "dB" }
+
+  process {
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    let osc = saw(note.pitch)
+    let pressure_gain = note.pressure * 0.5 + 0.5
+    osc -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(pressure_gain) -> gain(param.volume) -> output
+  }
+
+  test "no note produces silence" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `note.pressure` — per-note aftertouch (0.0–1.0), from MPE PolyPressure events
+- `note.bend` — per-note pitch bend in semitones, from MPE PolyTuning events
+- `note.slide` — per-note slide/brightness (0.0–1.0), from MPE PolyBrightness events
+- MPE fields default to 0.0 on voice start — they update when expression events arrive
+- MPE is only available in polyphonic instruments (`voices N` required)
+- Use expressions to modulate any part of the signal chain (pitch, filter, gain, etc.)
+
+---
+
+## Recipe 12: Unison Synth
+
+A polyphonic synth with 3-voice unison detuning — demonstrates `unison { }` block.
+
+**Pattern:** `voices N` + `unison { count M detune X }`
+
+**Source:** `examples/unison_synth.muse`
+
+```muse
+plugin "Unison Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.unison-synth"
+    description "A polyphonic synthesizer with 3-voice unison detuning"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseUniSyn01___"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 16
+
+  unison {
+    count 3
+    detune 15
+  }
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  param attack: float = 5.0 in 0.5..5000.0 { smoothing linear 5ms  unit "ms" }
+  param decay: float = 150.0 in 1.0..5000.0 { smoothing linear 5ms  unit "ms" }
+  param sustain: float = 0.6 in 0.0..1.0 { display "percentage" }
+  param release: float = 250.0 in 1.0..10000.0 { smoothing linear 5ms  unit "ms" }
+  param cutoff: float = 3000.0 in 20.0..20000.0 { smoothing logarithmic 15ms  unit "Hz" }
+  param resonance: float = 0.4 in 0.0..1.0 { smoothing linear 10ms }
+  param volume: float = -6.0 in -60.0..0.0 { unit "dB" }
+
+  process {
+    let env = adsr(param.attack, param.decay, param.sustain, param.release)
+    let osc = saw(note.pitch)
+    osc -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(param.volume) -> output
+  }
+
+  test "no note produces silence" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `unison { count 3 detune 15 }` — each note spawns 3 voices spread ±15 cents
+- `voices 16` provides the pool — 16 / 3 = 5 simultaneous notes before stealing
+- The process block is identical to a non-unison synth — detuning is handled automatically
+- `count` must be ≥ 2, `detune` must be > 0
+- Requires `voices` declaration
+
+---
+
 ## Choosing a Pattern
 
 | I want to... | Use recipe |
 |---|---|
 | Process audio with a simple effect | Recipe 1 (Gain) |
 | Add conditional processing paths | Recipe 2 (Filter) |
-| Build an instrument that responds to MIDI | Recipe 3 (Synth) or Recipe 9 (Pulse Synth) |
+| Build a mono instrument | Recipe 3 (Synth) or Recipe 9 (Pulse Synth) |
 | Process different frequency bands independently | Recipe 4 (Multiband) |
 | Add time-varying modulation (tremolo, vibrato) | Recipe 5 (Tremolo) |
 | Add distortion or lo-fi effects | Recipe 6 (Distortion) |
 | Add chorus/detuning | Recipe 7 (Chorus) |
 | Control dynamics (compression) | Recipe 8 (Dynamics) |
 | Build a synth with timbral control | Recipe 9 (Pulse Synth) |
+| Build a polyphonic instrument (chords) | Recipe 10 (Poly Synth) |
+| Build an MPE-enabled instrument | Recipe 11 (MPE Synth) |
+| Add thick unison detuning | Recipe 12 (Unison Synth) |

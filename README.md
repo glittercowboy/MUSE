@@ -61,9 +61,11 @@ input -> split {
 } -> merge -> gain(param.mix) -> output
 ```
 
-Build a synthesizer from oscillators and envelopes:
+Build a polyphonic synthesizer — add `voices 8` and the process block runs per-voice:
 
 ```muse
+voices 8
+
 process {
   let env = adsr(param.attack, param.decay, param.sustain, param.release)
   let osc1 = saw(note.pitch)
@@ -130,19 +132,22 @@ lowpass(500Hz)  // correct
 
 ## Examples
 
-Nine working plugins in [`examples/`](examples/):
+Twelve working plugins in [`examples/`](examples/):
 
 | Plugin | What it does |
 |--------|-------------|
 | [gain.muse](examples/gain.muse) | Single knob gain stage |
 | [filter.muse](examples/filter.muse) | Resonant filter with conditional saturation |
-| [synth.muse](examples/synth.muse) | Subtractive MIDI synthesizer |
+| [synth.muse](examples/synth.muse) | Monophonic subtractive synth |
 | [multiband.muse](examples/multiband.muse) | Three-band parallel processor |
 | [tremolo.muse](examples/tremolo.muse) | LFO amplitude modulation |
 | [distortion.muse](examples/distortion.muse) | Wavefolder + bitcrusher |
 | [chorus_effect.muse](examples/chorus_effect.muse) | Modulated delay chorus |
 | [dynamics.muse](examples/dynamics.muse) | Compressor with threshold and ratio |
 | [pulse_synth.muse](examples/pulse_synth.muse) | Pulse wave MIDI synthesizer |
+| [poly_synth.muse](examples/poly_synth.muse) | 8-voice polyphonic synth |
+| [mpe_synth.muse](examples/mpe_synth.muse) | MPE-enabled polyphonic synth |
+| [unison_synth.muse](examples/unison_synth.muse) | 3-voice unison with detuning |
 
 Every example compiles to a real plugin binary. Every example has test blocks that pass.
 
@@ -159,7 +164,7 @@ Every example compiles to a real plugin binary. Every example has test blocks th
 
 The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-243 tests. Zero clippy warnings.
+250 tests. Zero clippy warnings.
 
 ## AI Skill File
 
@@ -167,7 +172,7 @@ Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write p
 
 ## What's Next
 
-Polyphony (voice allocation, voice stealing), declarative GUI system, expanded test assertions (FFT, MIDI injection), presets, cross-platform builds.
+Declarative GUI system (web view rendering), expanded test assertions (FFT, MIDI injection), presets, cross-platform builds.
 
 ## Requirements
 
