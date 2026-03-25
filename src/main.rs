@@ -1142,10 +1142,17 @@ fn cmd_preview(args: &[String]) {
                     }
                 }
             }
-            InputSource::File(_path) => {
-                // T02 implements file playback
-                eprintln!("[muse preview] --input file:<path> is not yet implemented, using silence");
-                None
+            InputSource::File(path) => {
+                match input::start_file_input(&path, device_rate as u32) {
+                    Ok((audio_input, consumer)) => {
+                        audio_host.set_input_consumer(Some(consumer));
+                        Some(audio_input)
+                    }
+                    Err(e) => {
+                        eprintln!("[muse preview] error: {e}");
+                        std::process::exit(2);
+                    }
+                }
             }
         }
     } else {

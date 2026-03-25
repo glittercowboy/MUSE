@@ -1,8 +1,15 @@
 //! Audio input sources for effect plugin preview.
 //!
-//! Provides microphone capture (via CPAL input stream) routed through an rtrb
-//! lock-free ring buffer into the plugin's input buffers. The Consumer end is
-//! passed to `AudioHost::start()` for the output callback to read from.
+//! Provides microphone capture (via CPAL input stream) and WAV file playback
+//! (via hound + looping feeder thread), both routed through an rtrb lock-free
+//! ring buffer into the plugin's input buffers. The Consumer end is passed to
+//! `AudioHost::start()` for the output callback to read from.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream, StreamConfig};
@@ -12,10 +19,17 @@ use rtrb::{Consumer, Producer, RingBuffer};
 /// ~4096 frames × 2 channels = 8192 individual f32 values.
 const RING_BUFFER_CAPACITY: usize = 8192;
 
+/// Chunk size for WAV feeder thread writes.
+/// Writes this many stereo samples per iteration before checking stop flag.
+const FILE_FEED_CHUNK: usize = 512;
+
 /// A running audio input that feeds samples into the ring buffer.
-/// Holds the CPAL stream handle — dropping it stops the input.
+/// Holds either a CPAL stream handle or a feeder thread handle.
+/// Dropping it stops the input source.
 pub struct AudioInput {
-    _stream: Stream,
+    _stream: Option<Stream>,
+    _stop_flag: Option<Arc<AtomicBool>>,
+    _thread: Option<thread::JoinHandle<()>>,
 }
 
 /// Open a CPAL input stream for microphone capture.
@@ -114,7 +128,7 @@ pub fn start_mic_input(
         device_name, target_sample_rate, input_channels
     );
 
-    Ok(Some((AudioInput { _stream: stream }, consumer)))
+    Ok(Some((AudioInput { _stream: Some(stream), _stop_flag: None, _thread: None }, consumer)))
 }
 
 /// CPAL input callback — converts captured audio to interleaved stereo f32
@@ -148,5 +162,183 @@ fn mic_input_callback(data: &[f32], input_channels: usize, producer: &mut Produc
         // Push stereo pair. On full buffer, drop samples (no blocking).
         let _ = producer.push(left);
         let _ = producer.push(right);
+    }
+}
+
+// ── WAV file input ──────────────────────────────────────────────────────────
+
+/// Decode a WAV file to interleaved stereo f32 samples in [-1.0, 1.0].
+///
+/// Handles i16, i24 (i32 with 24 bits), and f32 sample formats.
+/// Channel mapping: mono → duplicate to stereo, >2ch → take first 2.
+///
+/// Returns the decoded samples and the WAV file's sample rate.
+fn decode_wav_to_stereo_f32(path: &Path) -> Result<(Vec<f32>, u32), String> {
+    let reader = hound::WavReader::open(path).map_err(|e| {
+        if e.to_string().contains("No such file") || e.to_string().contains("not found") {
+            format!("file not found: {}", path.display())
+        } else {
+            format!("cannot read WAV file '{}': {e}", path.display())
+        }
+    })?;
+
+    let spec = reader.spec();
+    let wav_channels = spec.channels as usize;
+    let wav_rate = spec.sample_rate;
+
+    if wav_channels == 0 {
+        return Err(format!(
+            "invalid WAV file '{}': 0 channels",
+            path.display()
+        ));
+    }
+
+    // Decode all samples to f32.
+    let raw_samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader
+            .into_samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("error decoding WAV '{}': {e}", path.display()))?,
+        hound::SampleFormat::Int => {
+            let bits = spec.bits_per_sample;
+            reader
+                .into_samples::<i32>()
+                .map(|s| {
+                    s.map(|v| match bits {
+                        16 => v as f32 / 32768.0,
+                        24 => v as f32 / 8388608.0,
+                        32 => v as f32 / 2147483648.0,
+                        _ => v as f32 / ((1i64 << (bits - 1)) as f32),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("error decoding WAV '{}': {e}", path.display()))?
+        }
+    };
+
+    if raw_samples.is_empty() {
+        return Err(format!("WAV file '{}' contains no audio data", path.display()));
+    }
+
+    let num_frames = raw_samples.len() / wav_channels;
+
+    // Convert to interleaved stereo.
+    let mut stereo = Vec::with_capacity(num_frames * 2);
+    for frame in 0..num_frames {
+        let base = frame * wav_channels;
+        let left = raw_samples[base];
+        let right = if wav_channels >= 2 {
+            raw_samples[base + 1]
+        } else {
+            left // mono → duplicate
+        };
+        stereo.push(left);
+        stereo.push(right);
+    }
+
+    Ok((stereo, wav_rate))
+}
+
+/// Open a WAV file for looping playback into the ring buffer.
+///
+/// Decodes the entire file upfront (validates format, catches errors early),
+/// then spawns a feeder thread that loops through the decoded samples.
+///
+/// `target_sample_rate` is the output device's rate. If the WAV rate differs,
+/// a warning is printed but playback continues at the output rate (no resampling).
+///
+/// # Errors
+/// Returns `Err(String)` on file-not-found or invalid WAV format.
+/// These are fatal — the caller should exit(2).
+pub fn start_file_input(
+    path: &Path,
+    target_sample_rate: u32,
+) -> Result<(AudioInput, Consumer<f32>), String> {
+    let (samples, wav_rate) = decode_wav_to_stereo_f32(path)?;
+
+    if wav_rate != target_sample_rate {
+        eprintln!(
+            "[muse preview] warning: WAV sample rate ({} Hz) differs from output ({} Hz) — \
+             playing without resampling",
+            wav_rate, target_sample_rate
+        );
+    }
+
+    let num_frames = samples.len() / 2;
+    eprintln!(
+        "[muse preview] input: file '{}' ({} Hz, {} frames, looping)",
+        path.display(),
+        wav_rate,
+        num_frames
+    );
+
+    let (producer, consumer) = RingBuffer::<f32>::new(RING_BUFFER_CAPACITY);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = stop.clone();
+
+    let handle = thread::Builder::new()
+        .name("muse-file-input".into())
+        .spawn(move || {
+            file_feeder_loop(samples, producer, stop_flag);
+        })
+        .map_err(|e| format!("failed to spawn file input thread: {e}"))?;
+
+    Ok((
+        AudioInput {
+            _stream: None,
+            _stop_flag: Some(stop),
+            _thread: Some(handle),
+        },
+        consumer,
+    ))
+}
+
+/// Feeder thread: loops through decoded stereo samples, pushing chunks to
+/// the ring buffer. Sleeps briefly when the buffer is full to avoid busy-looping.
+fn file_feeder_loop(
+    samples: Vec<f32>,
+    mut producer: Producer<f32>,
+    stop: Arc<AtomicBool>,
+) {
+    let total = samples.len();
+    let mut pos = 0;
+
+    while !stop.load(Ordering::Relaxed) {
+        let mut written = 0;
+
+        // Try to write a chunk of stereo samples.
+        while written < FILE_FEED_CHUNK * 2 && !stop.load(Ordering::Relaxed) {
+            match producer.push(samples[pos]) {
+                Ok(()) => {
+                    pos += 1;
+                    if pos >= total {
+                        pos = 0; // loop seamlessly
+                    }
+                    written += 1;
+                }
+                Err(_) => {
+                    // Buffer full — yield and retry.
+                    break;
+                }
+            }
+        }
+
+        if written == 0 {
+            // Buffer was completely full, sleep to avoid busy-loop.
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+impl Drop for AudioInput {
+    fn drop(&mut self) {
+        // Signal the file feeder thread to stop and wait for it.
+        if let Some(stop) = &self._stop_flag {
+            stop.store(true, Ordering::Relaxed);
+        }
+        if let Some(handle) = self._thread.take() {
+            let _ = handle.join();
+        }
+        // CPAL stream (_stream) stops on drop automatically.
     }
 }
