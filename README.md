@@ -1,6 +1,6 @@
 # Muse
 
-An AI-native language for building audio plugins. Write a `.muse` file, get a VST3/CLAP binary.
+This is a complete audio plugin:
 
 ```muse
 plugin "Warm Gain" {
@@ -31,17 +31,19 @@ plugin "Warm Gain" {
 }
 ```
 
-That's a complete audio plugin. One file. DSP, metadata, tests, everything.
+Run `muse build gain.muse` and get a native VST3 + CLAP binary that loads in Ableton, Bitwig, Reaper — any DAW. One file in, real plugin out.
 
-Run `muse build examples/gain.muse` and get a `.clap` + `.vst3` binary you can load in Ableton, Bitwig, Reaper, or any DAW.
+## Why
 
-## What Muse Is
+Building audio plugins is brutally hard. You need systems programming (Rust or C++), real-time audio constraints, platform-specific bundle formats, and hundreds of lines of framework boilerplate. A simple gain knob is 200+ lines of Rust. In Muse, it's 30 lines that read like a description of what the plugin does.
 
-Muse is a domain-specific language designed from the ground up for AI agents to write audio plugins. The syntax is constrained and unambiguous — there's one obvious way to express any plugin. The compiler catches domain errors at compile time (you can't pass a frequency where a time value belongs). Test blocks let the AI verify its own work before shipping.
+But Muse wasn't built to save humans from typing. It was built so that **AI agents can write audio plugins.**
 
-The pipeline: `.muse` source → parse → semantic analysis → Rust/nih-plug codegen → `cargo build` → native CLAP + VST3 binaries.
+Tell Claude "build me a tremolo effect with rate and depth knobs." It writes a `.muse` file, runs `muse test` to verify the audio processing actually works, runs `muse build` to produce binaries, and hands you a plugin. No human wrote code. No human debugged anything.
 
-## Signal Flow
+The language makes this possible: constrained syntax so there's one obvious way to write any plugin, a type system that catches domain errors at compile time, and in-language tests that let the AI verify its own work before shipping.
+
+## How It Sounds
 
 Audio processing reads left-to-right with the `->` operator:
 
@@ -49,7 +51,7 @@ Audio processing reads left-to-right with the `->` operator:
 input -> lowpass(param.cutoff, param.resonance) -> gain(param.volume) -> output
 ```
 
-Parallel routing with split/merge:
+Split into parallel frequency bands:
 
 ```muse
 input -> split {
@@ -59,7 +61,7 @@ input -> split {
 } -> merge -> gain(param.mix) -> output
 ```
 
-MIDI instruments with oscillators and envelopes:
+Build a synthesizer from oscillators and envelopes:
 
 ```muse
 process {
@@ -70,9 +72,11 @@ process {
 }
 ```
 
-## In-Language Testing
+The code *is* the signal flow diagram.
 
-Plugins test themselves. Feed real audio through the compiled DSP and assert on the output:
+## Plugins That Test Themselves
+
+Every Muse plugin can prove it works. Feed real audio through the compiled DSP and assert on the output:
 
 ```muse
 test "lowpass attenuates high frequencies" {
@@ -82,97 +86,88 @@ test "lowpass attenuates high frequencies" {
 }
 ```
 
-`muse test` compiles the plugin, runs `cargo test` on the generated crate, and reports structured JSON results. An AI agent can write a plugin, verify it works, and ship it — no human listening required.
+This generates a 10kHz sine wave, runs it through a lowpass filter set to 200Hz, and verifies the output is attenuated. Not a mock. Not a simulation. Real audio through the real compiled plugin.
 
-## CLI
-
-```
-muse check <file>                    # Parse + semantic validation
-muse test <file> [--format json]     # Compile and run test blocks
-muse build <file> [--output-dir .]   # Full build → .clap + .vst3
-```
-
-## Built-in DSP
-
-17 primitives covering the fundamentals:
-
-| Category | Functions |
-|----------|-----------|
-| Oscillators | `sine` `saw` `square` `triangle` `noise` |
-| Filters | `lowpass` `highpass` `bandpass` `notch` |
-| Envelopes | `adsr` `ar` |
-| Utilities | `gain` `pan` `delay` `mix` `clip` `tanh` |
-
-## Domain Type System
-
-Numbers carry meaning. The compiler prevents you from passing milliseconds where Hertz are expected.
-
-| Type | Suffix | Example |
-|------|--------|---------|
-| Frequency | `Hz` `kHz` | `440Hz` `4kHz` |
-| Time | `ms` `s` | `50ms` `0.5s` |
-| Gain | `dB` | `-12dB` |
-
-## Examples
-
-Five complete plugins in [`examples/`](examples/):
-
-- **[gain.muse](examples/gain.muse)** — Single knob gain stage
-- **[filter.muse](examples/filter.muse)** — Resonant filter with conditional saturation
-- **[synth.muse](examples/synth.muse)** — Subtractive MIDI synthesizer
-- **[multiband.muse](examples/multiband.muse)** — Parallel multiband processor
-- **[tremolo.muse](examples/tremolo.muse)** — LFO amplitude modulation
-
-## AI Skill File
-
-Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write plugins autonomously. It includes a language reference, DSP primitive documentation, plugin recipes, error code guide, and step-by-step workflows for creating, debugging, and extending plugins.
+An AI writes the plugin and the tests. If the tests pass, the plugin works. No human listening required.
 
 ## Quick Start
 
 ```bash
-# Build the compiler
 cargo build --release
 
-# Check a .muse file
+# Check syntax and types
 ./target/release/muse check examples/gain.muse
 
-# Run tests
+# Compile, run audio tests
 ./target/release/muse test examples/gain.muse --format json
 
-# Build plugin binaries (macOS, requires Rust toolchain)
+# Build VST3 + CLAP binaries
 ./target/release/muse build examples/gain.muse --output-dir ./build
 
-# Install to DAW plugin directories
-cp -R "./build/Warm Gain.clap" ~/Library/Audio/Plug-Ins/CLAP/
+# Load in your DAW
 cp -R "./build/Warm Gain.vst3" ~/Library/Audio/Plug-Ins/VST3/
+cp -R "./build/Warm Gain.clap" ~/Library/Audio/Plug-Ins/CLAP/
 ```
 
-## Architecture
+## Built-in DSP
+
+17 primitives — oscillators, filters, envelopes, and utilities:
+
+```
+sine  saw  square  triangle  noise
+lowpass  highpass  bandpass  notch
+adsr  ar
+gain  pan  delay  mix  clip  tanh
+```
+
+Numbers carry domain types. The compiler won't let you pass milliseconds where Hertz belong:
+
+```muse
+lowpass(50ms)   // E005: Expected Frequency, got Time
+lowpass(500Hz)  // correct
+```
+
+## Examples
+
+Five working plugins in [`examples/`](examples/):
+
+| Plugin | What it does |
+|--------|-------------|
+| [gain.muse](examples/gain.muse) | Single knob gain stage |
+| [filter.muse](examples/filter.muse) | Resonant filter with conditional saturation |
+| [synth.muse](examples/synth.muse) | Subtractive MIDI synthesizer |
+| [multiband.muse](examples/multiband.muse) | Three-band parallel processor |
+| [tremolo.muse](examples/tremolo.muse) | LFO amplitude modulation |
+
+Every example compiles to a real plugin binary. Every example has test blocks that pass.
+
+## Under the Hood
 
 ```
 .muse source
-  → Lexer (logos)
-  → Parser (chumsky) → AST
-  → Semantic resolver → type-checked AST
+  → Lexer (logos) → Parser (chumsky) → Typed AST
+  → Semantic resolver (type checking, function validation)
   → Code generator → standalone Rust/nih-plug crate
   → cargo build --release → native binary
   → Bundle assembly → .clap + .vst3
 ```
 
-The generated code is allocation-free in the audio thread. No runtime interpreter, no abstraction layer — the output binary is identical to a hand-written nih-plug plugin.
+The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-## Project Status
+227 tests. Zero clippy warnings.
 
-**M001 (Language & Compiler Core)** — Complete. Full compiler pipeline from `.muse` source to loadable plugin binaries. 227 tests, zero clippy warnings.
+## AI Skill File
 
-**M002 (Build Pipeline & AI Tooling)** — Complete. In-language test harness, dual-format build (CLAP + VST3), AI skill file with workflows and references.
+Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write plugins autonomously — language reference, DSP primitive docs, plugin recipes, error recovery patterns, and step-by-step workflows. Give it to Claude and ask for a plugin.
 
-**Next:** Expanded DSP primitives (dynamics, delay, EQ), GUI system, polyphony, cross-platform builds.
+## What's Next
+
+Expanded DSP (dynamics, delay lines, EQ), declarative GUI system, polyphony, cross-platform builds.
 
 ## Requirements
 
 - Rust toolchain (stable)
-- macOS (plugin binary output is macOS-only for now)
+- macOS (binary output is macOS-only for now)
 
 ## License
 
