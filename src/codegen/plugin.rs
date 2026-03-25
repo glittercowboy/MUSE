@@ -57,6 +57,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     let has_compressor = process_info.compressor_count > 0;
     let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
+    let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
     let mut out = String::new();
 
@@ -150,7 +151,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
     out.push_str("        }\n    }\n}\n\n");
 
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui));
 
     if is_polyphonic {
         let helper_defaults = generate_voice_field_defaults(process_info);
@@ -330,6 +331,7 @@ fn generate_plugin_trait(
     needs_sample_rate: bool,
     is_instrument: bool,
     is_polyphonic: bool,
+    has_gui: bool,
 ) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
@@ -359,6 +361,14 @@ fn generate_plugin_trait(
         format!("            main_input_channels: NonZeroU32::new({}),", in_ch)
     };
 
+    let editor_fn = if has_gui {
+        format!(
+            "\n    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {{\n        Some(Box::new(editor::WebViewEditor::new(self.params.clone())))\n    }}\n"
+        )
+    } else {
+        String::new()
+    };
+
     let context_param = if is_instrument { "context" } else { "_context" };
 
     format!(
@@ -385,7 +395,7 @@ fn generate_plugin_trait(
 
     fn params(&self) -> Arc<dyn Params> {{
         self.params.clone()
-    }}{lifecycle_fns}
+    }}{lifecycle_fns}{editor_fn}
     fn process(
         &mut self,
         buffer: &mut Buffer,
@@ -403,6 +413,7 @@ fn generate_plugin_trait(
         email = info.email,
         version = info.version,
         lifecycle_fns = lifecycle_fns,
+        editor_fn = editor_fn,
     )
 }
 

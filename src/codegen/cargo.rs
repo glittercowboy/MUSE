@@ -7,7 +7,9 @@ use crate::ast::PluginDef;
 /// The package name is derived from the plugin name: lowercased, spaces → hyphens.
 /// Depends on nih-plug from git (pinned commit for reproducibility).
 /// When `needs_fft` is true, adds rustfft as a dev-dependency for spectral assertions.
-pub fn generate_cargo_toml(plugin: &PluginDef, needs_fft: bool) -> String {
+/// When `has_gui` is true, adds objc2, objc2-foundation, objc2-app-kit, objc2-web-kit,
+/// block2, and serde_json dependencies for WebKit-based editor embedding.
+pub fn generate_cargo_toml(plugin: &PluginDef, needs_fft: bool, has_gui: bool) -> String {
     let pkg_name = plugin_name_to_package(&plugin.name);
     let version = extract_metadata(plugin, "version").unwrap_or_else(|| "0.1.0".to_string());
 
@@ -24,6 +26,15 @@ crate-type = ["cdylib", "lib"]
 nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149ec4d" }}
 "#,
     );
+
+    if has_gui {
+        toml.push_str("objc2 = \"0.6\"\n");
+        toml.push_str("objc2-foundation = { version = \"0.3\", features = [\"NSString\", \"NSObject\"] }\n");
+        toml.push_str("objc2-app-kit = { version = \"0.3\", features = [\"NSView\", \"NSResponder\"] }\n");
+        toml.push_str("objc2-web-kit = { version = \"0.3\", features = [\"WKWebView\", \"WKWebViewConfiguration\", \"WKUserContentController\", \"WKScriptMessageHandler\", \"WKScriptMessage\"] }\n");
+        toml.push_str("block2 = \"0.6\"\n");
+        toml.push_str("serde_json = \"1\"\n");
+    }
 
     if needs_fft {
         toml.push_str("\n[dev-dependencies]\nrustfft = \"6\"\n");
@@ -80,5 +91,41 @@ mod tests {
         assert_eq!(plugin_name_to_package("Warm Gain"), "warm-gain");
         assert_eq!(plugin_name_to_package("Multi-Band Compressor"), "multi-band-compressor");
         assert_eq!(plugin_name_to_package("SimpleGain"), "simplegain");
+    }
+
+    #[test]
+    fn test_cargo_toml_with_gui_deps() {
+        use crate::ast::*;
+        use crate::span::Span;
+
+        let plugin = PluginDef {
+            name: "Test Plugin".to_string(),
+            items: vec![],
+            span: Span::new(0, 0),
+        };
+        let toml = generate_cargo_toml(&plugin, false, true);
+        assert!(toml.contains("objc2 = \"0.6\""));
+        assert!(toml.contains("objc2-foundation"));
+        assert!(toml.contains("objc2-app-kit"));
+        assert!(toml.contains("objc2-web-kit"));
+        assert!(toml.contains("WKWebView"));
+        assert!(toml.contains("WKScriptMessageHandler"));
+        assert!(toml.contains("block2 = \"0.6\""));
+        assert!(toml.contains("serde_json = \"1\""));
+    }
+
+    #[test]
+    fn test_cargo_toml_without_gui() {
+        use crate::ast::*;
+        use crate::span::Span;
+
+        let plugin = PluginDef {
+            name: "Test Plugin".to_string(),
+            items: vec![],
+            span: Span::new(0, 0),
+        };
+        let toml = generate_cargo_toml(&plugin, false, false);
+        assert!(!toml.contains("objc2"));
+        assert!(!toml.contains("serde_json"));
     }
 }

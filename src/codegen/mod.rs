@@ -5,6 +5,7 @@
 
 pub mod cargo;
 pub mod dsp;
+pub mod editor;
 pub mod gui;
 pub mod midi;
 pub mod params;
@@ -42,7 +43,8 @@ pub fn generate_plugin(
     }
 
     let needs_fft = has_frequency_assertions(plugin);
-    let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft);
+    let has_gui = gui::find_gui_block(plugin).is_some();
+    let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft, has_gui);
     let params_code = params::generate_params(plugin);
     let preset_code = presets::generate_presets(plugin);
     let voice_count = find_voice_count(plugin);
@@ -62,6 +64,15 @@ pub fn generate_plugin(
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
         lib_rs.push_str(&test_module);
+    }
+
+    // GUI editor module: generate HTML assets and Rust editor code
+    let mut editor_html: Option<String> = None;
+    if let Some(gui_block) = gui::find_gui_block(plugin) {
+        let html = gui::generate_editor_html(plugin);
+        let editor_module = editor::generate_editor_module(plugin, gui_block);
+        lib_rs.push_str(&editor_module);
+        editor_html = Some(html);
     }
 
     let crate_dir = output_dir.to_path_buf();
@@ -90,6 +101,25 @@ pub fn generate_plugin(
             format!("Failed to write src/lib.rs: {}", e),
         )]
     })?;
+
+    // Write GUI editor assets if present
+    if let Some(html) = editor_html {
+        let assets_dir = crate_dir.join("assets");
+        fs::create_dir_all(&assets_dir).map_err(|e| {
+            vec![Diagnostic::error(
+                "E010",
+                Span::new(0, 0),
+                format!("Failed to create assets directory: {}", e),
+            )]
+        })?;
+        fs::write(assets_dir.join("editor.html"), &html).map_err(|e| {
+            vec![Diagnostic::error(
+                "E010",
+                Span::new(0, 0),
+                format!("Failed to write assets/editor.html: {}", e),
+            )]
+        })?;
+    }
 
     Ok(crate_dir)
 }
