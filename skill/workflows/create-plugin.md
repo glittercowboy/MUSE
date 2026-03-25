@@ -103,6 +103,8 @@ plugin "Plugin Name" {
 
 Every plugin needs at least 2 tests. Write them inside the plugin block after the process block.
 
+### Effect plugins
+
 **Required test: Silence passthrough**
 ```muse
 test "silence in produces silence out" {
@@ -120,15 +122,60 @@ test "passes signal" {
 }
 ```
 
-**Additional tests based on plugin behavior:**
+**Additional effect tests:**
 - Gain increase: `set param.gain = 6.0` → `assert output.peak > 1.0`
 - Attenuation: `set param.gain = -30.0` → `assert output.rms < -6dB`
 - Bypass/zero: `set param.mix = 0.0` → `assert output.rms < -120dB`
 
-**Test constraints:**
+### Instrument plugins
+
+**Required test: Silence without notes**
+```muse
+test "no note produces silence" {
+  input  silence 512 samples
+  assert output.rms < -120dB
+}
+```
+
+**Required test: Note produces sound with safety checks**
+```muse
+test "note produces sound" {
+  note on 69 0.8 at 0
+  note off 69 at 4096
+  input silence 8192 samples
+  assert output.rms > -20dB
+  assert no_nan
+  assert no_denormal
+}
+```
+
+**Optional: Pitch verification (FFT)**
+```muse
+test "A4 plays at correct frequency" {
+  note on 69 0.8 at 0
+  note off 69 at 4096
+  input silence 8192 samples
+  assert frequency 440Hz > -20dB
+}
+```
+
+**Optional: Envelope shape (temporal)**
+```muse
+test "envelope shape" {
+  note on 69 0.8 at 0
+  note off 69 at 256
+  input silence 1024 samples
+  assert output.rms_in 0..256 > -40dB
+  assert output.rms_in 768..1024 < -20dB
+}
+```
+
+### Test constraints
 - Use `silence`, `sine <freq>Hz`, or `impulse` as input signals (the only three types).
-- No MIDI test events — instrument tests can only assert silence (no note = no output).
-- Avoid exact dB assertions on filter output (biquad precision issue). Use relative comparisons: `< -6dB`, `> 0.0`.
+- `note on`/`note off` inject MIDI events for instrument testing. Use `input silence` as the buffer — MIDI triggers the oscillators.
+- `assert no_nan`, `assert no_denormal`, `assert no_inf` — always include safety checks on instrument tests.
+- `assert frequency <freq>Hz` uses FFT — use at least 4096 samples for reliable results.
+- `assert output.rms_in <start>..<end>` checks a specific sample range — useful for envelope verification.
 - `set` values are bare numbers, no unit suffixes: `set param.cutoff = 200.0`, not `set param.cutoff = 200Hz`.
 
 ## Step 5: Validate with `muse check` and `muse test`

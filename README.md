@@ -78,17 +78,21 @@ The code *is* the signal flow diagram.
 
 ## Plugins That Test Themselves
 
-Every Muse plugin can prove it works. Feed real audio through the compiled DSP and assert on the output:
+Every Muse plugin can prove it works. Inject MIDI notes, feed real audio through the compiled DSP, verify pitch with FFT, check envelope shapes over time, and assert no corrupted output:
 
 ```muse
-test "lowpass attenuates high frequencies" {
-  input  sine 10000Hz 1024 samples
-  set    param.cutoff = 200.0
-  assert output.rms < -6dB
+test "A4 plays at correct frequency" {
+  note on 69 0.8 at 0
+  note off 69 at 4096
+  input silence 8192 samples
+  assert frequency 440Hz > -20dB
+  assert output.rms > -20dB
+  assert no_nan
+  assert no_denormal
 }
 ```
 
-This generates a 10kHz sine wave, runs it through a lowpass filter set to 200Hz, and verifies the output is attenuated. Not a mock. Not a simulation. Real audio through the real compiled plugin.
+That test injects a MIDI A4 note into a polyphonic synth, runs 8192 samples, verifies via FFT that 440Hz is present in the output, checks the signal level, and scans every sample for NaN and denormalized values. Not a mock. Real audio through the real compiled plugin.
 
 An AI writes the plugin and the tests. If the tests pass, the plugin works. No human listening required.
 
@@ -164,7 +168,7 @@ Every example compiles to a real plugin binary. Every example has test blocks th
 
 The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-250 tests. Zero clippy warnings.
+260 tests. Zero clippy warnings.
 
 ## AI Skill File
 

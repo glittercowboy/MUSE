@@ -48,7 +48,7 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 
 ## Known Limitations
 
-- **No MIDI test events.** Test blocks cannot inject `note_on`/`note_off` — you cannot test instrument plugins via test blocks. Use `assert output.rms < -120dB` for silence tests on instruments.
+- **No CC test events.** Test blocks support `note on`/`note off` for MIDI injection but not control change events.
 - **macOS only.** The build pipeline (`muse build`) produces macOS CLAP + VST3 bundles. No Linux or Windows support.
 - **No GUI.** Plugins get the host's generic parameter UI. No custom editor/view support.
 - **Polyphony is per-voice mono.** Each voice outputs mono, summed to the output bus. No per-voice stereo panning yet.
