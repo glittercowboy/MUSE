@@ -7,6 +7,7 @@ pub mod types;
 pub mod dsp;
 pub mod resolve;
 pub mod codegen;
+pub mod preview;
 
 // Re-export primary public API
 pub use ast::PluginDef;
