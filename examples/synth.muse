@@ -73,4 +73,9 @@ plugin "Glass Synth" {
     let tone = mix(osc1, osc2) -> gain(param.osc_mix)
     tone -> lowpass(param.cutoff, param.resonance) -> gain(env) -> gain(param.volume) -> output
   }
+
+  test "no note produces silence" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
 }

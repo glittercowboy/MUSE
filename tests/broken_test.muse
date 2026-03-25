@@ -1,5 +1,5 @@
-// Gain — the simplest possible Muse plugin.
-// A single knob controlling signal level.
+// Broken test — deliberately wrong assertion to verify test harness catches failures.
+// Copied from gain.muse with a test that asserts silence has high RMS (obviously false).
 
 plugin "Warm Gain" {
   vendor   "Muse Audio"
@@ -31,15 +31,9 @@ plugin "Warm Gain" {
     input -> gain(param.gain) -> output
   }
 
-  test "silence in produces silence out" {
+  test "this should fail" {
     input  silence 512 samples
     set    param.gain = 0.0
-    assert output.rms < -120dB
-  }
-
-  test "positive gain increases level" {
-    input  sine 440Hz 1024 samples
-    set    param.gain = 6.0
-    assert output.peak > 1.0
+    assert output.rms > 0.5
   }
 }

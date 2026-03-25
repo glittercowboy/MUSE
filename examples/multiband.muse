@@ -34,4 +34,11 @@ plugin "Multiband FX" {
       highpass(4000Hz) -> gain(0.6) -> tanh()
     } -> merge -> gain(param.mix) -> output
   }
+
+  test "processes signal without crashing" {
+    input  sine 1000Hz 1024 samples
+    set    param.drive = 0.5
+    set    param.mix = 1.0
+    assert output.peak > 0.0
+  }
 }

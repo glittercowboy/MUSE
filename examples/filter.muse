@@ -54,4 +54,11 @@ plugin "Velvet Filter" {
     }
     mix(input, shaped) -> gain(param.mix) -> output
   }
+
+  test "lowpass attenuates high frequencies" {
+    input  sine 10000Hz 1024 samples
+    set    param.cutoff = 200.0
+    set    param.resonance = 0.5
+    assert output.rms < -6dB
+  }
 }
