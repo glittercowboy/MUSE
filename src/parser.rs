@@ -1379,6 +1379,61 @@ where
                 GuiItem::Widget(WidgetDecl {
                     widget_type: wtype,
                     param_name: Some(name),
+                    param_name_y: None,
+                    label_text: None,
+                    props,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        });
+
+        // xy_pad <param_x> <param_y> — dual-param widget
+        let xy_pad_widget = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "xy_pad")
+            .ignore_then(select! { Token::Ident(s) => s })
+            .then(select! { Token::Ident(s) => s })
+            .then(widget_props.clone())
+            .map_with(|((name_x, name_y), props), e| {
+                (
+                    GuiItem::Widget(WidgetDecl {
+                        widget_type: WidgetType::XyPad,
+                        param_name: Some(name_x),
+                        param_name_y: Some(name_y),
+                        label_text: None,
+                        props,
+                        span: e.span(),
+                    }),
+                    e.span(),
+                )
+            });
+
+        // Visualization widgets: spectrum, waveform, envelope, eq_curve, reduction
+        // No param argument — these are display-only.
+        let vis_widget = choice((
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "spectrum")
+                .to(WidgetType::Spectrum),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "waveform")
+                .to(WidgetType::Waveform),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "envelope")
+                .to(WidgetType::Envelope),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "eq_curve")
+                .to(WidgetType::EqCurve),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "reduction")
+                .to(WidgetType::Reduction),
+        ))
+        .then(widget_props.clone())
+        .map_with(|(wtype, props), e| {
+            (
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: wtype,
+                    param_name: None,
+                    param_name_y: None,
                     label_text: None,
                     props,
                     span: e.span(),
@@ -1397,6 +1452,7 @@ where
                     GuiItem::Widget(WidgetDecl {
                         widget_type: WidgetType::Label,
                         param_name: None,
+                        param_name_y: None,
                         label_text: Some(text),
                         props,
                         span: e.span(),
@@ -1457,7 +1513,9 @@ where
 
         // Order matters: layout/panel (with braces) before widgets,
         // label (string arg) before param_widget (ident arg) to avoid
-        // "label" being consumed as a param-widget keyword with ident arg
+        // "label" being consumed as a param-widget keyword with ident arg.
+        // xy_pad (two ident args) and vis widgets (no args) before param_widget
+        // (single ident arg) to avoid ambiguity.
         choice((
             gui_theme,
             gui_accent,
@@ -1466,6 +1524,8 @@ where
             gui_layout,
             gui_panel,
             label_widget,
+            xy_pad_widget,
+            vis_widget,
             param_widget,
         ))
     });

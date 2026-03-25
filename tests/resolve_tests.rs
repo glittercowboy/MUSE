@@ -1269,3 +1269,195 @@ plugin "Test" {
 "##;
     resolve_expect_ok(source);
 }
+
+// ── Advanced widget resolver tests ───────────────────────────
+
+#[test]
+fn gui_xy_pad_valid_params_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param freq : float = 0.5 in 0.0..1.0
+    param res : float = 0.5 in 0.0..1.0
+    process { input -> output }
+    gui {
+        xy_pad freq res
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_xy_pad_unknown_x_param_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param res : float = 0.5 in 0.0..1.0
+    process { input -> output }
+    gui {
+        xy_pad freq res
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("freq")),
+        "Should have E014 for unknown X-axis param 'freq': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_xy_pad_unknown_y_param_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param freq : float = 0.5 in 0.0..1.0
+    process { input -> output }
+    gui {
+        xy_pad freq res
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("res")),
+        "Should have E014 for unknown Y-axis param 'res': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_xy_pad_both_unknown_params_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        xy_pad freq res
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("freq")),
+        "Should have E014 for unknown X-axis param 'freq': {:?}", errors
+    );
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("res")),
+        "Should have E014 for unknown Y-axis param 'res': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_spectrum_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        spectrum
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_waveform_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        waveform
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_envelope_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        envelope
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_eq_curve_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        eq_curve
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_reduction_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        reduction
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_all_vis_widgets_in_layout_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param freq : float = 0.5 in 0.0..1.0
+    param res : float = 0.5 in 0.0..1.0
+    process { input -> output }
+    gui {
+        theme dark
+        layout vertical {
+            xy_pad freq res
+            spectrum
+            waveform
+            envelope
+            eq_curve
+            reduction
+        }
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}

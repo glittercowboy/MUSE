@@ -207,6 +207,20 @@ fn generate_widget_html(widget: &WidgetDecl, params: &[ParamInfo]) -> String {
         WidgetType::Switch => generate_switch_widget_html(widget, param, extra_class, data_style, custom_label),
         WidgetType::Label => generate_label_widget_html(widget, extra_class, data_style),
         WidgetType::Value => generate_value_widget_html(widget, param, extra_class, data_style),
+        // Advanced widgets — HTML generation added in T02
+        WidgetType::XyPad
+        | WidgetType::Spectrum
+        | WidgetType::Waveform
+        | WidgetType::Envelope
+        | WidgetType::EqCurve
+        | WidgetType::Reduction => {
+            format!(
+                "<div class=\"widget {}\" data-type=\"{:?}\">[{:?} widget — coming soon]</div>\n",
+                extra_class,
+                widget.widget_type,
+                widget.widget_type
+            )
+        }
     }
 }
 
@@ -1248,6 +1262,7 @@ mod tests {
                 GuiItem::Widget(WidgetDecl {
                     widget_type: WidgetType::Knob,
                     param_name: Some("gain".to_string()),
+                    param_name_y: None,
                     label_text: None,
                     props: vec![],
                     span: Span::new(0, 0),
@@ -1303,6 +1318,7 @@ mod tests {
                                         GuiItem::Widget(WidgetDecl {
                                             widget_type: WidgetType::Knob,
                                             param_name: Some("gain".to_string()),
+                                            param_name_y: None,
                                             label_text: None,
                                             props: vec![],
                                             span: Span::new(0, 0),
@@ -1317,6 +1333,7 @@ mod tests {
                                 GuiItem::Widget(WidgetDecl {
                                     widget_type: WidgetType::Slider,
                                     param_name: Some("mix".to_string()),
+                                    param_name_y: None,
                                     label_text: None,
                                     props: vec![],
                                     span: Span::new(0, 0),
@@ -1459,6 +1476,7 @@ mod tests {
                 GuiItem::Widget(WidgetDecl {
                     widget_type: WidgetType::Knob,
                     param_name: Some("gain".to_string()),
+                    param_name_y: None,
                     label_text: None,
                     props: vec![
                         WidgetProp::Class("hero-knob".to_string()),
@@ -1488,6 +1506,7 @@ mod tests {
                 GuiItem::Widget(WidgetDecl {
                     widget_type: WidgetType::Label,
                     param_name: None,
+                    param_name_y: None,
                     label_text: Some("Output Level".to_string()),
                     props: vec![],
                     span: Span::new(0, 0),
@@ -1510,6 +1529,7 @@ mod tests {
                 GuiItem::Widget(WidgetDecl {
                     widget_type: WidgetType::Switch,
                     param_name: Some("bypass".to_string()),
+                    param_name_y: None,
                     label_text: None,
                     props: vec![],
                     span: Span::new(0, 0),
@@ -1533,6 +1553,7 @@ mod tests {
                 GuiItem::Widget(WidgetDecl {
                     widget_type: WidgetType::Value,
                     param_name: Some("gain".to_string()),
+                    param_name_y: None,
                     label_text: None,
                     props: vec![],
                     span: Span::new(0, 0),
@@ -1559,6 +1580,7 @@ mod tests {
                 GuiItem::Widget(WidgetDecl {
                     widget_type: WidgetType::Meter,
                     param_name: Some("level".to_string()),
+                    param_name_y: None,
                     label_text: None,
                     props: vec![],
                     span: Span::new(0, 0),

@@ -497,6 +497,18 @@ pub enum WidgetType {
     Switch,
     Label,
     Value,
+    /// XY pad — binds two parameters (X axis and Y axis)
+    XyPad,
+    /// Live frequency spectrum analyzer (visualization, no param binding)
+    Spectrum,
+    /// Waveform display (visualization, no param binding)
+    Waveform,
+    /// Envelope visualizer (visualization, no param binding)
+    Envelope,
+    /// EQ curve display (visualization, no param binding)
+    EqCurve,
+    /// Gain reduction meter (visualization, no param binding)
+    Reduction,
 }
 
 /// Optional property on a widget: `{ style "vintage" class "hero-knob" label "Custom" }`
@@ -515,8 +527,11 @@ pub enum WidgetProp {
 pub struct WidgetDecl {
     pub widget_type: WidgetType,
     /// Parameter name for param-bound widgets (Knob, Slider, Meter, Switch, Value).
-    /// `None` for Label (the text comes from `label_text`).
+    /// For XyPad, this is the X-axis parameter.
+    /// `None` for Label and visualization widgets.
     pub param_name: Option<String>,
+    /// Y-axis parameter name — only used by XyPad.
+    pub param_name_y: Option<String>,
     /// For Label widgets, the static text to display.
     pub label_text: Option<String>,
     /// Optional properties block: `{ style "vintage" class "hero-knob" }`

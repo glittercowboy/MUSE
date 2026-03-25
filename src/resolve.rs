@@ -384,6 +384,65 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
+            // XY pad binds two params — both must exist
+            WidgetType::XyPad => {
+                if let Some(ref name_x) = widget.param_name {
+                    if !self.params.contains_key(name_x) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E014",
+                                span,
+                                format!(
+                                    "xy_pad references unknown X-axis parameter '{}' — no `param {}` declared in this plugin",
+                                    name_x, name_x
+                                ),
+                            )
+                            .with_suggestion(
+                                "Declare the parameter first: `param {} : float = 0.0 in 0.0..1.0`",
+                            ),
+                        );
+                    }
+                }
+                if let Some(ref name_y) = widget.param_name_y {
+                    if !self.params.contains_key(name_y) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E014",
+                                span,
+                                format!(
+                                    "xy_pad references unknown Y-axis parameter '{}' — no `param {}` declared in this plugin",
+                                    name_y, name_y
+                                ),
+                            )
+                            .with_suggestion(
+                                "Declare the parameter first: `param {} : float = 0.0 in 0.0..1.0`",
+                            ),
+                        );
+                    }
+                }
+            }
+            // Visualization widgets must NOT have a param binding
+            WidgetType::Spectrum
+            | WidgetType::Waveform
+            | WidgetType::Envelope
+            | WidgetType::EqCurve
+            | WidgetType::Reduction => {
+                if widget.param_name.is_some() {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E014",
+                            span,
+                            format!(
+                                "{:?} is a visualization widget and does not take a parameter binding",
+                                widget.widget_type
+                            ),
+                        )
+                        .with_suggestion(
+                            "Remove the parameter name: just use `spectrum` instead of `spectrum gain`",
+                        ),
+                    );
+                }
+            }
             // Label must NOT have a param_name (it has label_text instead)
             WidgetType::Label => {
                 // The parser enforces this structurally — label uses StringLiteral,

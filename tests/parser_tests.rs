@@ -1922,3 +1922,303 @@ plugin "Test" {
         WidgetType::Label,
     ]);
 }
+
+#[test]
+fn gui_block_xy_pad_widget() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param freq : float = 0.5 in 0.0..1.0
+    param res : float = 0.5 in 0.0..1.0
+    process { input }
+    gui {
+        xy_pad freq res
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => {
+            assert_eq!(w.widget_type, WidgetType::XyPad);
+            assert_eq!(w.param_name, Some("freq".to_string()));
+            assert_eq!(w.param_name_y, Some("res".to_string()));
+        }
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_xy_pad_with_props() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param x : float = 0.5 in 0.0..1.0
+    param y : float = 0.5 in 0.0..1.0
+    process { input }
+    gui {
+        xy_pad x y { style "large" class "main-pad" }
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => {
+            assert_eq!(w.widget_type, WidgetType::XyPad);
+            assert_eq!(w.param_name, Some("x".to_string()));
+            assert_eq!(w.param_name_y, Some("y".to_string()));
+            assert!(w.props.iter().any(|p| matches!(p, WidgetProp::Style(s) if s == "large")));
+            assert!(w.props.iter().any(|p| matches!(p, WidgetProp::Class(c) if c == "main-pad")));
+        }
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_spectrum_widget() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        spectrum
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => {
+            assert_eq!(w.widget_type, WidgetType::Spectrum);
+            assert_eq!(w.param_name, None);
+            assert_eq!(w.param_name_y, None);
+        }
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_waveform_widget() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        waveform
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => assert_eq!(w.widget_type, WidgetType::Waveform),
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_envelope_widget() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        envelope
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => assert_eq!(w.widget_type, WidgetType::Envelope),
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_eq_curve_widget() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        eq_curve
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => assert_eq!(w.widget_type, WidgetType::EqCurve),
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_reduction_widget() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        reduction
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => assert_eq!(w.widget_type, WidgetType::Reduction),
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_vis_widget_with_props() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        spectrum { class "analyzer" style "large" }
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => {
+            assert_eq!(w.widget_type, WidgetType::Spectrum);
+            assert!(w.props.iter().any(|p| matches!(p, WidgetProp::Class(c) if c == "analyzer")));
+            assert!(w.props.iter().any(|p| matches!(p, WidgetProp::Style(s) if s == "large")));
+        }
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_all_widget_types_including_advanced() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    param level : float = 0.0 in -60.0..0.0
+    param bypass : bool = false
+    param freq : float = 0.5 in 0.0..1.0
+    param res : float = 0.5 in 0.0..1.0
+    process { input }
+    gui {
+        knob gain
+        slider gain
+        meter level
+        switch bypass
+        value gain
+        label "Info"
+        xy_pad freq res
+        spectrum
+        waveform
+        envelope
+        eq_curve
+        reduction
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 12);
+
+    let types: Vec<_> = gui.items.iter().map(|(item, _)| match item {
+        GuiItem::Widget(w) => w.widget_type.clone(),
+        other => panic!("Expected Widget, got {:?}", other),
+    }).collect();
+
+    assert_eq!(types, vec![
+        WidgetType::Knob,
+        WidgetType::Slider,
+        WidgetType::Meter,
+        WidgetType::Switch,
+        WidgetType::Value,
+        WidgetType::Label,
+        WidgetType::XyPad,
+        WidgetType::Spectrum,
+        WidgetType::Waveform,
+        WidgetType::Envelope,
+        WidgetType::EqCurve,
+        WidgetType::Reduction,
+    ]);
+}
