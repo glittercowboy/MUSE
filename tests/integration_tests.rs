@@ -719,3 +719,108 @@ fn compile_with_codegen_error_produces_json() {
     let has_e010 = parsed.iter().any(|e| e["code"].as_str() == Some("E010"));
     assert!(has_e010, "compile() codegen errors should include E010, got: {}", json);
 }
+
+// ── End-to-end: gain.muse → .clap → clap-validator ──────────
+
+/// Full pipeline proof: compile gain.muse via the CLI binary, then validate
+/// the resulting .clap bundle with clap-validator.
+///
+/// Marked `#[ignore]` because it takes 10+ seconds (full cargo build + validator).
+/// Run with: `cargo test --test integration_tests compile_gain_to_clap_and_validate -- --ignored`
+#[test]
+#[ignore]
+fn compile_gain_to_clap_and_validate() {
+    use std::process::Command;
+
+    let out_dir = std::env::temp_dir().join(format!("muse-e2e-test-{}", std::process::id()));
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir).ok();
+    }
+    std::fs::create_dir_all(&out_dir).expect("create temp output dir");
+
+    // Step 1: Run `cargo run -- compile examples/gain.muse --output-dir <tmp>`
+    // We shell out to the binary because build_plugin/assemble_clap_bundle live in main.rs.
+    let compile_output = Command::new(env!("CARGO"))
+        .args(["run", "--", "compile", "examples/gain.muse", "--output-dir"])
+        .arg(&out_dir)
+        .output()
+        .expect("failed to invoke cargo run");
+
+    assert!(
+        compile_output.status.success(),
+        "muse compile should exit 0, got {}\nstderr: {}",
+        compile_output.status,
+        String::from_utf8_lossy(&compile_output.stderr)
+    );
+
+    // Step 2: Verify the .clap bundle structure exists
+    let bundle_dir = out_dir.join("Warm Gain.clap");
+    assert!(
+        bundle_dir.is_dir(),
+        "bundle directory should exist at {}",
+        bundle_dir.display()
+    );
+    assert!(
+        bundle_dir.join("Contents/Info.plist").is_file(),
+        "Info.plist should exist"
+    );
+    assert!(
+        bundle_dir.join("Contents/MacOS/Warm Gain").is_file(),
+        "binary should exist in MacOS/"
+    );
+
+    // Step 3: Run clap-validator (skip gracefully if not installed)
+    let validator = match which_clap_validator() {
+        Some(path) => path,
+        None => {
+            eprintln!("clap-validator not found on PATH — skipping validation step");
+            // Clean up
+            std::fs::remove_dir_all(&out_dir).ok();
+            return;
+        }
+    };
+
+    let validate_output = Command::new(&validator)
+        .arg("validate")
+        .arg(&bundle_dir)
+        .output()
+        .expect("failed to invoke clap-validator");
+
+    let stdout = String::from_utf8_lossy(&validate_output.stdout);
+    let stderr = String::from_utf8_lossy(&validate_output.stderr);
+
+    assert!(
+        validate_output.status.success(),
+        "clap-validator should exit 0, got {}\nstdout: {stdout}\nstderr: {stderr}",
+        validate_output.status
+    );
+
+    // Verify 0 failures in output — parse the summary line "N tests run, M passed, F failed, ..."
+    // The summary always contains "0 failed" when everything passes.
+    assert!(
+        stdout.contains("0 failed"),
+        "clap-validator should report 0 failures, output:\n{stdout}"
+    );
+
+    // Clean up
+    std::fs::remove_dir_all(&out_dir).ok();
+}
+
+/// Find clap-validator on PATH, returning None if not installed.
+fn which_clap_validator() -> Option<std::path::PathBuf> {
+    // Check common locations
+    for name in &["clap-validator"] {
+        if let Ok(output) = std::process::Command::new("which")
+            .arg(name)
+            .output()
+        {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return Some(std::path::PathBuf::from(path));
+                }
+            }
+        }
+    }
+    None
+}
