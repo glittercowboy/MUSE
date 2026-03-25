@@ -438,7 +438,7 @@ pub enum PresetValue {
 
 // ── GUI blocks ───────────────────────────────────────────────
 
-/// `gui { theme dark accent "#E8A87C" }`
+/// `gui { theme dark accent "#E8A87C" layout vertical { ... } }`
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuiBlock {
     pub items: Vec<Spanned<GuiItem>>,
@@ -452,4 +452,74 @@ pub enum GuiItem {
     Theme(String),
     /// `accent "#E8A87C"`
     Accent(String),
+    /// `size 700 450` — editor dimensions (width, height)
+    Size(u32, u32),
+    /// `layout vertical { ... }` — flex container with children
+    Layout(LayoutDecl),
+    /// `panel "Title" { ... }` — titled section grouping
+    Panel(PanelDecl),
+    /// `knob gain`, `slider mix`, `label "Output Level"`, etc.
+    Widget(WidgetDecl),
+    /// `css "..."` — raw CSS string injected into the HTML
+    Css(String),
+}
+
+/// Direction for layout containers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayoutDirection {
+    Horizontal,
+    Vertical,
+    Grid,
+}
+
+/// `layout <direction> { ...children... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayoutDecl {
+    pub direction: LayoutDirection,
+    pub children: Vec<Spanned<GuiItem>>,
+    pub span: Span,
+}
+
+/// `panel "Title" { ...children... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelDecl {
+    pub title: String,
+    pub children: Vec<Spanned<GuiItem>>,
+    pub span: Span,
+}
+
+/// Widget type discriminator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WidgetType {
+    Knob,
+    Slider,
+    Meter,
+    Switch,
+    Label,
+    Value,
+}
+
+/// Optional property on a widget: `{ style "vintage" class "hero-knob" label "Custom" }`
+#[derive(Debug, Clone, PartialEq)]
+pub enum WidgetProp {
+    /// `style "vintage"`
+    Style(String),
+    /// `class "hero-knob"`
+    Class(String),
+    /// `label "Custom Label"` — overrides the default label
+    Label(String),
+}
+
+/// A widget declaration: `knob gain { style "vintage" }` or `label "Output Level"`
+#[derive(Debug, Clone, PartialEq)]
+pub struct WidgetDecl {
+    pub widget_type: WidgetType,
+    /// Parameter name for param-bound widgets (Knob, Slider, Meter, Switch, Value).
+    /// `None` for Label (the text comes from `label_text`).
+    pub param_name: Option<String>,
+    /// For Label widgets, the static text to display.
+    pub label_text: Option<String>,
+    /// Optional properties block: `{ style "vintage" class "hero-knob" }`
+    pub props: Vec<WidgetProp>,
+    pub span: Span,
 }

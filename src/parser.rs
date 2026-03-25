@@ -1296,21 +1296,179 @@ fn gui_block_parser<'src, I>(
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    // theme <dark|light> — "theme" is parsed as an Ident (not a keyword)
-    let gui_theme = select! { Token::Ident(s) => s }
-        .filter(|s: &String| s == "theme")
-        .ignore_then(select! {
-            Token::Ident(s) => s,
-        })
-        .map_with(|value, e| (GuiItem::Theme(value), e.span()));
+    // Recursive gui_item parser — needed because layout/panel contain children
+    let gui_item = recursive(|gui_item| {
+        // theme <dark|light>
+        let gui_theme = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "theme")
+            .ignore_then(select! { Token::Ident(s) => s })
+            .map_with(|value, e| (GuiItem::Theme(value), e.span()));
 
-    // accent "#RRGGBB" — "accent" is parsed as an Ident
-    let gui_accent = select! { Token::Ident(s) => s }
-        .filter(|s: &String| s == "accent")
-        .ignore_then(select! { Token::StringLiteral(s) => s })
-        .map_with(|value, e| (GuiItem::Accent(value), e.span()));
+        // accent "#RRGGBB"
+        let gui_accent = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "accent")
+            .ignore_then(select! { Token::StringLiteral(s) => s })
+            .map_with(|value, e| (GuiItem::Accent(value), e.span()));
 
-    let gui_item = gui_theme.or(gui_accent);
+        // size <width> <height>
+        let gui_size = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "size")
+            .ignore_then(
+                select! { Token::Number(n) => n }
+                    .then(select! { Token::Number(n) => n }),
+            )
+            .map_with(|(w, h), e| {
+                let width = w.parse::<u32>().unwrap_or(600);
+                let height = h.parse::<u32>().unwrap_or(400);
+                (GuiItem::Size(width, height), e.span())
+            });
+
+        // css "..." — raw CSS string
+        let gui_css = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "css")
+            .ignore_then(select! { Token::StringLiteral(s) => s })
+            .map_with(|value, e| (GuiItem::Css(value), e.span()));
+
+        // Widget property: style "value", class "value", label "value"
+        let widget_prop = choice((
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "style")
+                .ignore_then(select! { Token::StringLiteral(s) => s })
+                .map(WidgetProp::Style),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "class")
+                .ignore_then(select! { Token::StringLiteral(s) => s })
+                .map(WidgetProp::Class),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "label")
+                .ignore_then(select! { Token::StringLiteral(s) => s })
+                .map(WidgetProp::Label),
+        ));
+
+        // Optional properties block: { style "vintage" class "hero-knob" }
+        let widget_props = widget_prop
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace))
+            .or_not()
+            .map(|opt| opt.unwrap_or_default());
+
+        // Param-bound widgets: knob <name>, slider <name>, meter <name>,
+        //                      switch <name>, value <name>
+        let param_widget = choice((
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "knob")
+                .to(WidgetType::Knob),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "slider")
+                .to(WidgetType::Slider),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "meter")
+                .to(WidgetType::Meter),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "switch")
+                .to(WidgetType::Switch),
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "value")
+                .to(WidgetType::Value),
+        ))
+        .then(select! { Token::Ident(s) => s })
+        .then(widget_props.clone())
+        .map_with(|((wtype, name), props), e| {
+            (
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: wtype,
+                    param_name: Some(name),
+                    label_text: None,
+                    props,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        });
+
+        // label "text" — not param-bound
+        let label_widget = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "label")
+            .ignore_then(select! { Token::StringLiteral(s) => s })
+            .then(widget_props)
+            .map_with(|(text, props), e| {
+                (
+                    GuiItem::Widget(WidgetDecl {
+                        widget_type: WidgetType::Label,
+                        param_name: None,
+                        label_text: Some(text),
+                        props,
+                        span: e.span(),
+                    }),
+                    e.span(),
+                )
+            });
+
+        // layout <direction> { ...children... }
+        let gui_layout = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "layout")
+            .ignore_then(select! { Token::Ident(s) => s })
+            .then(
+                gui_item
+                    .clone()
+                    .repeated()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with(|(direction_str, children), e| {
+                let direction = match direction_str.as_str() {
+                    "horizontal" => LayoutDirection::Horizontal,
+                    "vertical" => LayoutDirection::Vertical,
+                    "grid" => LayoutDirection::Grid,
+                    // Parser accepts any ident; resolver validates direction
+                    _ => LayoutDirection::Vertical,
+                };
+                (
+                    GuiItem::Layout(LayoutDecl {
+                        direction,
+                        children,
+                        span: e.span(),
+                    }),
+                    e.span(),
+                )
+            });
+
+        // panel "Title" { ...children... }
+        let gui_panel = select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "panel")
+            .ignore_then(select! { Token::StringLiteral(s) => s })
+            .then(
+                gui_item
+                    .repeated()
+                    .collect::<Vec<_>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with(|(title, children), e| {
+                (
+                    GuiItem::Panel(PanelDecl {
+                        title,
+                        children,
+                        span: e.span(),
+                    }),
+                    e.span(),
+                )
+            });
+
+        // Order matters: layout/panel (with braces) before widgets,
+        // label (string arg) before param_widget (ident arg) to avoid
+        // "label" being consumed as a param-widget keyword with ident arg
+        choice((
+            gui_theme,
+            gui_accent,
+            gui_size,
+            gui_css,
+            gui_layout,
+            gui_panel,
+            label_widget,
+            param_widget,
+        ))
+    });
 
     just(Token::Gui)
         .ignore_then(

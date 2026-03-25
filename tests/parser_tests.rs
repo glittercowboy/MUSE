@@ -1590,3 +1590,335 @@ plugin "Test" {
         other => panic!("Expected Accent, got {:?}", other),
     }
 }
+
+// ── Tier 2/3 GUI parser tests ────────────────────────────────
+
+#[test]
+fn gui_block_size_item() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        size 700 450
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Size(w, h) => {
+            assert_eq!(*w, 700);
+            assert_eq!(*h, 450);
+        }
+        other => panic!("Expected Size, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_css_item() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input }
+    gui {
+        css ".my-class { color: red; }"
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Css(s) => assert_eq!(s, ".my-class { color: red; }"),
+        other => panic!("Expected Css, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_layout_with_nested_widgets() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    param mix : float = 0.5 in 0.0..1.0
+    process { input }
+    gui {
+        layout horizontal {
+            knob gain
+            knob mix
+        }
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Layout(layout) => {
+            assert_eq!(layout.direction, LayoutDirection::Horizontal);
+            assert_eq!(layout.children.len(), 2);
+            match &layout.children[0].0 {
+                GuiItem::Widget(w) => {
+                    assert_eq!(w.widget_type, WidgetType::Knob);
+                    assert_eq!(w.param_name, Some("gain".to_string()));
+                }
+                other => panic!("Expected Widget, got {:?}", other),
+            }
+            match &layout.children[1].0 {
+                GuiItem::Widget(w) => {
+                    assert_eq!(w.widget_type, WidgetType::Knob);
+                    assert_eq!(w.param_name, Some("mix".to_string()));
+                }
+                other => panic!("Expected Widget, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Layout, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_panel_with_title() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    process { input }
+    gui {
+        panel "Controls" {
+            knob gain
+            label "Output Level"
+        }
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Panel(panel) => {
+            assert_eq!(panel.title, "Controls");
+            assert_eq!(panel.children.len(), 2);
+            // First child: knob
+            match &panel.children[0].0 {
+                GuiItem::Widget(w) => {
+                    assert_eq!(w.widget_type, WidgetType::Knob);
+                    assert_eq!(w.param_name, Some("gain".to_string()));
+                }
+                other => panic!("Expected Widget(Knob), got {:?}", other),
+            }
+            // Second child: label
+            match &panel.children[1].0 {
+                GuiItem::Widget(w) => {
+                    assert_eq!(w.widget_type, WidgetType::Label);
+                    assert_eq!(w.param_name, None);
+                    assert_eq!(w.label_text, Some("Output Level".to_string()));
+                }
+                other => panic!("Expected Widget(Label), got {:?}", other),
+            }
+        }
+        other => panic!("Expected Panel, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_widget_with_style_and_class() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    process { input }
+    gui {
+        knob gain { style "vintage" class "hero-knob" label "Volume" }
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 1);
+    match &gui.items[0].0 {
+        GuiItem::Widget(w) => {
+            assert_eq!(w.widget_type, WidgetType::Knob);
+            assert_eq!(w.param_name, Some("gain".to_string()));
+            assert_eq!(w.props.len(), 3);
+            assert_eq!(w.props[0], WidgetProp::Style("vintage".to_string()));
+            assert_eq!(w.props[1], WidgetProp::Class("hero-knob".to_string()));
+            assert_eq!(w.props[2], WidgetProp::Label("Volume".to_string()));
+        }
+        other => panic!("Expected Widget, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_nested_layout_in_panel() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    param mix : float = 0.5 in 0.0..1.0
+    process { input }
+    gui {
+        theme dark
+        accent "#E8A87C"
+        size 700 450
+        layout vertical {
+            panel "Main" {
+                layout horizontal {
+                    knob gain
+                    slider mix
+                }
+            }
+            label "Status"
+        }
+        css ".custom { opacity: 0.8; }"
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    // theme, accent, size, layout, css = 5 items
+    assert_eq!(gui.items.len(), 5);
+
+    // Verify the nested structure: layout > panel > layout > [knob, slider]
+    match &gui.items[3].0 {
+        GuiItem::Layout(outer) => {
+            assert_eq!(outer.direction, LayoutDirection::Vertical);
+            assert_eq!(outer.children.len(), 2); // panel + label
+
+            match &outer.children[0].0 {
+                GuiItem::Panel(panel) => {
+                    assert_eq!(panel.title, "Main");
+                    assert_eq!(panel.children.len(), 1); // inner layout
+
+                    match &panel.children[0].0 {
+                        GuiItem::Layout(inner) => {
+                            assert_eq!(inner.direction, LayoutDirection::Horizontal);
+                            assert_eq!(inner.children.len(), 2); // knob + slider
+                            match &inner.children[0].0 {
+                                GuiItem::Widget(w) => assert_eq!(w.widget_type, WidgetType::Knob),
+                                other => panic!("Expected Knob, got {:?}", other),
+                            }
+                            match &inner.children[1].0 {
+                                GuiItem::Widget(w) => assert_eq!(w.widget_type, WidgetType::Slider),
+                                other => panic!("Expected Slider, got {:?}", other),
+                            }
+                        }
+                        other => panic!("Expected inner Layout, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected Panel, got {:?}", other),
+            }
+
+            // Second child of outer layout: label
+            match &outer.children[1].0 {
+                GuiItem::Widget(w) => {
+                    assert_eq!(w.widget_type, WidgetType::Label);
+                    assert_eq!(w.label_text, Some("Status".to_string()));
+                }
+                other => panic!("Expected Label, got {:?}", other),
+            }
+        }
+        other => panic!("Expected outer Layout, got {:?}", other),
+    }
+
+    // Verify css
+    match &gui.items[4].0 {
+        GuiItem::Css(s) => assert_eq!(s, ".custom { opacity: 0.8; }"),
+        other => panic!("Expected Css, got {:?}", other),
+    }
+}
+
+#[test]
+fn gui_block_all_widget_types() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    param level : float = 0.0 in -60.0..0.0
+    param bypass : bool = false
+    process { input }
+    gui {
+        knob gain
+        slider gain
+        meter level
+        switch bypass
+        value gain
+        label "Info"
+    }
+}
+"##;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let gui = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::GuiDecl(gui) = item { Some(gui) } else { None }
+    }).expect("Should have a GuiDecl");
+
+    assert_eq!(gui.items.len(), 6);
+
+    let types: Vec<_> = gui.items.iter().map(|(item, _)| match item {
+        GuiItem::Widget(w) => w.widget_type.clone(),
+        other => panic!("Expected Widget, got {:?}", other),
+    }).collect();
+
+    assert_eq!(types, vec![
+        WidgetType::Knob,
+        WidgetType::Slider,
+        WidgetType::Meter,
+        WidgetType::Switch,
+        WidgetType::Value,
+        WidgetType::Label,
+    ]);
+}

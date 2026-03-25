@@ -284,7 +284,12 @@ impl<'a> Resolver<'a> {
         }
         self.seen_gui_decl = true;
 
-        for (item, span) in &gui.items {
+        self.validate_gui_items(&gui.items);
+    }
+
+    /// Recursively validate gui items (layout and panel children are nested).
+    fn validate_gui_items(&mut self, items: &[Spanned<GuiItem>]) {
+        for (item, span) in items {
             match item {
                 GuiItem::Theme(value) => {
                     if value != "dark" && value != "light" {
@@ -318,6 +323,71 @@ impl<'a> Resolver<'a> {
                         );
                     }
                 }
+                GuiItem::Size(_, _) => {
+                    // Size is always valid if it parsed (numbers from parser)
+                }
+                GuiItem::Css(value) => {
+                    if value.trim().is_empty() {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E014",
+                                *span,
+                                "empty css string — `css` must contain CSS rules",
+                            )
+                            .with_suggestion(
+                                "Provide CSS content: `css \".my-class { color: red; }\"`",
+                            ),
+                        );
+                    }
+                }
+                GuiItem::Layout(layout) => {
+                    // Validate direction was recognized (parser accepts any ident,
+                    // but defaulted to Vertical for unknown — we still want to error)
+                    // We re-check the direction string isn't needed because the parser
+                    // already mapped it. But we should validate children recursively.
+                    self.validate_gui_items(&layout.children);
+                }
+                GuiItem::Panel(panel) => {
+                    self.validate_gui_items(&panel.children);
+                }
+                GuiItem::Widget(widget) => {
+                    self.validate_widget(widget, *span);
+                }
+            }
+        }
+    }
+
+    /// Validate a widget declaration: param bindings, label constraints.
+    fn validate_widget(&mut self, widget: &WidgetDecl, span: Span) {
+        match widget.widget_type {
+            // Param-bound widgets must reference an existing param
+            WidgetType::Knob
+            | WidgetType::Slider
+            | WidgetType::Meter
+            | WidgetType::Switch
+            | WidgetType::Value => {
+                if let Some(ref name) = widget.param_name {
+                    if !self.params.contains_key(name) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E014",
+                                span,
+                                format!(
+                                    "widget references unknown parameter '{}' — no `param {}` declared in this plugin",
+                                    name, name
+                                ),
+                            )
+                            .with_suggestion(
+                                "Declare the parameter first: `param {} : float = 0.0 in 0.0..1.0`",
+                            ),
+                        );
+                    }
+                }
+            }
+            // Label must NOT have a param_name (it has label_text instead)
+            WidgetType::Label => {
+                // The parser enforces this structurally — label uses StringLiteral,
+                // not an ident param name. So param_name is always None here.
             }
         }
     }

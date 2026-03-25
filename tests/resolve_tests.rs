@@ -1085,3 +1085,187 @@ plugin "Test" {
 "#;
     resolve_expect_ok(source);
 }
+
+// ── Tier 2/3 GUI resolver tests ─────────────────────────────
+
+#[test]
+fn gui_widget_valid_param_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    process { input -> output }
+    gui {
+        knob gain
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_widget_unknown_param_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    process { input -> output }
+    gui {
+        knob volume
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("volume")),
+        "Should have E014 for unknown param 'volume': {:?}", errors
+    );
+}
+
+#[test]
+fn gui_label_no_param_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        label "Output Level"
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_empty_css_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        css ""
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("empty css")),
+        "Should have E014 for empty css string: {:?}", errors
+    );
+}
+
+#[test]
+fn gui_css_with_content_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        css ".custom { color: red; }"
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_size_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    process { input -> output }
+    gui {
+        size 800 600
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_layout_with_valid_widgets_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    param mix : float = 0.5 in 0.0..1.0
+    process { input -> output }
+    gui {
+        layout horizontal {
+            knob gain
+            knob mix
+        }
+    }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn gui_nested_layout_widget_unknown_param_e014() {
+    let source = r#"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    process { input -> output }
+    gui {
+        layout vertical {
+            panel "Controls" {
+                knob nonexistent
+            }
+        }
+    }
+}
+"#;
+    let errors = resolve_expect_errors(source);
+    assert!(
+        errors.iter().any(|d| d.code == "E014" && d.message.contains("nonexistent")),
+        "Should have E014 for unknown param 'nonexistent' in nested layout: {:?}", errors
+    );
+}
+
+#[test]
+fn gui_full_tier2_tier3_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    vendor "Test"
+    input stereo
+    output stereo
+    param gain : float = 0.0 in -30.0..30.0
+    param mix : float = 0.5 in 0.0..1.0
+    process { input -> output }
+    gui {
+        theme dark
+        accent "#E8A87C"
+        size 700 450
+        layout vertical {
+            panel "Main" {
+                layout horizontal {
+                    knob gain { style "vintage" class "hero-knob" }
+                    slider mix
+                }
+            }
+            label "Status"
+        }
+        css ".hero-knob canvas { filter: drop-shadow(0 0 8px var(--accent)); }"
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
