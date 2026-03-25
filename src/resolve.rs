@@ -458,6 +458,9 @@ impl<'a> Resolver<'a> {
             "pitch" => Some(DspType::Frequency),
             "velocity" => Some(DspType::Number),
             "gate" => Some(DspType::Bool),
+            "pressure" => Some(DspType::Number),
+            "bend" => Some(DspType::Number),
+            "slide" => Some(DspType::Number),
             _ => Some(DspType::Number),
         }
     }

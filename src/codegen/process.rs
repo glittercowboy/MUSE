@@ -611,6 +611,27 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                                 "if self.active_note.is_some() { 1.0_f32 } else { 0.0_f32 }".to_string()
                             }
                         }
+                        "pressure" => {
+                            if ctx.is_polyphonic {
+                                "voice.pressure".to_string()
+                            } else {
+                                "0.0_f32".to_string()
+                            }
+                        }
+                        "bend" => {
+                            if ctx.is_polyphonic {
+                                "voice.tuning".to_string()
+                            } else {
+                                "0.0_f32".to_string()
+                            }
+                        }
+                        "slide" => {
+                            if ctx.is_polyphonic {
+                                "voice.slide".to_string()
+                            } else {
+                                "0.0_f32".to_string()
+                            }
+                        }
                         _ => format!("self.{}", field),
                     };
                 }

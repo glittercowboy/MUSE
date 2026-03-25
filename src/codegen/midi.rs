@@ -65,6 +65,48 @@ pub fn generate_polyphonic_event_handler() -> String {
                 } => {
                     self.choke_voices(context, timing, voice_id, channel, note);
                 }
+                NoteEvent::PolyPressure {
+                    voice_id,
+                    note,
+                    channel,
+                    pressure,
+                    ..
+                } => {
+                    let search_id = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
+                    if let Some(idx) = self.get_voice_idx(search_id) {
+                        if let Some(ref mut voice) = self.voices[idx] {
+                            voice.pressure = pressure;
+                        }
+                    }
+                }
+                NoteEvent::PolyTuning {
+                    voice_id,
+                    note,
+                    channel,
+                    tuning,
+                    ..
+                } => {
+                    let search_id = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
+                    if let Some(idx) = self.get_voice_idx(search_id) {
+                        if let Some(ref mut voice) = self.voices[idx] {
+                            voice.tuning = tuning;
+                        }
+                    }
+                }
+                NoteEvent::PolyBrightness {
+                    voice_id,
+                    note,
+                    channel,
+                    brightness,
+                    ..
+                } => {
+                    let search_id = voice_id.unwrap_or_else(|| Self::compute_fallback_voice_id(note, channel));
+                    if let Some(idx) = self.get_voice_idx(search_id) {
+                        if let Some(ref mut voice) = self.voices[idx] {
+                            voice.slide = brightness;
+                        }
+                    }
+                }
                 _ => {}
             }
             next_event = context.next_event();
@@ -104,6 +146,9 @@ pub fn generate_voice_helper_methods() -> String {
             note,
             note_freq: util::midi_note_to_freq(note),
             velocity: 0.0,
+            pressure: 0.0,
+            tuning: 0.0,
+            slide: 0.0,
             releasing: false,
             {VOICE_FIELD_DEFAULTS}
         };

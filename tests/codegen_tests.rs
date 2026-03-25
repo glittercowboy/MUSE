@@ -439,3 +439,30 @@ fn codegen_generate_plugin_returns_path() {
     let crate_dir = generate_from_source(source, &tmp);
     assert_eq!(crate_dir, tmp);
 }
+
+#[test]
+fn mpe_synth_cargo_check() {
+    let source = include_str!("../examples/mpe_synth.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-mpe-synth");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+
+    // Verify MPE expression fields in Voice struct
+    assert!(lib_rs.contains("pressure: f32"), "Voice struct should have pressure field");
+    assert!(lib_rs.contains("tuning: f32"), "Voice struct should have tuning field");
+    assert!(lib_rs.contains("slide: f32"), "Voice struct should have slide field");
+
+    // Verify MPE expression event handlers
+    assert!(lib_rs.contains("PolyPressure"), "Should handle PolyPressure events");
+    assert!(lib_rs.contains("PolyTuning"), "Should handle PolyTuning events");
+    assert!(lib_rs.contains("PolyBrightness"), "Should handle PolyBrightness events");
+
+    // Verify MPE field access in process block maps to voice fields
+    assert!(lib_rs.contains("voice.pressure"), "note.pressure should map to voice.pressure");
+
+    assert_cargo_check(&crate_dir);
+}

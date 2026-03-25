@@ -187,6 +187,9 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     out.push_str("    internal_voice_id: u64,\n");
     out.push_str("    note_freq: f32,\n");
     out.push_str("    velocity: f32,\n");
+    out.push_str("    pressure: f32,\n");
+    out.push_str("    tuning: f32,\n");
+    out.push_str("    slide: f32,\n");
     out.push_str("    releasing: bool,\n");
     for i in 0..process_info.oscillator_count {
         out.push_str(&format!("    osc_state_{}: OscState,\n", i));

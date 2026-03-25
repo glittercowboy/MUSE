@@ -701,3 +701,72 @@ plugin "Test" {
         e009.message
     );
 }
+
+// ── MPE expression fields ────────────────────────────────────
+
+#[test]
+fn note_pressure_resolves_to_number() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output stereo
+  midi {
+    note {
+      let p = note.pressure
+    }
+  }
+  voices 8
+  process {
+    sine(note.pitch) -> gain(note.pressure) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn note_bend_resolves_to_number() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output stereo
+  midi {
+    note {
+      let b = note.bend
+    }
+  }
+  voices 8
+  process {
+    sine(note.pitch) -> gain(note.bend) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn note_slide_resolves_to_number() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output stereo
+  midi {
+    note {
+      let sl = note.slide
+    }
+  }
+  voices 8
+  process {
+    sine(note.pitch) -> gain(note.slide) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn mpe_synth_example_resolves_without_errors() {
+    let source = include_str!("../examples/mpe_synth.muse");
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
+}
