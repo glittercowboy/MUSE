@@ -1277,3 +1277,127 @@ fn preview_cargo_check_filter() {
     let crate_dir = generate_from_source(source, &tmp);
     assert_cargo_check_features(&crate_dir, "preview");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Preview C-ABI round-trip (requires cargo build)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Build a generated crate with `--features preview`, codesign the dylib,
+/// and return the path to the loadable .dylib.
+#[cfg(target_os = "macos")]
+fn build_preview_dylib(source: &str, test_name: &str) -> (PathBuf, PathBuf) {
+    let tmp = std::env::temp_dir().join(format!("muse-preview-test-{test_name}"));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+
+    // Read package name from generated Cargo.toml
+    let cargo_toml_content = std::fs::read_to_string(crate_dir.join("Cargo.toml")).unwrap();
+    let package_name = cargo_toml_content
+        .lines()
+        .find(|l| l.starts_with("name = "))
+        .and_then(|l| l.strip_prefix("name = \""))
+        .and_then(|l| l.strip_suffix('"'))
+        .expect("could not extract package name from Cargo.toml")
+        .to_string();
+
+    // cargo build --features preview (debug mode)
+    let output = Command::new("cargo")
+        .args(["build", "--features", "preview"])
+        .current_dir(&crate_dir)
+        .output()
+        .expect("failed to run cargo build --features preview");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!("cargo build --features preview failed:\n{stderr}");
+    }
+
+    // Locate the dylib
+    let lib_name = package_name.replace('-', "_");
+    let dylib = crate_dir
+        .join("target/debug")
+        .join(format!("lib{lib_name}.dylib"));
+    assert!(dylib.exists(), "dylib not found at {}", dylib.display());
+
+    // Codesign (required on Apple Silicon)
+    let sign = Command::new("codesign")
+        .args(["--force", "--sign", "-", &dylib.display().to_string()])
+        .output()
+        .expect("failed to run codesign");
+    if !sign.status.success() {
+        let stderr = String::from_utf8_lossy(&sign.stderr);
+        panic!("codesign failed: {stderr}");
+    }
+
+    (crate_dir, dylib)
+}
+
+#[test]
+#[ignore = "requires cargo build — run with --include-ignored"]
+#[cfg(target_os = "macos")]
+fn preview_cabi_round_trip() {
+    use muse_lang::preview::host_plugin::HostPlugin;
+
+    let source = include_str!("../examples/gain.muse");
+    let (_crate_dir, dylib) = build_preview_dylib(source, "cabi-round-trip");
+
+    // Load the dylib via HostPlugin (which resolves all 9 C-ABI symbols)
+    let plugin = HostPlugin::load(&dylib, 44100.0)
+        .expect("HostPlugin::load failed — C-ABI symbols missing or create returned null");
+
+    // Param count: gain.muse has 1 param ("gain")
+    assert_eq!(plugin.param_count(), 1, "gain.muse should have 1 param");
+
+    // Channel count: stereo = 2
+    assert_eq!(plugin.num_channels(), 2, "gain.muse should be stereo (2 channels)");
+
+    // Param name
+    let name = plugin.param_name(0);
+    assert_eq!(name, "gain", "first param should be named 'gain'");
+
+    // Param default: gain.muse default is 0.0 dB
+    let default_val = plugin.param_default(0);
+    assert!(
+        (default_val - 0.0).abs() < 0.001,
+        "gain default should be 0.0 dB, got {default_val}"
+    );
+
+    // Param set/get round-trip
+    plugin.set_param(0, 6.0);
+    let readback = plugin.get_param(0);
+    assert!(
+        (readback - 6.0).abs() < 0.01,
+        "set_param(0, 6.0) then get_param(0) should round-trip, got {readback}"
+    );
+
+    // Process silence through the plugin at 0 dB gain — output should be near-zero
+    plugin.set_param(0, 0.0); // 0 dB = unity gain
+    let num_samples = 512;
+    let silence = vec![0.0_f32; num_samples];
+    let inputs: Vec<&[f32]> = vec![&silence, &silence]; // stereo silence
+    let mut out_l = vec![0.0_f32; num_samples];
+    let mut out_r = vec![0.0_f32; num_samples];
+    let mut outputs: Vec<&mut [f32]> = vec![&mut out_l, &mut out_r];
+    plugin.process(&inputs, &mut outputs);
+
+    // Silence in at unity gain → silence out
+    let max_abs = out_l
+        .iter()
+        .chain(out_r.iter())
+        .map(|s| s.abs())
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_abs < 0.001,
+        "processing silence at 0 dB gain should produce near-zero output, got peak {max_abs}"
+    );
+
+    // Snapshot/restore round-trip
+    plugin.set_param(0, -12.0);
+    let snapshot = plugin.snapshot_params();
+    assert_eq!(snapshot.len(), 1);
+    assert!((snapshot[0].1 - (-12.0)).abs() < 0.01);
+
+    eprintln!("preview_cabi_round_trip: all assertions passed");
+    // HostPlugin::drop calls muse_preview_destroy automatically
+}

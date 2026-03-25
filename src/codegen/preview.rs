@@ -246,7 +246,7 @@ pub fn generate_preview_exports(plugin: &PluginDef, process_info: &ProcessInfo) 
     out.push_str("        let instance = &*(ptr as *mut PreviewInstance);\n");
     out.push_str("        match index {\n");
     for (i, p) in params.iter().enumerate() {
-        let expr = param_read_expr(p, "instance.plugin.params.");
+        let expr = param_smoother_read_expr(p, "instance.plugin.params.");
         out.push_str(&format!(
             "            {} => {},\n",
             i, expr
@@ -320,8 +320,10 @@ fn generate_preview_context(struct_name: &str, _is_instrument: bool) -> String {
 
 // --- Param helpers ---
 
-/// Generate the full expression for reading a param's current f32 value.
+/// Generate the full expression for reading a param's declared/default f32 value.
+/// Uses `.value()` which returns the param's plain value (set by the host or default).
 /// For dB params, converts from gain-linear back to dB domain.
+/// Use this for `get_param_default` where we read from a fresh `PluginParams::default()`.
 fn param_read_expr(param: &ParamDef, prefix: &str) -> String {
     let field = format!("{}{}", prefix, param.name);
     match &param.param_type {
@@ -333,6 +335,27 @@ fn param_read_expr(param: &ParamDef, prefix: &str) -> String {
             }
         }
         ParamType::Int => format!("{}.value() as f32", field),
+        ParamType::Bool => format!("if {}.value() {{ 1.0 }} else {{ 0.0 }}", field),
+        ParamType::Enum(_) => format!("{}.value().to_index() as f32", field),
+    }
+}
+
+/// Generate the expression for reading a param's current smoother value.
+/// Uses `smoothed.previous_value()` which returns the last smoother output
+/// without advancing it. This matches what `set_param` writes via `smoothed.reset()`.
+/// For dB params, converts from gain-linear back to dB domain.
+fn param_smoother_read_expr(param: &ParamDef, prefix: &str) -> String {
+    let field = format!("{}{}", prefix, param.name);
+    match &param.param_type {
+        ParamType::Float => {
+            if is_db_param(param) {
+                format!("util::gain_to_db({}.smoothed.previous_value())", field)
+            } else {
+                format!("{}.smoothed.previous_value()", field)
+            }
+        }
+        ParamType::Int => format!("{}.smoothed.previous_value() as f32", field),
+        // Bool/Enum have no smoothers — fall back to .value()
         ParamType::Bool => format!("if {}.value() {{ 1.0 }} else {{ 0.0 }}", field),
         ParamType::Enum(_) => format!("{}.value().to_index() as f32", field),
     }
