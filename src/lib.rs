@@ -114,6 +114,93 @@ fn extract_version(plugin: &ast::PluginDef) -> Option<String> {
     None
 }
 
+/// Run `cargo build --release` in the generated crate directory.
+///
+/// Returns the path to the built cdylib on success. On macOS the cdylib
+/// is at `<crate_dir>/target/release/lib<underscored_name>.dylib`.
+pub fn build_plugin(crate_dir: &std::path::Path, package_name: &str) -> Result<std::path::PathBuf, String> {
+    let status = std::process::Command::new("cargo")
+        .args(["build", "--release"])
+        .current_dir(crate_dir)
+        .status()
+        .map_err(|e| format!("failed to invoke cargo: {e}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "cargo build exited with {}",
+            status.code().map_or("signal".to_string(), |c| c.to_string())
+        ));
+    }
+
+    // macOS cdylib naming: lib<name>.dylib where <name> has hyphens → underscores
+    let lib_name = package_name.replace('-', "_");
+    let dylib = crate_dir
+        .join("target")
+        .join("release")
+        .join(format!("lib{lib_name}.dylib"));
+
+    if !dylib.exists() {
+        return Err(format!("expected dylib not found at {}", dylib.display()));
+    }
+
+    Ok(dylib)
+}
+
+/// Assemble a macOS .clap bundle directory from a built cdylib.
+///
+/// Creates:
+/// ```text
+/// <output_dir>/<Plugin Display Name>.clap/
+///   Contents/
+///     Info.plist
+///     MacOS/
+///       <Plugin Display Name>    ← renamed dylib
+/// ```
+pub fn assemble_clap_bundle(
+    output_dir: &std::path::Path,
+    dylib_path: &std::path::Path,
+    plugin_name: &str,
+    clap_id: &str,
+    version: &str,
+) -> Result<std::path::PathBuf, String> {
+    let bundle_dir = output_dir.join(format!("{plugin_name}.clap"));
+    let contents_dir = bundle_dir.join("Contents");
+    let macos_dir = contents_dir.join("MacOS");
+
+    std::fs::create_dir_all(&macos_dir)
+        .map_err(|e| format!("failed to create bundle directory: {e}"))?;
+
+    // Copy dylib → Contents/MacOS/<Plugin Display Name>
+    let binary_dest = macos_dir.join(plugin_name);
+    std::fs::copy(dylib_path, &binary_dest)
+        .map_err(|e| format!("failed to copy dylib to bundle: {e}"))?;
+
+    // Generate Info.plist
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>{plugin_name}</string>
+    <key>CFBundleExecutable</key>
+    <string>{plugin_name}</string>
+    <key>CFBundleIdentifier</key>
+    <string>{clap_id}</string>
+    <key>CFBundleVersion</key>
+    <string>{version}</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+</dict>
+</plist>
+"#
+    );
+    std::fs::write(contents_dir.join("Info.plist"), plist)
+        .map_err(|e| format!("failed to write Info.plist: {e}"))?;
+
+    Ok(bundle_dir)
+}
+
 /// Convenience function: parse source and emit diagnostics.
 ///
 /// - If `json_output` is true, prints JSON diagnostics to stdout.

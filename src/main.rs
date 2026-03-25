@@ -3,16 +3,17 @@
 //! Usage:
 //!   muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]
 //!   muse check <file> [--format json]
+//!   muse test <file> [--output-dir <dir>] [--format json]
 //!
 //! Exit codes:
 //!   0 — success
-//!   1 — compile/check error (diagnostics emitted)
+//!   1 — compile/check/test error (diagnostics emitted)
 //!   2 — build error (cargo build failed)
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process;
 
-use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne};
+use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -25,6 +26,7 @@ fn main() {
     match args[1].as_str() {
         "compile" => cmd_compile(&args[2..]),
         "check" => cmd_check(&args[2..]),
+        "test" => cmd_test(&args[2..]),
         "--help" | "-h" | "help" => {
             print_usage();
             process::exit(0);
@@ -298,110 +300,382 @@ fn cmd_check(args: &[String]) {
     }
 }
 
-/// Run `cargo build --release` in the generated crate directory.
-///
-/// Returns the path to the built cdylib on success. On macOS the cdylib
-/// is at `<crate_dir>/target/release/lib<underscored_name>.dylib`.
-fn build_plugin(crate_dir: &Path, package_name: &str) -> Result<PathBuf, String> {
-    let status = std::process::Command::new("cargo")
-        .args(["build", "--release"])
-        .current_dir(crate_dir)
-        .status()
-        .map_err(|e| format!("failed to invoke cargo: {e}"))?;
+// ── muse test ────────────────────────────────────────────────────────────────
 
-    if !status.success() {
-        return Err(format!(
-            "cargo build exited with {}",
-            status.code().map_or("signal".to_string(), |c| c.to_string())
-        ));
-    }
-
-    // macOS cdylib naming: lib<name>.dylib where <name> has hyphens → underscores
-    let lib_name = package_name.replace('-', "_");
-    let dylib = crate_dir
-        .join("target")
-        .join("release")
-        .join(format!("lib{lib_name}.dylib"));
-
-    if !dylib.exists() {
-        return Err(format!("expected dylib not found at {}", dylib.display()));
-    }
-
-    Ok(dylib)
+/// Parsed CLI options for the test subcommand.
+struct TestOpts {
+    file: PathBuf,
+    output_dir: PathBuf,
+    json_format: bool,
 }
 
-/// Assemble a macOS .clap bundle directory from a built cdylib.
-///
-/// Creates:
-/// ```text
-/// <output_dir>/<Plugin Display Name>.clap/
-///   Contents/
-///     Info.plist
-///     MacOS/
-///       <Plugin Display Name>    ← renamed dylib
-/// ```
-fn assemble_clap_bundle(
-    output_dir: &Path,
-    dylib_path: &Path,
-    plugin_name: &str,
-    clap_id: &str,
-    version: &str,
-) -> Result<PathBuf, String> {
-    let bundle_dir = output_dir.join(format!("{plugin_name}.clap"));
-    let contents_dir = bundle_dir.join("Contents");
-    let macos_dir = contents_dir.join("MacOS");
+fn parse_test_args(args: &[String]) -> Result<TestOpts, String> {
+    if args.is_empty() {
+        return Err("muse test: missing <file> argument".into());
+    }
 
-    std::fs::create_dir_all(&macos_dir)
-        .map_err(|e| format!("failed to create bundle directory: {e}"))?;
+    let mut file: Option<PathBuf> = None;
+    let mut output_dir: Option<PathBuf> = None;
+    let mut json_format = false;
 
-    // Copy dylib → Contents/MacOS/<Plugin Display Name>
-    let binary_dest = macos_dir.join(plugin_name);
-    std::fs::copy(dylib_path, &binary_dest)
-        .map_err(|e| format!("failed to copy dylib to bundle: {e}"))?;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output-dir" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--output-dir requires a value".into());
+                }
+                output_dir = Some(PathBuf::from(&args[i]));
+            }
+            "--format" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--format requires a value".into());
+                }
+                match args[i].as_str() {
+                    "json" => json_format = true,
+                    other => return Err(format!("unknown format '{other}', expected 'json'")),
+                }
+            }
+            arg if arg.starts_with('-') => {
+                return Err(format!("unknown option '{arg}'"));
+            }
+            _ => {
+                if file.is_some() {
+                    return Err(format!("unexpected argument '{}'", args[i]));
+                }
+                file = Some(PathBuf::from(&args[i]));
+            }
+        }
+        i += 1;
+    }
 
-    // Generate Info.plist
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>{plugin_name}</string>
-    <key>CFBundleExecutable</key>
-    <string>{plugin_name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{clap_id}</string>
-    <key>CFBundleVersion</key>
-    <string>{version}</string>
-    <key>CFBundlePackageType</key>
-    <string>BNDL</string>
-</dict>
-</plist>
-"#
-    );
-    std::fs::write(contents_dir.join("Info.plist"), plist)
-        .map_err(|e| format!("failed to write Info.plist: {e}"))?;
+    let file = file.ok_or("muse test: missing <file> argument")?;
+    let output_dir = output_dir.unwrap_or_else(|| std::env::temp_dir().join("muse-test"));
 
-    Ok(bundle_dir)
+    Ok(TestOpts {
+        file,
+        output_dir,
+        json_format,
+    })
+}
+
+/// A single test result parsed from cargo test output.
+#[derive(Debug)]
+struct TestResult {
+    name: String,
+    passed: bool,
+    /// Populated from MUSE_TEST_FAIL:{json} for failed assertions.
+    assertion: Option<String>,
+    expected: Option<String>,
+    actual: Option<String>,
+}
+
+/// Aggregate results from a cargo test run.
+#[derive(Debug)]
+struct TestRunResults {
+    tests: Vec<TestResult>,
+    passed: usize,
+    failed: usize,
+}
+
+fn cmd_test(args: &[String]) {
+    let opts = match parse_test_args(args) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("muse: {e}");
+            process::exit(2);
+        }
+    };
+
+    let source = match std::fs::read_to_string(&opts.file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("muse: cannot read '{}': {e}", opts.file.display());
+            process::exit(2);
+        }
+    };
+
+    let filename = opts.file.display().to_string();
+
+    // Compile the .muse file to a Rust crate (no native build — tests run in debug)
+    let result = match compile(&source, &filename, &opts.output_dir) {
+        Ok(r) => r,
+        Err(diags) => {
+            if opts.json_format {
+                println!("{}", diagnostics_to_json(&diags));
+            } else {
+                render_ariadne(&diags, &source, &filename);
+            }
+            process::exit(1);
+        }
+    };
+
+    // Check that the generated code contains tests
+    let lib_rs = result.crate_dir.join("src").join("lib.rs");
+    match std::fs::read_to_string(&lib_rs) {
+        Ok(contents) => {
+            if !contents.contains("#[test]") {
+                if opts.json_format {
+                    let json = serde_json::json!({
+                        "status": "error",
+                        "message": "no test blocks found in source file",
+                        "file": filename,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                } else {
+                    eprintln!("muse: no test blocks found in '{}'", opts.file.display());
+                }
+                process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("muse: failed to read generated lib.rs: {e}");
+            process::exit(2);
+        }
+    }
+
+    // Run cargo test in the generated crate (debug mode for speed)
+    let output = match std::process::Command::new("cargo")
+        .args(["test", "--", "--nocapture"])
+        .current_dir(&result.crate_dir)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            if opts.json_format {
+                let json = serde_json::json!({
+                    "status": "error",
+                    "phase": "build",
+                    "message": format!("failed to invoke cargo test: {e}"),
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            } else {
+                eprintln!("muse: failed to invoke cargo test: {e}");
+            }
+            process::exit(2);
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // If cargo itself failed to compile the generated crate, that's a build error
+    if !output.status.success() {
+        // Check if this is a compile error (no test results at all) vs test failure
+        let has_test_results = stdout.lines().any(|l| l.starts_with("test "));
+        if !has_test_results {
+            if opts.json_format {
+                let json = serde_json::json!({
+                    "status": "error",
+                    "phase": "build",
+                    "message": stderr.trim(),
+                });
+                println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            } else {
+                eprintln!("muse: cargo test build failed:\n{}", stderr.trim());
+            }
+            process::exit(2);
+        }
+    }
+
+    // Parse cargo test output
+    let results = parse_cargo_test_output(&stdout, &stderr);
+
+    if opts.json_format {
+        print_json_results(&results, &filename);
+    } else {
+        print_human_results(&results);
+    }
+
+    if results.failed > 0 {
+        process::exit(1);
+    } else {
+        process::exit(0);
+    }
+}
+
+/// Parse cargo test stdout/stderr into structured test results.
+fn parse_cargo_test_output(stdout: &str, stderr: &str) -> TestRunResults {
+    let mut tests = Vec::new();
+
+    // Collect MUSE_TEST_FAIL entries from stderr for enriching failure details.
+    // The format is: MUSE_TEST_FAIL:{"test":"...","assertion":"...","expected":"...","actual":"..."}
+    let mut fail_details: std::collections::HashMap<String, (String, String, String)> =
+        std::collections::HashMap::new();
+
+    // Scan both stdout and stderr for MUSE_TEST_FAIL markers (--nocapture sends
+    // panic messages to stdout for the test runner)
+    for line in stdout.lines().chain(stderr.lines()) {
+        if let Some(json_start) = line.find("MUSE_TEST_FAIL:") {
+            let json_str = &line[json_start + "MUSE_TEST_FAIL:".len()..];
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                if let Some(name) = val.get("test").and_then(|v| v.as_str()) {
+                    let assertion = val
+                        .get("assertion")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let expected = val
+                        .get("expected")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let actual = val
+                        .get("actual")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    fail_details.insert(name.to_string(), (assertion, expected, actual));
+                }
+            }
+        }
+    }
+
+    // Parse test result lines from stdout: "test tests::test_<name> ... ok" or "... FAILED"
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with("test ") {
+            continue;
+        }
+
+        // Format: "test tests::test_<sanitized_name> ... ok" or "... FAILED"
+        let is_ok = line.ends_with("... ok");
+        let is_failed = line.ends_with("... FAILED");
+        if !is_ok && !is_failed {
+            continue;
+        }
+
+        // Extract the test function name
+        let name_part = if is_ok {
+            line.strip_prefix("test ")
+                .and_then(|s| s.strip_suffix(" ... ok"))
+        } else {
+            line.strip_prefix("test ")
+                .and_then(|s| s.strip_suffix(" ... FAILED"))
+        };
+
+        let Some(raw_name) = name_part else {
+            continue;
+        };
+
+        // Convert "tests::test_silence_in_produces_silence_out" → "silence in produces silence out"
+        let human_name = raw_name
+            .strip_prefix("tests::test_")
+            .unwrap_or(raw_name)
+            .replace('_', " ");
+
+        if is_ok {
+            tests.push(TestResult {
+                name: human_name,
+                passed: true,
+                assertion: None,
+                expected: None,
+                actual: None,
+            });
+        } else {
+            // Look up structured failure details
+            let details = fail_details.get(&human_name);
+            tests.push(TestResult {
+                name: human_name,
+                passed: false,
+                assertion: details.map(|(a, _, _)| a.clone()),
+                expected: details.map(|(_, e, _)| e.clone()),
+                actual: details.map(|(_, _, a)| a.clone()),
+            });
+        }
+    }
+
+    let passed = tests.iter().filter(|t| t.passed).count();
+    let failed = tests.iter().filter(|t| !t.passed).count();
+
+    TestRunResults {
+        tests,
+        passed,
+        failed,
+    }
+}
+
+/// Print test results as structured JSON.
+fn print_json_results(results: &TestRunResults, file: &str) {
+    let status = if results.failed > 0 { "fail" } else { "ok" };
+    let total = results.passed + results.failed;
+
+    let tests_json: Vec<serde_json::Value> = results
+        .tests
+        .iter()
+        .map(|t| {
+            let mut obj = serde_json::json!({
+                "name": t.name,
+                "result": if t.passed { "pass" } else { "fail" },
+            });
+            if !t.passed {
+                if let Some(ref a) = t.assertion {
+                    obj["assertion"] = serde_json::Value::String(a.clone());
+                }
+                if let Some(ref e) = t.expected {
+                    obj["expected"] = serde_json::Value::String(e.clone());
+                }
+                if let Some(ref a) = t.actual {
+                    obj["actual"] = serde_json::Value::String(a.clone());
+                }
+            }
+            obj
+        })
+        .collect();
+
+    let json = serde_json::json!({
+        "status": status,
+        "file": file,
+        "tests": tests_json,
+        "passed": results.passed,
+        "failed": results.failed,
+        "total": total,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+}
+
+/// Print test results in human-readable format.
+fn print_human_results(results: &TestRunResults) {
+    let total = results.passed + results.failed;
+
+    for t in &results.tests {
+        if t.passed {
+            eprintln!("  ✓ {}", t.name);
+        } else {
+            eprintln!("  ✗ {}", t.name);
+            if let Some(ref assertion) = t.assertion {
+                let actual_str = t.actual.as_deref().unwrap_or("?");
+                eprintln!("    assertion failed: {} (actual: {})", assertion, actual_str);
+            }
+        }
+    }
+
+    eprintln!();
+    eprintln!("  {} passed, {} failed, {} total", results.passed, results.failed, total);
 }
 
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]");
     eprintln!("  muse check <file> [--format json]");
+    eprintln!("  muse test <file> [--output-dir <dir>] [--format json]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compile    Parse, resolve, and generate a Rust/nih-plug crate from a .muse file");
     eprintln!("  check      Parse and resolve a .muse file, reporting any errors");
+    eprintln!("  test       Compile and run in-language test blocks, reporting pass/fail results");
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --output-dir <dir>  Directory to place generated crate (default: current dir)");
     eprintln!("  --format json       Output structured JSON diagnostics instead of human-readable");
-    eprintln!("  --no-build          Generate Rust crate only, skip cargo build");
+    eprintln!("  --no-build          Generate Rust crate only, skip cargo build (compile only)");
     eprintln!("  --release           Build in release mode (default: debug)");
     eprintln!();
     eprintln!("Exit codes:");
     eprintln!("  0  Success");
-    eprintln!("  1  Compile/check error (diagnostics emitted)");
+    eprintln!("  1  Compile/check/test error (diagnostics emitted)");
     eprintln!("  2  Build or I/O error");
 }
