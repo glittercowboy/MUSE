@@ -304,6 +304,27 @@ fn mono_synth_unchanged() {
 }
 
 #[test]
+fn poly_synth_example_cargo_check() {
+    let source = include_str!("../examples/poly_synth.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-poly-synth-example");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+
+    // Verify polyphonic codegen markers
+    assert!(lib_rs.contains("struct Voice"), "Should emit Voice struct");
+    assert!(lib_rs.contains("voices: [Option<Voice>; 8]"), "Should allocate 8 voices");
+    assert!(lib_rs.contains("VoiceTerminated"), "Should send VoiceTerminated events");
+    assert!(lib_rs.contains("MAX_BLOCK_SIZE"), "Should use block-based rendering");
+    assert!(lib_rs.contains("CLAP_POLY_MODULATION_CONFIG"), "Should emit CLAP poly config");
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
 fn poly_codegen_contains_voice_struct() {
     let source = include_str!("../tests/fixtures/poly_synth_voice_decl.muse");
     let (_, lib_rs) = generate_code_strings(source);
