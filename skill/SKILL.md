@@ -54,6 +54,8 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 - **Polyphony is per-voice mono.** Each voice outputs mono, summed to the output bus. No per-voice stereo panning yet.
 - **Avoid Rust reserved words as variable names.** Don't use `mod`, `fn`, `type`, etc. as `let` binding names in process blocks — they'll break the generated Rust code.
 - **GUI editor crashes in VST3 hosts.** The web view editor (`gui { }` block) works in `muse preview` standalone mode but crashes when opened inside Ableton Live's VST3 host. Use `muse preview` to verify GUI appearance. Headless plugins (without `gui` block) work fine in all DAWs.
+- **`muse preview` audio input is macOS-only.** The `--input mic` option requires microphone permission (macOS will prompt on first use). The `--input file:<path>` option accepts WAV files only — mono or stereo, any sample rate (resampling not applied; a rate mismatch warning is printed).
+- **`muse preview` instruments ignore `--input`.** Only effect plugins use audio input routing. Instruments generate audio from MIDI — the `--input` flag is silently ignored for instrument plugins.
 
 ## CLI Quick Reference
 
@@ -62,7 +64,8 @@ muse check <file> [--format json]              # Parse + resolve only
 muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]
 muse test <file> [--format json]               # Run test blocks
 muse build <file> [--output-dir <dir>] [--format json]  # Full build → CLAP + VST3
-muse preview <file> [--format json]            # Preview GUI in native window (macOS)
+muse preview <file> [--format json] [--midi-port <name|list>] [--input <source>]
+                                               # Live audio preview with hot-reload (macOS)
 ```
 
 Exit codes: `0` success, `1` compile/check/test error, `2` build/I/O error.

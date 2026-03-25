@@ -986,6 +986,19 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
                 }
                 input_source = InputSource::parse(&args[i])?;
             }
+            "--help" | "-h" => {
+                eprintln!("Usage: muse preview <file> [--format json] [--midi-port <name|list>] [--input <source>]");
+                eprintln!();
+                eprintln!("Live audio preview with hot-reload (macOS only)");
+                eprintln!();
+                eprintln!("Options:");
+                eprintln!("  --format json       Emit structured JSON events to stdout");
+                eprintln!("  --midi-port <name>  Connect to a specific MIDI input port");
+                eprintln!("  --midi-port list    List available MIDI input ports and exit");
+                eprintln!("  --input <source>    Audio input for effect plugins:");
+                eprintln!("                        silence (default), mic, file:<path>");
+                std::process::exit(0);
+            }
             arg if arg.starts_with('-') => {
                 return Err(format!("unknown option '{arg}'"));
             }

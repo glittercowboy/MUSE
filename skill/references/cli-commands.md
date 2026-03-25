@@ -148,46 +148,61 @@ muse build <file> [--output-dir <dir>] [--format json]
 }
 ```
 
-## Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| `0` | Success — no errors |
-| `1` | Compile, check, or test error — diagnostics emitted |
-| `2` | Build or I/O error — system-level failure |
-
 ---
 
 ### `muse preview`
 
-Open a native macOS window showing the plugin's GUI as it would appear in a DAW. Parses the `.muse` file, generates the HTML/CSS/JS editor UI, and renders it in a WKWebView.
+Live audio preview with hot-reload. Compiles the plugin, loads it as a dynamic library, and plays audio through the system output device. Watches the source file for changes and hot-reloads the plugin without restarting audio.
 
 ```bash
-muse preview <file> [--format json]
+muse preview <file> [--format json] [--midi-port <name|list>] [--input <source>]
 ```
 
-**Use when:** Visually verifying a plugin's custom GUI layout, theme, and widget arrangement without a full build+DAW load cycle.
+**Options:**
+- `--format json`: Emit structured JSON events to stdout (one JSON object per line)
+- `--midi-port <name>`: Connect to a specific MIDI input port for instrument plugins
+- `--midi-port list`: List available MIDI input ports and exit
+- `--input <source>`: Audio input source for effect plugins:
+  - `silence` (default) — effect processes silence
+  - `mic` — capture from system microphone (requires macOS microphone permission)
+  - `file:<path>` — play a WAV file in a loop through the plugin
+
+**Use when:** Iterating on a plugin's sound — hear changes immediately after saving the `.muse` file. Effect plugins can process live mic input or a WAV file. Instrument plugins receive MIDI from a connected controller.
+
+**Behavior:**
+- Initial compile happens at 44100 Hz; if the system audio device runs at a different rate (e.g. 48000 Hz), the plugin is automatically rebuilt at the device rate.
+- File changes trigger a full recompile → rebuild → reload cycle. The old plugin keeps playing until the new one is ready.
+- Ctrl+C stops preview gracefully.
+- For instrument plugins, `--input` is ignored (instruments generate audio from MIDI).
+- For effect plugins without `--input`, the plugin processes silence.
 
 **Constraints:**
-- macOS only (uses Cocoa + WKWebView)
-- Requires a `gui { }` block in the `.muse` file — files without a gui block will compile but show a blank editor
-- Blocks the terminal while the preview window is open (runs the NSApplication event loop)
-- Window size defaults to the `size W H` in the gui block, or 600×400 if omitted
+- macOS only (uses CoreAudio via CPAL for audio I/O)
+- `--input mic` requires macOS microphone permission (system prompt on first use)
+- `--input file:<path>` accepts WAV files only (mono/stereo, i16/i24/i32/f32). A warning is printed if the file sample rate differs from the device rate (no resampling).
+- Blocks the terminal while running (Ctrl+C to stop)
 
-**JSON output (on compile error):**
+**JSON events** (`--format json`):
+
+Each event is a single JSON object on one line to stdout. Human-readable messages go to stderr.
+
+| Event | Fields | When |
+|-------|--------|------|
+| `started` | `plugin_name`, `sample_rate`, `channels`, `is_instrument` | After initial compile and audio start |
+| `file_changed` | — | Source file modification detected |
+| `reloaded` | — | Hot-reload succeeded |
+| `error` | `phase`, `diagnostics` (compile) or `message` (other) | Compile or reload error |
+| `stopped` | — | Ctrl+C or watcher disconnect |
+
+**JSON event examples:**
+
 ```json
-{
-  "status": "error",
-  "diagnostics": [
-    {
-      "code": "E014",
-      "message": "invalid gui theme 'warm' — must be 'dark' or 'light'"
-    }
-  ]
-}
+{"event":"started","plugin_name":"Warm Gain","sample_rate":48000.0,"channels":2,"is_instrument":false}
+{"event":"file_changed"}
+{"event":"reloaded"}
+{"event":"error","phase":"compile","diagnostics":[{"code":"E003","span":[42,54],"severity":"error","message":"Unknown function 'frobnicator'"}]}
+{"event":"stopped"}
 ```
-
-Note: On success, the preview window opens — there is no JSON success output (the window itself is the output).
 
 ## Exit Codes
 
@@ -220,3 +235,37 @@ muse test plugin.muse --format json 2>/dev/null | grep -q '"status":"ok"'
 ```
 
 Note: Human-readable diagnostics go to stderr; JSON output goes to stdout. Use `2>/dev/null` to suppress stderr when parsing JSON.
+
+### Effect preview with microphone
+
+```bash
+# Process live mic input through an effect plugin
+muse preview filter.muse --input mic
+# Speak into microphone → hear filtered audio through speakers
+# Edit filter.muse → plugin hot-reloads without restarting audio
+```
+
+### Effect preview with WAV file
+
+```bash
+# Loop a WAV file through an effect plugin
+muse preview delay.muse --input file:drums.wav
+```
+
+### Instrument preview with MIDI controller
+
+```bash
+# List available MIDI ports
+muse preview synth.muse --midi-port list
+
+# Connect to a specific MIDI port
+muse preview synth.muse --midi-port "USB MIDI Controller"
+```
+
+### Agent-driven preview with JSON events
+
+```bash
+# Machine-readable event stream for automation
+muse preview plugin.muse --format json --input mic 2>/dev/null
+# stdout receives: {"event":"started",...}  {"event":"file_changed"}  {"event":"reloaded"}  etc.
+```
