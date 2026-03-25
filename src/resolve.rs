@@ -191,6 +191,8 @@ impl<'a> Resolver<'a> {
                 then_ty // use then-branch type for now
             }
             Expr::Grouped(inner) => self.resolve_expr(inner),
+            // Routing constructs — full resolution implemented in S03/T03
+            Expr::Split { .. } | Expr::Merge | Expr::Feedback { .. } => None,
             Expr::Error => None,
         }
     }

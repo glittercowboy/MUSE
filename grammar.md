@@ -53,12 +53,13 @@ plugin  param   process  input   output
 clap    vst3    midi     note    cc
 true    false   mono     stereo  
 in      if      else     let     return
+split   merge   feedback
 ```
 
 Reserved for future use:
 ```
 voice   poly    sample   import  test
-feedback  split  merge   bus
+bus
 ```
 
 ### Literals
@@ -312,6 +313,9 @@ primary_expr     = number_literal , unit_suffix?
                  | bool_literal
                  | identifier
                  | if_expr
+                 | split_expr
+                 | merge_expr
+                 | feedback_expr
                  | "(" , expression , ")" ;
 
 if_expr          = "if" , expression , "{" , statement* , expression , "}"
@@ -341,6 +345,62 @@ input -> highpass(200Hz) -> gain(param.volume) -> output
 ```
 
 This reads: "take input, pass through a 200Hz highpass filter, then apply gain controlled by the volume parameter, then send to output." Each stage receives the signal from the previous stage as an implicit first argument.
+
+### Signal Routing
+
+`split`, `merge`, and `feedback` extend the chain operator with parallel and recursive signal flow.
+
+#### EBNF Productions
+
+```ebnf
+split_expr       = "split" , "{" , split_branch , ( split_branch )* , "}" ;
+split_branch     = statement* ;
+
+merge_expr       = "merge" ;
+
+feedback_expr    = "feedback" , "{" , statement* , "}" ;
+```
+
+`split` branches are separated by newlines (each line in the block is an independent branch). `merge` is a zero-argument keyword expression. `feedback` takes a brace-delimited body of statements, same shape as a process block.
+
+#### Type Rules
+
+| Expression | Input Type (via `->`) | Output Type | Description |
+|------------|----------------------|-------------|-------------|
+| `split { ... }` | `Signal` | `Signal` | Fans input to N parallel branches; each branch receives the same input signal and must produce `Signal` |
+| `merge` | `Signal` | `Signal` | Sums the parallel branches from a preceding `split` back into a single signal |
+| `feedback { ... }` | `Signal` | `Signal` | Creates a feedback loop with implicit one-sample delay; body receives/produces `Signal` |
+
+#### Composition with `->` 
+
+`split`, `merge`, and `feedback` compose with `->` in expression position like any other primary expression:
+
+```muse
+// Parallel processing with split/merge
+input -> split {
+  lowpass(400Hz)
+  highpass(4000Hz)
+} -> merge -> gain(param.volume) -> output
+
+// Feedback delay loop
+input -> feedback {
+  delay(100ms) -> lowpass(2000Hz) -> gain(0.7)
+} -> output
+
+// Nested split with chains inside branches
+input -> split {
+  lowpass(400Hz) -> gain(0.8)
+  bandpass(1000Hz, 0.5) -> gain(1.0)
+  highpass(4000Hz) -> gain(0.6)
+} -> merge -> output
+```
+
+**Constraints:**
+- Every `split` must be followed by a `merge` in the same chain — `split` without `merge` is an error (E007).
+- `merge` must follow a `split` — `merge` without a preceding `split` is an error (E008).
+- The `feedback` body must be a `Signal → Signal` chain — if the body does not produce `Signal`, that is a type error (E009).
+- Branches inside `split` blocks are independent chains. Each branch implicitly receives the split input signal and must produce `Signal`.
+- Nesting is allowed: a `split` branch may contain another `split`/`merge` pair.
 
 ## Implicit Bindings
 
@@ -463,7 +523,7 @@ Invalid combinations (e.g., `Number -> Processor`, `Signal -> Gain`) produce an 
 
 ## Error Codes
 
-The Muse compiler uses structured error codes for all diagnostics. Parse-phase errors use E001–E002; semantic resolution errors use E003–E006.
+The Muse compiler uses structured error codes for all diagnostics. Parse-phase errors use E001–E002; semantic resolution errors use E003–E009.
 
 ### Parse Errors
 
@@ -480,6 +540,9 @@ The Muse compiler uses structured error codes for all diagnostics. Parse-phase e
 | `E004` | Resolve | Wrong argument count — the function was called with too few or too many arguments (accounting for optional parameters). |
 | `E005` | Resolve | Type mismatch — an argument's type is not compatible with the parameter's expected type. |
 | `E006` | Resolve | Invalid chain operand — the `->` operator was used with incompatible types (e.g., chaining a Number into a Processor). |
+| `E007` | Resolve | Split without merge — a `split` block was used in a chain without a corresponding `merge` to combine the branches. |
+| `E008` | Resolve | Merge without split — `merge` appeared in a chain without a preceding `split` block to provide parallel branches. |
+| `E009` | Resolve | Feedback type error — the `feedback` block body does not produce a `Signal` type (body must be Signal → Signal). |
 
 All diagnostics are emitted as structured JSON with the following contract:
 

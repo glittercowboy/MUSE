@@ -239,6 +239,22 @@ pub enum Expr {
     },
     /// Parenthesized expression: `(a + b)`
     Grouped(Box<Spanned<Expr>>),
+    /// Parallel split: `split { branch1; branch2 }`
+    /// Each branch is a list of statements (same shape as process block bodies),
+    /// enabling chains inside branches.
+    Split {
+        branches: Vec<Vec<Spanned<Statement>>>,
+    },
+    /// Merge parallel branches back to a single signal.
+    /// Zero-argument keyword expression that sums split branches;
+    /// must follow a split in a chain.
+    Merge,
+    /// Feedback loop: `feedback { body }`
+    /// The body receives/produces Signal with an implicit one-sample delay
+    /// for real-time safety.
+    Feedback {
+        body: Vec<Spanned<Statement>>,
+    },
     /// Error recovery placeholder
     Error,
 }
