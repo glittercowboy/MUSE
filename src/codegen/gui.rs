@@ -207,20 +207,13 @@ fn generate_widget_html(widget: &WidgetDecl, params: &[ParamInfo]) -> String {
         WidgetType::Switch => generate_switch_widget_html(widget, param, extra_class, data_style, custom_label),
         WidgetType::Label => generate_label_widget_html(widget, extra_class, data_style),
         WidgetType::Value => generate_value_widget_html(widget, param, extra_class, data_style),
-        // Advanced widgets — HTML generation added in T02
-        WidgetType::XyPad
-        | WidgetType::Spectrum
-        | WidgetType::Waveform
-        | WidgetType::Envelope
-        | WidgetType::EqCurve
-        | WidgetType::Reduction => {
-            format!(
-                "<div class=\"widget {}\" data-type=\"{:?}\">[{:?} widget — coming soon]</div>\n",
-                extra_class,
-                widget.widget_type,
-                widget.widget_type
-            )
-        }
+        // Advanced widgets
+        WidgetType::XyPad => generate_xy_pad_widget_html(widget, extra_class, data_style),
+        WidgetType::Spectrum => generate_vis_widget_html("spectrum", extra_class, data_style),
+        WidgetType::Waveform => generate_vis_widget_html("waveform", extra_class, data_style),
+        WidgetType::Envelope => generate_vis_widget_html("envelope", extra_class, data_style),
+        WidgetType::EqCurve => generate_vis_widget_html("eq-curve", extra_class, data_style),
+        WidgetType::Reduction => generate_reduction_widget_html(extra_class, data_style),
     }
 }
 
@@ -404,6 +397,60 @@ fn generate_value_widget_html(
     )
 }
 
+// ── Advanced widget HTML generators ──────────────────────────
+
+fn generate_xy_pad_widget_html(
+    widget: &WidgetDecl,
+    extra_class: &str,
+    data_style: &str,
+) -> String {
+    let param_x = widget.param_name.as_deref().unwrap_or("unknown_x");
+    let param_y = widget.param_name_y.as_deref().unwrap_or("unknown_y");
+    let cls = widget_class_attr("xy-pad-cell", extra_class);
+    let ds = data_style_attr(data_style);
+
+    format!(
+        "<div {cls} data-param-x=\"{px}\" data-param-y=\"{py}\"{ds}>\n  <canvas id=\"xy-pad-{px}-{py}\" width=\"200\" height=\"200\"></canvas>\n  <div class=\"xy-pad-labels\"><span>{px}</span><span>{py}</span></div>\n</div>\n",
+        cls = cls,
+        px = param_x,
+        py = param_y,
+        ds = ds,
+    )
+}
+
+/// Generate HTML for visualization widgets (spectrum, waveform, envelope, eq-curve).
+/// These have no param binding — just a canvas for animated mock display.
+fn generate_vis_widget_html(
+    vis_type: &str,
+    extra_class: &str,
+    data_style: &str,
+) -> String {
+    let cls = widget_class_attr(&format!("{}-cell", vis_type), extra_class);
+    let ds = data_style_attr(data_style);
+
+    format!(
+        "<div {cls}{ds}>\n  <canvas id=\"{vis_type}-display\" width=\"300\" height=\"150\"></canvas>\n</div>\n",
+        cls = cls,
+        ds = ds,
+        vis_type = vis_type,
+    )
+}
+
+/// Generate HTML for gain reduction meter — a vertical bar with animated fill.
+fn generate_reduction_widget_html(
+    extra_class: &str,
+    data_style: &str,
+) -> String {
+    let cls = widget_class_attr("reduction-cell", extra_class);
+    let ds = data_style_attr(data_style);
+
+    format!(
+        "<div {cls}{ds}>\n  <svg class=\"reduction-meter\" viewBox=\"0 0 24 100\"><rect class=\"reduction-bg\" x=\"0\" y=\"0\" width=\"24\" height=\"100\" rx=\"4\"/><rect class=\"reduction-fill\" id=\"reduction-fill\" x=\"2\" y=\"60\" width=\"20\" height=\"38\" rx=\"2\"/></svg>\n  <div class=\"reduction-label\">GR</div>\n</div>\n",
+        cls = cls,
+        ds = ds,
+    )
+}
+
 // ── Layout/widget CSS ────────────────────────────────────────
 
 /// CSS rules for Tier 2 layout containers and widgets.
@@ -437,7 +484,20 @@ fn generate_layout_css() -> &'static str {
 .switch-label { font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 0.05em; }
 
 .label-widget { font-size: 13px; opacity: 0.7; }
-.value-widget { font-size: 14px; font-variant-numeric: tabular-nums; }"#
+.value-widget { font-size: 14px; font-variant-numeric: tabular-nums; }
+
+.xy-pad-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.xy-pad-cell canvas { border: 1px solid var(--knob-track); border-radius: 4px; cursor: crosshair; background: var(--knob-bg); }
+.xy-pad-labels { display: flex; justify-content: space-between; width: 100%; font-size: 10px; opacity: 0.4; text-transform: uppercase; }
+
+.spectrum-cell, .waveform-cell, .envelope-cell, .eq-curve-cell { display: flex; flex-direction: column; align-items: center; }
+.spectrum-cell canvas, .waveform-cell canvas, .envelope-cell canvas, .eq-curve-cell canvas { border-radius: 4px; background: var(--knob-bg); }
+
+.reduction-cell { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.reduction-meter { width: 24px; height: 100px; }
+.reduction-bg { fill: var(--knob-bg); }
+.reduction-fill { fill: var(--accent); transition: height 0.1s, y 0.1s; }
+.reduction-label { font-size: 10px; opacity: 0.4; text-transform: uppercase; }"#
 }
 
 /// Generate the complete HTML document with inline CSS and JS for the editor.
@@ -640,14 +700,30 @@ pub fn generate_editor_js(params: &[ParamInfo]) -> String {
     js.push_str(KNOB_CLASS_JS);
     js.push('\n');
 
+    // Advanced widget classes
+    js.push_str(XY_PAD_CLASS_JS);
+    js.push('\n');
+    js.push_str(SPECTRUM_CLASS_JS);
+    js.push('\n');
+    js.push_str(WAVEFORM_CLASS_JS);
+    js.push('\n');
+    js.push_str(ENVELOPE_CLASS_JS);
+    js.push('\n');
+    js.push_str(EQ_CURVE_CLASS_JS);
+    js.push('\n');
+    js.push_str(REDUCTION_CLASS_JS);
+    js.push('\n');
+
     // Parameter bridge
     js.push_str(PARAM_BRIDGE_JS);
     js.push('\n');
 
-    // Instantiate knobs
-    js.push_str("// --- Knob instances ---\n");
+    // Instantiate knobs + bind all interactive widgets on DOMContentLoaded
+    js.push_str("// --- Widget initialization ---\n");
     js.push_str("const knobs = {};\n");
     js.push_str("document.addEventListener('DOMContentLoaded', () => {\n");
+
+    // Knob instances
     for p in params {
         let normalized_default = if (p.max - p.min).abs() > f64::EPSILON {
             (p.default - p.min) / (p.max - p.min)
@@ -665,6 +741,23 @@ pub fn generate_editor_js(params: &[ParamInfo]) -> String {
             is_int = matches!(p.param_type, ParamInfoType::Int),
         ));
     }
+
+    // Slider IPC binding
+    js.push_str(SLIDER_IPC_JS);
+    js.push('\n');
+
+    // Switch IPC binding
+    js.push_str(SWITCH_IPC_JS);
+    js.push('\n');
+
+    // XY pad instances
+    js.push_str(XY_PAD_INIT_JS);
+    js.push('\n');
+
+    // Visualization widget instances
+    js.push_str(VIS_INIT_JS);
+    js.push('\n');
+
     js.push_str("});\n");
 
     js
@@ -918,6 +1011,326 @@ window.updateParam = function(id, normalizedValue) {
     knobs[id].setNormalized(normalizedValue);
   }
 };"#;
+
+// ── Slider/Switch IPC binding ────────────────────────────────
+
+const SLIDER_IPC_JS: &str = r#"  // --- Slider IPC binding ---
+  document.querySelectorAll('.slider-cell[data-param]').forEach(cell => {
+    const paramId = cell.getAttribute('data-param');
+    const input = cell.querySelector('input[type="range"]');
+    const display = cell.querySelector('.slider-value');
+    if (input) {
+      input.addEventListener('input', () => {
+        const min = parseFloat(input.min);
+        const max = parseFloat(input.max);
+        const val = parseFloat(input.value);
+        const normalized = (max - min) > 0 ? (val - min) / (max - min) : 0;
+        if (display) display.textContent = input.step === '1' ? val.toString() : val.toFixed(2);
+        sendParam(paramId, normalized);
+      });
+    }
+  });"#;
+
+const SWITCH_IPC_JS: &str = r#"  // --- Switch IPC binding ---
+  document.querySelectorAll('.switch-cell[data-param]').forEach(cell => {
+    const paramId = cell.getAttribute('data-param');
+    const input = cell.querySelector('input[type="checkbox"]');
+    if (input) {
+      input.addEventListener('change', () => {
+        sendParam(paramId, input.checked ? 1.0 : 0.0);
+      });
+    }
+  });"#;
+
+// ── Advanced widget JS classes ───────────────────────────────
+
+const XY_PAD_CLASS_JS: &str = r#"// --- MuseXyPad canvas widget ---
+class MuseXyPad {
+  constructor(canvas, paramX, paramY) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.paramX = paramX;
+    this.paramY = paramY;
+    this.x = 0.5;
+    this.y = 0.5;
+    this.dragging = false;
+
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.bg = style.getPropertyValue('--knob-bg').trim();
+    this.track = style.getPropertyValue('--knob-track').trim();
+
+    this.draw();
+    this.bindEvents();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Crosshair guides
+    const px = this.x * w;
+    const py = (1 - this.y) * h;
+    ctx.strokeStyle = this.track;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Position dot
+    ctx.beginPath();
+    ctx.arc(px, py, 8, 0, 2 * Math.PI);
+    ctx.fillStyle = this.accent;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  update(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    this.x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    this.y = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
+    this.draw();
+    sendParam(this.paramX, this.x);
+    sendParam(this.paramY, this.y);
+  }
+
+  bindEvents() {
+    this.canvas.addEventListener('mousedown', (e) => { this.dragging = true; this.update(e); });
+    document.addEventListener('mousemove', (e) => { if (this.dragging) this.update(e); });
+    document.addEventListener('mouseup', () => { this.dragging = false; });
+  }
+}"#;
+
+const SPECTRUM_CLASS_JS: &str = r#"// --- MuseSpectrum canvas widget ---
+class MuseSpectrum {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.bg = style.getPropertyValue('--knob-bg').trim();
+    this.bars = new Float32Array(32);
+    for (let i = 0; i < 32; i++) this.bars[i] = Math.random() * 0.6 + 0.1;
+    this.animate();
+  }
+
+  animate() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const barW = w / this.bars.length;
+    for (let i = 0; i < this.bars.length; i++) {
+      this.bars[i] += (Math.random() - 0.5) * 0.08;
+      this.bars[i] = Math.max(0.05, Math.min(1, this.bars[i]));
+      const barH = this.bars[i] * h;
+      ctx.fillStyle = this.accent;
+      ctx.globalAlpha = 0.7 + this.bars[i] * 0.3;
+      ctx.fillRect(i * barW + 1, h - barH, barW - 2, barH);
+    }
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(() => this.animate());
+  }
+}"#;
+
+const WAVEFORM_CLASS_JS: &str = r#"// --- MuseWaveform canvas widget ---
+class MuseWaveform {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.phase = 0;
+    this.animate();
+  }
+
+  animate() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    ctx.strokeStyle = this.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w * 4 * Math.PI + this.phase;
+      const y = h / 2 + Math.sin(t) * (h * 0.35) + Math.sin(t * 2.7) * (h * 0.1);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    this.phase += 0.03;
+    requestAnimationFrame(() => this.animate());
+  }
+}"#;
+
+const ENVELOPE_CLASS_JS: &str = r#"// --- MuseEnvelope canvas widget ---
+class MuseEnvelope {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.track = style.getPropertyValue('--knob-track').trim();
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Static ADSR shape
+    const a = 0.15, d = 0.25, s = 0.6, r = 0.35;
+    const points = [
+      [0, h],
+      [a * w, h * 0.05],
+      [(a + d) * w, h * (1 - s)],
+      [(1 - r) * w, h * (1 - s)],
+      [w, h],
+    ];
+
+    // Filled area
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (const [x, y] of points) ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fillStyle = this.accent;
+    ctx.globalAlpha = 0.15;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Outline
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (const [x, y] of points) ctx.lineTo(x, y);
+    ctx.strokeStyle = this.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Phase labels
+    ctx.fillStyle = this.track;
+    ctx.font = '10px sans-serif';
+    ctx.fillText('A', a * w * 0.4, h - 4);
+    ctx.fillText('D', (a + d * 0.4) * w, h - 4);
+    ctx.fillText('S', (a + d + (1 - r - a - d) * 0.4) * w, h - 4);
+    ctx.fillText('R', (1 - r * 0.5) * w, h - 4);
+  }
+}"#;
+
+const EQ_CURVE_CLASS_JS: &str = r#"// --- MuseEqCurve canvas widget ---
+class MuseEqCurve {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    const style = getComputedStyle(document.documentElement);
+    this.accent = style.getPropertyValue('--accent').trim();
+    this.track = style.getPropertyValue('--knob-track').trim();
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = this.track;
+    ctx.lineWidth = 0.5;
+    ctx.globalAlpha = 0.3;
+    for (let y = 0; y < h; y += h / 4) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // 0 dB reference line
+    ctx.strokeStyle = this.track;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Mock EQ curve (low shelf + parametric peak + high shelf)
+    ctx.strokeStyle = this.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w;
+      const lowShelf = 3 * Math.exp(-t * 8);
+      const peak = 6 * Math.exp(-Math.pow((t - 0.4) * 8, 2));
+      const highShelf = -2 * (1 - Math.exp(-(t - 0.7) * 5));
+      const db = lowShelf + peak + highShelf;
+      const y = h / 2 - (db / 12) * (h / 2);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Filled area
+    ctx.beginPath();
+    for (let x = 0; x < w; x++) {
+      const t = x / w;
+      const lowShelf = 3 * Math.exp(-t * 8);
+      const peak = 6 * Math.exp(-Math.pow((t - 0.4) * 8, 2));
+      const highShelf = -2 * (1 - Math.exp(-(t - 0.7) * 5));
+      const db = lowShelf + peak + highShelf;
+      const y = h / 2 - (db / 12) * (h / 2);
+      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(w, h / 2);
+    ctx.lineTo(0, h / 2);
+    ctx.closePath();
+    ctx.fillStyle = this.accent;
+    ctx.globalAlpha = 0.1;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}"#;
+
+const REDUCTION_CLASS_JS: &str = r#"// --- MuseReduction bar widget ---
+class MuseReduction {
+  constructor(svgEl) {
+    this.svg = svgEl;
+    this.fill = svgEl.querySelector('.reduction-fill');
+    if (!this.fill) return;
+    this.value = 0;
+    this.animate();
+  }
+
+  animate() {
+    // Simulate gain reduction bouncing
+    this.value += (Math.random() - 0.45) * 0.1;
+    this.value = Math.max(0, Math.min(0.8, this.value));
+    const h = this.value * 100;
+    this.fill.setAttribute('height', h.toFixed(1));
+    this.fill.setAttribute('y', (100 - h).toFixed(1));
+    requestAnimationFrame(() => this.animate());
+  }
+}"#;
+
+// ── Widget initialization JS (inside DOMContentLoaded) ───────
+
+const XY_PAD_INIT_JS: &str = r#"  // --- XY Pad instances ---
+  document.querySelectorAll('.xy-pad-cell').forEach(cell => {
+    const canvas = cell.querySelector('canvas');
+    const px = cell.getAttribute('data-param-x');
+    const py = cell.getAttribute('data-param-y');
+    if (canvas && px && py) new MuseXyPad(canvas, px, py);
+  });"#;
+
+const VIS_INIT_JS: &str = r#"  // --- Visualization widget instances ---
+  document.querySelectorAll('.spectrum-cell canvas').forEach(c => new MuseSpectrum(c));
+  document.querySelectorAll('.waveform-cell canvas').forEach(c => new MuseWaveform(c));
+  document.querySelectorAll('.envelope-cell canvas').forEach(c => new MuseEnvelope(c));
+  document.querySelectorAll('.eq-curve-cell canvas').forEach(c => new MuseEqCurve(c));
+  document.querySelectorAll('.reduction-cell .reduction-meter').forEach(s => new MuseReduction(s));"#;
 
 // ── Tests ────────────────────────────────────────────────────
 
@@ -1595,5 +2008,231 @@ mod tests {
         assert!(html.contains("class=\"meter-cell\""));
         assert!(html.contains("id=\"meter-level\""));
         assert!(html.contains("<svg"));
+    }
+
+    // ── Advanced widget HTML tests ───────────────────────────
+
+    #[test]
+    fn gui_xy_pad_widget_html() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::XyPad,
+                    param_name: Some("cutoff".to_string()),
+                    param_name_y: Some("resonance".to_string()),
+                    label_text: None,
+                    props: vec![],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("XyTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("class=\"xy-pad-cell\""), "XY pad cell class");
+        assert!(html.contains("data-param-x=\"cutoff\""), "X param attribute");
+        assert!(html.contains("data-param-y=\"resonance\""), "Y param attribute");
+        assert!(html.contains("id=\"xy-pad-cutoff-resonance\""), "Canvas id");
+        assert!(html.contains("width=\"200\" height=\"200\""), "Canvas size");
+    }
+
+    #[test]
+    fn gui_xy_pad_with_props() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::XyPad,
+                    param_name: Some("x".to_string()),
+                    param_name_y: Some("y".to_string()),
+                    label_text: None,
+                    props: vec![WidgetProp::Class("big-pad".to_string())],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("XyPropTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("xy-pad-cell big-pad"), "Extra class on XY pad");
+    }
+
+    #[test]
+    fn gui_spectrum_widget_html() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::Spectrum,
+                    param_name: None,
+                    param_name_y: None,
+                    label_text: None,
+                    props: vec![],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("SpectrumTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("class=\"spectrum-cell\""), "Spectrum cell class");
+        assert!(html.contains("id=\"spectrum-display\""), "Spectrum canvas id");
+        assert!(html.contains("width=\"300\" height=\"150\""), "Canvas size");
+    }
+
+    #[test]
+    fn gui_waveform_widget_html() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::Waveform,
+                    param_name: None,
+                    param_name_y: None,
+                    label_text: None,
+                    props: vec![],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("WaveformTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("class=\"waveform-cell\""), "Waveform cell class");
+        assert!(html.contains("id=\"waveform-display\""), "Waveform canvas id");
+    }
+
+    #[test]
+    fn gui_envelope_widget_html() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::Envelope,
+                    param_name: None,
+                    param_name_y: None,
+                    label_text: None,
+                    props: vec![],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("EnvelopeTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("class=\"envelope-cell\""), "Envelope cell class");
+        assert!(html.contains("id=\"envelope-display\""), "Envelope canvas id");
+    }
+
+    #[test]
+    fn gui_eq_curve_widget_html() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::EqCurve,
+                    param_name: None,
+                    param_name_y: None,
+                    label_text: None,
+                    props: vec![],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("EqCurveTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("class=\"eq-curve-cell\""), "EQ curve cell class");
+        assert!(html.contains("id=\"eq-curve-display\""), "EQ curve canvas id");
+    }
+
+    #[test]
+    fn gui_reduction_widget_html() {
+        let gui = GuiBlock {
+            items: vec![(
+                GuiItem::Widget(WidgetDecl {
+                    widget_type: WidgetType::Reduction,
+                    param_name: None,
+                    param_name_y: None,
+                    label_text: None,
+                    props: vec![],
+                    span: Span::new(0, 0),
+                }),
+                Span::new(0, 0),
+            )],
+            span: Span::new(0, 0),
+        };
+        let plugin = make_plugin("ReductionTest", vec![], Some(gui));
+        let html = generate_editor_html(&plugin);
+
+        assert!(html.contains("class=\"reduction-cell\""), "Reduction cell class");
+        assert!(html.contains("class=\"reduction-meter\""), "Reduction SVG");
+        assert!(html.contains("class=\"reduction-fill\""), "Reduction fill rect");
+        assert!(html.contains("GR"), "Gain reduction label");
+    }
+
+    // ── JS class tests ───────────────────────────────────────
+
+    #[test]
+    fn gui_js_contains_advanced_widget_classes() {
+        let js = generate_editor_js(&[]);
+        assert!(js.contains("class MuseXyPad"), "XY pad class");
+        assert!(js.contains("class MuseSpectrum"), "Spectrum class");
+        assert!(js.contains("class MuseWaveform"), "Waveform class");
+        assert!(js.contains("class MuseEnvelope"), "Envelope class");
+        assert!(js.contains("class MuseEqCurve"), "EQ curve class");
+        assert!(js.contains("class MuseReduction"), "Reduction class");
+    }
+
+    #[test]
+    fn gui_js_slider_ipc_binding() {
+        let js = generate_editor_js(&[]);
+        assert!(js.contains(".slider-cell[data-param]"), "Slider selector");
+        assert!(js.contains("input[type=\"range\"]"), "Range input query");
+        assert!(js.contains("sendParam(paramId, normalized)"), "Slider sends normalized");
+    }
+
+    #[test]
+    fn gui_js_switch_ipc_binding() {
+        let js = generate_editor_js(&[]);
+        assert!(js.contains(".switch-cell[data-param]"), "Switch selector");
+        assert!(js.contains("input[type=\"checkbox\"]"), "Checkbox query");
+        assert!(js.contains("input.checked ? 1.0 : 0.0"), "Switch sends 0/1");
+    }
+
+    #[test]
+    fn gui_js_vis_init() {
+        let js = generate_editor_js(&[]);
+        assert!(js.contains("new MuseSpectrum(c)"), "Spectrum init");
+        assert!(js.contains("new MuseWaveform(c)"), "Waveform init");
+        assert!(js.contains("new MuseEnvelope(c)"), "Envelope init");
+        assert!(js.contains("new MuseEqCurve(c)"), "EQ curve init");
+        assert!(js.contains("new MuseReduction(s)"), "Reduction init");
+    }
+
+    #[test]
+    fn gui_js_xy_pad_init() {
+        let js = generate_editor_js(&[]);
+        assert!(js.contains(".xy-pad-cell"), "XY pad init selector");
+        assert!(js.contains("new MuseXyPad(canvas, px, py)"), "XY pad init");
+    }
+
+    // ── CSS tests for new widgets ────────────────────────────
+
+    #[test]
+    fn gui_css_includes_advanced_widget_rules() {
+        let css = generate_editor_css("dark", "#E8A87C", true, &[]);
+        assert!(css.contains(".xy-pad-cell"), "XY pad CSS");
+        assert!(css.contains(".spectrum-cell"), "Spectrum CSS");
+        assert!(css.contains(".reduction-cell"), "Reduction CSS");
+        assert!(css.contains(".reduction-fill"), "Reduction fill CSS");
+        assert!(css.contains(".reduction-label"), "Reduction label CSS");
     }
 }
