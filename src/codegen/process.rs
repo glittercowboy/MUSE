@@ -111,18 +111,16 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
         };
         (out, info)
     } else {
-        // ── Effect mode: unchanged from original ──
+        // ── Effect mode: iterate sample frames, then channels ──
         let mut out = String::new();
 
         let needs_channel_idx = ctx.used_primitives.iter().any(|p| {
             matches!(p, DspPrimitive::Filter(_))
         });
 
-        if needs_channel_idx {
-            out.push_str("        for (channel_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
-        } else {
-            out.push_str("        for channel_samples in buffer.iter_samples() {\n");
-        }
+        // Outer loop: iterate over sample frames (time steps).
+        // nih-plug's iter_samples() yields one ChannelSamples per time step.
+        out.push_str("        for channel_samples in buffer.iter_samples() {\n");
 
         // Per-sample parameter smoothing
         for param_name in &ctx.smoothed_params {
@@ -131,8 +129,13 @@ pub fn generate_process(plugin: &PluginDef) -> (String, ProcessInfo) {
             ));
         }
 
-        // Inner per-sample loop
-        out.push_str("            for sample in channel_samples {\n");
+        // Inner loop: iterate over channels within each sample frame.
+        // When filters are used, we need channel_idx to index per-channel biquad state.
+        if needs_channel_idx {
+            out.push_str("            for (channel_idx, sample) in channel_samples.into_iter().enumerate() {\n");
+        } else {
+            out.push_str("            for sample in channel_samples {\n");
+        }
         for line in &stmt_lines {
             out.push_str("                ");
             out.push_str(line);
@@ -346,6 +349,7 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "lowpass" => generate_filter_call(input_code, "lowpass", args, ctx),
                 "bandpass" => generate_filter_call(input_code, "bandpass", args, ctx),
                 "highpass" => generate_filter_call(input_code, "highpass", args, ctx),
+                "notch" => generate_filter_call(input_code, "notch", args, ctx),
                 "tanh" => {
                     ctx.used_primitives.insert(DspPrimitive::Tanh);
                     format!("({}).tanh()", input_code)
@@ -394,6 +398,7 @@ fn generate_filter_call(
         "lowpass" => crate::dsp::primitives::FilterKind::Lowpass,
         "bandpass" => crate::dsp::primitives::FilterKind::Bandpass,
         "highpass" => crate::dsp::primitives::FilterKind::Highpass,
+        "notch" => crate::dsp::primitives::FilterKind::Notch,
         _ => crate::dsp::primitives::FilterKind::Lowpass,
     };
     ctx.used_primitives.insert(DspPrimitive::Filter(filter_kind));
@@ -412,6 +417,7 @@ fn generate_filter_call(
     let fn_name = match filter_name {
         "bandpass" => "process_biquad_bandpass",
         "highpass" => "process_biquad_highpass",
+        "notch" => "process_biquad_notch",
         _ => "process_biquad",
     };
 
@@ -609,6 +615,26 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Highpass);
                         return format!(
                             "process_biquad_highpass(&mut {}, *sample, {}, {}, self.sample_rate)",
+                            state_field, cutoff, resonance
+                        );
+                    }
+                    "notch" => {
+                        ctx.used_primitives.insert(DspPrimitive::Filter(
+                            crate::dsp::primitives::FilterKind::Notch,
+                        ));
+                        let cutoff = if !args.is_empty() {
+                            generate_expr_as_param(&args[0].0, ctx)
+                        } else {
+                            "1000.0".to_string()
+                        };
+                        let resonance = if args.len() > 1 {
+                            generate_expr_as_param(&args[1].0, ctx)
+                        } else {
+                            "0.707".to_string()
+                        };
+                        let state_field = biquad_state_field(ctx, crate::dsp::primitives::FilterKind::Notch);
+                        return format!(
+                            "process_biquad_notch(&mut {}, *sample, {}, {}, self.sample_rate)",
                             state_field, cutoff, resonance
                         );
                     }
