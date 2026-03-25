@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 use std::process;
 
-use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle};
+use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle, BuildOutput};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -199,7 +199,7 @@ fn cmd_compile(args: &[String]) {
             }
 
             // Full build: cargo build → bundle assembly
-            let dylib_path = match build_plugin(&result.crate_dir, &result.package_name) {
+            let build_output = match build_plugin(&result.crate_dir, &result.package_name) {
                 Ok(p) => p,
                 Err(e) => {
                     if opts.json_format {
@@ -218,7 +218,7 @@ fn cmd_compile(args: &[String]) {
 
             let bundle_path = match assemble_clap_bundle(
                 &opts.output_dir,
-                &dylib_path,
+                &build_output.dylib_path,
                 &result.plugin_name,
                 &result.clap_id,
                 &result.version,
