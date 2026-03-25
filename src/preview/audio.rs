@@ -5,8 +5,10 @@
 //! During hot-swap (plugin is `None`), the callback outputs silence.
 
 use super::host_plugin::HostPlugin;
+use super::midi::MidiEvent;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleRate, Stream, StreamConfig};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 /// Shared plugin slot. `None` during hot-swap (outputs silence).
@@ -25,7 +27,13 @@ impl AudioHost {
     ///
     /// The stream immediately begins calling the audio callback. If no plugin
     /// is loaded yet, the callback outputs silence until `swap_plugin` is called.
-    pub fn start(initial_plugin: Option<HostPlugin>) -> Result<Self, String> {
+    ///
+    /// If `midi_rx` is provided, MIDI events are drained each callback and
+    /// forwarded to the plugin via `note_on`/`note_off` before `process()`.
+    pub fn start(
+        initial_plugin: Option<HostPlugin>,
+        midi_rx: Option<mpsc::Receiver<MidiEvent>>,
+    ) -> Result<Self, String> {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
@@ -49,12 +57,14 @@ impl AudioHost {
         let plugin_slot: PluginSlot = Arc::new(Mutex::new(initial_plugin));
         let slot_clone = Arc::clone(&plugin_slot);
         let num_channels = device_channels;
+        let midi_rx = midi_rx.map(|rx| Arc::new(Mutex::new(rx)));
+        let midi_rx_clone = midi_rx.clone();
 
         let stream = device
             .build_output_stream(
                 &config,
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                    audio_callback(data, num_channels, &slot_clone);
+                    audio_callback(data, num_channels, &slot_clone, &midi_rx_clone);
                 },
                 |err| {
                     eprintln!("[muse preview] audio stream error: {err}");
@@ -119,7 +129,15 @@ impl AudioHost {
 ///
 /// CPAL delivers interleaved f32 samples: [L0, R0, L1, R1, ...].
 /// The plugin expects de-interleaved channel buffers, so we convert both ways.
-fn audio_callback(data: &mut [f32], device_channels: u16, slot: &PluginSlot) {
+///
+/// If a MIDI receiver is provided, pending events are drained and forwarded to
+/// the plugin via `note_on`/`note_off` BEFORE `process()` is called.
+fn audio_callback(
+    data: &mut [f32],
+    device_channels: u16,
+    slot: &PluginSlot,
+    midi_rx: &Option<Arc<Mutex<mpsc::Receiver<MidiEvent>>>>,
+) {
     let num_device_ch = device_channels as usize;
     if num_device_ch == 0 {
         return;
@@ -148,6 +166,23 @@ fn audio_callback(data: &mut [f32], device_channels: u16, slot: &PluginSlot) {
             return;
         }
     };
+
+    // Drain pending MIDI events and forward to the plugin BEFORE process().
+    // try_lock + try_recv are both non-blocking and allocation-free.
+    if let Some(rx_arc) = midi_rx {
+        if let Ok(rx) = rx_arc.try_lock() {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    MidiEvent::NoteOn { note, velocity } => {
+                        plugin.note_on(note, velocity);
+                    }
+                    MidiEvent::NoteOff { note } => {
+                        plugin.note_off(note);
+                    }
+                }
+            }
+        }
+    }
 
     let plugin_channels = plugin.num_channels() as usize;
 

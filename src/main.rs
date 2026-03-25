@@ -5,7 +5,7 @@
 //!   muse build <file> [--output-dir <dir>] [--format json]
 //!   muse check <file> [--format json]
 //!   muse test <file> [--output-dir <dir>] [--format json]
-//!   muse preview <file> [--format json]
+//!   muse preview <file> [--format json] [--midi-port <name|list>]
 //!
 //! Exit codes:
 //!   0 — success
@@ -19,7 +19,7 @@ use std::time::Instant;
 use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne, build_plugin, assemble_clap_bundle, assemble_vst3_bundle, codesign_bundle};
 
 #[cfg(target_os = "macos")]
-use muse_lang::preview::{audio::AudioHost, reload::ReloadPipeline, watcher::FileWatcher};
+use muse_lang::preview::{audio::AudioHost, midi, reload::ReloadPipeline, watcher::FileWatcher};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -915,6 +915,7 @@ fn print_human_results(results: &TestRunResults) {
 struct PreviewOpts {
     file: PathBuf,
     json_format: bool,
+    midi_port: Option<String>,
 }
 
 fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
@@ -924,6 +925,7 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
 
     let mut file: Option<PathBuf> = None;
     let mut json_format = false;
+    let mut midi_port: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -937,6 +939,13 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
                     "json" => json_format = true,
                     other => return Err(format!("unknown format '{other}', expected 'json'")),
                 }
+            }
+            "--midi-port" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err("--midi-port requires a value (port name or 'list')".into());
+                }
+                midi_port = Some(args[i].clone());
             }
             // Stub: --input flag for future S02/S03 (audio input routing)
             "--input" => {
@@ -961,7 +970,11 @@ fn parse_preview_args(args: &[String]) -> Result<PreviewOpts, String> {
 
     let file = file.ok_or("muse preview: missing <file> argument")?;
 
-    Ok(PreviewOpts { file, json_format })
+    Ok(PreviewOpts {
+        file,
+        json_format,
+        midi_port,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -976,6 +989,20 @@ fn cmd_preview(args: &[String]) {
             process::exit(2);
         }
     };
+
+    // Handle --midi-port list: print available ports and exit
+    if opts.midi_port.as_deref() == Some("list") {
+        let ports = midi::list_midi_ports();
+        if ports.is_empty() {
+            eprintln!("No MIDI input ports found.");
+        } else {
+            eprintln!("Available MIDI input ports:");
+            for (i, name) in ports.iter().enumerate() {
+                eprintln!("  {}: {}", i + 1, name);
+            }
+        }
+        process::exit(0);
+    }
 
     // Resolve to absolute path for the watcher
     let source_path = match opts.file.canonicalize() {
@@ -1005,8 +1032,33 @@ fn cmd_preview(args: &[String]) {
         }
     };
 
+    // Detect instrument mode and set up MIDI if applicable.
+    let is_instrument = plugin.is_instrument();
+    let midi_rx = if is_instrument {
+        let port_filter = opts.midi_port.as_deref();
+        match midi::connect_midi(port_filter) {
+            Ok((conn, rx)) => {
+                eprintln!("[muse preview] MIDI input: {}", conn.port_name);
+                // conn must live until the end of the function — store it.
+                // We leak it into a Box to keep it alive for the program's lifetime.
+                // The connection closes on process exit.
+                Box::leak(Box::new(conn));
+                Some(rx)
+            }
+            Err(e) => {
+                eprintln!("[muse preview] warning: {e}");
+                None
+            }
+        }
+    } else {
+        if opts.midi_port.is_some() {
+            eprintln!("[muse preview] --midi-port ignored: plugin is not an instrument");
+        }
+        None
+    };
+
     // Start audio playback
-    let audio_host = match AudioHost::start(Some(plugin)) {
+    let audio_host = match AudioHost::start(Some(plugin), midi_rx) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("muse: audio failed: {e}");
@@ -1045,6 +1097,7 @@ fn cmd_preview(args: &[String]) {
             "plugin_name": result.plugin_name,
             "sample_rate": device_rate,
             "channels": audio_host.num_channels(),
+            "is_instrument": is_instrument,
         });
         println!("{}", serde_json::to_string(&json).unwrap());
     } else {
@@ -1160,7 +1213,7 @@ fn print_usage() {
     eprintln!("  muse build <file> [--output-dir <dir>] [--format json]");
     eprintln!("  muse check <file> [--format json]");
     eprintln!("  muse test <file> [--output-dir <dir>] [--format json]");
-    eprintln!("  muse preview <file> [--format json]");
+    eprintln!("  muse preview <file> [--format json] [--midi-port <name|list>]");
     eprintln!();
     eprintln!("Commands:");
     eprintln!("  compile    Parse, resolve, and generate a Rust/nih-plug crate from a .muse file");
@@ -1174,6 +1227,8 @@ fn print_usage() {
     eprintln!("  --format json       Output structured JSON (telemetry for build, diagnostics for others)");
     eprintln!("  --no-build          Generate Rust crate only, skip cargo build (compile only)");
     eprintln!("  --release           Build in release mode (default: debug)");
+    eprintln!("  --midi-port <name>  Connect to a specific MIDI input port (preview only)");
+    eprintln!("  --midi-port list    List available MIDI input ports and exit");
     eprintln!();
     eprintln!("Exit codes:");
     eprintln!("  0  Success");

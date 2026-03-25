@@ -1453,3 +1453,90 @@ fn preview_cabi_round_trip() {
     eprintln!("preview_cabi_round_trip: all assertions passed");
     // HostPlugin::drop calls muse_preview_destroy automatically
 }
+
+#[test]
+#[ignore = "requires cargo build — run with --include-ignored"]
+#[cfg(target_os = "macos")]
+fn preview_instrument_midi_round_trip() {
+    use muse_lang::preview::host_plugin::HostPlugin;
+
+    let source = include_str!("../examples/synth.muse");
+    let (_crate_dir, dylib) = build_preview_dylib(source, "midi-round-trip");
+
+    // Load the synth plugin
+    let plugin = HostPlugin::load(&dylib, 44100.0)
+        .expect("HostPlugin::load failed for synth.muse");
+
+    // Verify it's an instrument
+    assert!(
+        plugin.is_instrument(),
+        "synth.muse should report as instrument"
+    );
+
+    // Process a buffer WITHOUT any note — should be silent
+    let num_samples = 1024;
+    let plugin_channels = plugin.num_channels() as usize;
+    assert!(plugin_channels >= 1, "plugin should have at least 1 channel");
+
+    let silence = vec![0.0_f32; num_samples];
+    let inputs: Vec<&[f32]> = (0..plugin_channels).map(|_| silence.as_slice()).collect();
+
+    let mut out_bufs: Vec<Vec<f32>> = (0..plugin_channels)
+        .map(|_| vec![0.0_f32; num_samples])
+        .collect();
+    let mut outputs: Vec<&mut [f32]> = out_bufs.iter_mut().map(|b| b.as_mut_slice()).collect();
+    plugin.process(&inputs, &mut outputs);
+
+    let silent_peak = out_bufs
+        .iter()
+        .flat_map(|ch| ch.iter())
+        .map(|s| s.abs())
+        .fold(0.0_f32, f32::max);
+    eprintln!("no-note peak: {silent_peak}");
+    // Instrument with no note should produce near-silence (ADSR at zero)
+    assert!(
+        silent_peak < 0.01,
+        "instrument with no note should be near-silent, got peak {silent_peak}"
+    );
+
+    // Send NoteOn via the C-ABI (simulating what the MIDI callback would do)
+    plugin.note_on(69, 0.8); // A4, velocity 0.8
+
+    // Process several buffers to let the oscillator + envelope ramp up
+    let mut max_signal = 0.0_f32;
+    for _ in 0..8 {
+        let mut out_bufs: Vec<Vec<f32>> = (0..plugin_channels)
+            .map(|_| vec![0.0_f32; num_samples])
+            .collect();
+        let mut outputs: Vec<&mut [f32]> = out_bufs.iter_mut().map(|b| b.as_mut_slice()).collect();
+        plugin.process(&inputs, &mut outputs);
+
+        let peak = out_bufs
+            .iter()
+            .flat_map(|ch| ch.iter())
+            .map(|s| s.abs())
+            .fold(0.0_f32, f32::max);
+        max_signal = max_signal.max(peak);
+    }
+
+    eprintln!("note-on peak after 8 buffers: {max_signal}");
+    assert!(
+        max_signal > 0.001,
+        "instrument should produce non-silent output after NoteOn, got peak {max_signal}"
+    );
+
+    // Send NoteOff
+    plugin.note_off(69);
+
+    // Process more buffers — signal should decay (ADSR release)
+    // We just verify it doesn't crash; full decay depends on release time
+    for _ in 0..4 {
+        let mut out_bufs: Vec<Vec<f32>> = (0..plugin_channels)
+            .map(|_| vec![0.0_f32; num_samples])
+            .collect();
+        let mut outputs: Vec<&mut [f32]> = out_bufs.iter_mut().map(|b| b.as_mut_slice()).collect();
+        plugin.process(&inputs, &mut outputs);
+    }
+
+    eprintln!("preview_instrument_midi_round_trip: all assertions passed");
+}

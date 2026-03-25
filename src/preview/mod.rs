@@ -14,3 +14,6 @@ pub mod watcher;
 
 #[cfg(target_os = "macos")]
 pub mod reload;
+
+#[cfg(target_os = "macos")]
+pub mod midi;
