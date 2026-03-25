@@ -742,3 +742,283 @@ fn nested_split() {
         other => panic!("Expected Split, got {:?}", other),
     }
 }
+
+// ── Test block parser tests ──────────────────────────────────
+
+#[test]
+fn test_block_basic_parse() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+
+        param gain: float = 0.0 in -30.0..30.0
+
+        process {
+            input
+        }
+
+        test "silence produces silence" {
+            input silence 512 samples
+            set param.gain = 0.0
+            assert output.rms < -120.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.expect("Should produce AST");
+
+    // Find the test block
+    let test_blocks: Vec<_> = plugin
+        .items
+        .iter()
+        .filter_map(|(item, _)| {
+            if let PluginItem::TestBlock(tb) = item {
+                Some(tb)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(test_blocks.len(), 1);
+    assert_eq!(test_blocks[0].name, "silence produces silence");
+    assert_eq!(test_blocks[0].statements.len(), 3);
+
+    // Check input statement
+    match &test_blocks[0].statements[0].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.signal, TestSignal::Silence);
+            assert_eq!(input.sample_count, 512);
+        }
+        other => panic!("Expected Input, got {:?}", other),
+    }
+
+    // Check set statement
+    match &test_blocks[0].statements[1].0 {
+        TestStatement::Set(set) => {
+            assert_eq!(set.param_path, "gain");
+            assert!((set.value - 0.0).abs() < f64::EPSILON);
+        }
+        other => panic!("Expected Set, got {:?}", other),
+    }
+
+    // Check assert statement
+    match &test_blocks[0].statements[2].0 {
+        TestStatement::Assert(assertion) => {
+            assert_eq!(assertion.property, TestProperty::OutputRms);
+            assert_eq!(assertion.op, TestOp::LessThan);
+            assert!((assertion.value - (-120.0)).abs() < f64::EPSILON);
+        }
+        other => panic!("Expected Assert, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_block_sine_signal() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "sine input" {
+            input sine 440Hz 1024 samples
+            assert output.peak > 0.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    assert_eq!(tb.name, "sine input");
+    match &tb.statements[0].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.signal, TestSignal::Sine { frequency: 440.0 });
+            assert_eq!(input.sample_count, 1024);
+        }
+        other => panic!("Expected Input with sine, got {:?}", other),
+    }
+    match &tb.statements[1].0 {
+        TestStatement::Assert(a) => {
+            assert_eq!(a.property, TestProperty::OutputPeak);
+            assert_eq!(a.op, TestOp::GreaterThan);
+        }
+        other => panic!("Expected Assert, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_block_impulse_signal() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "impulse response" {
+            input impulse 256 samples
+            assert output.peak > 0.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    match &tb.statements[0].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.signal, TestSignal::Impulse);
+            assert_eq!(input.sample_count, 256);
+        }
+        other => panic!("Expected Input with impulse, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_block_multiple_tests() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        param gain: float = 0.0 in -30.0..30.0
+        process { input }
+
+        test "first test" {
+            input silence 512 samples
+            assert output.rms < -120.0
+        }
+
+        test "second test" {
+            input sine 440Hz 1024 samples
+            set param.gain = 6.0
+            assert output.peak > 1.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let test_blocks: Vec<_> = plugin
+        .items
+        .iter()
+        .filter_map(|(item, _)| {
+            if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+        })
+        .collect();
+    assert_eq!(test_blocks.len(), 2);
+    assert_eq!(test_blocks[0].name, "first test");
+    assert_eq!(test_blocks[1].name, "second test");
+}
+
+#[test]
+fn test_block_approx_equal_op() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "approx test" {
+            input sine 440Hz 1024 samples
+            assert output.rms ~= 0.707
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    match &tb.statements[1].0 {
+        TestStatement::Assert(a) => {
+            assert_eq!(a.op, TestOp::ApproxEqual);
+            assert!((a.value - 0.707).abs() < 0.001);
+        }
+        other => panic!("Expected Assert with ~=, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_block_input_property() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "check input properties" {
+            input sine 1000Hz 512 samples
+            assert input.rms > 0.0
+            assert input.peak > 0.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    assert_eq!(tb.statements.len(), 3);
+    match &tb.statements[1].0 {
+        TestStatement::Assert(a) => assert_eq!(a.property, TestProperty::InputRms),
+        other => panic!("Expected Assert input.rms, got {:?}", other),
+    }
+    match &tb.statements[2].0 {
+        TestStatement::Assert(a) => assert_eq!(a.property, TestProperty::InputPeak),
+        other => panic!("Expected Assert input.peak, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_block_negative_value() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "negative dB value" {
+            input silence 512 samples
+            assert output.rms < -120.0dB
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    match &tb.statements[1].0 {
+        TestStatement::Assert(a) => {
+            assert!((a.value - (-120.0)).abs() < f64::EPSILON);
+        }
+        other => panic!("Expected Assert, got {:?}", other),
+    }
+}

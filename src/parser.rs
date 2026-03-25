@@ -986,6 +986,145 @@ where
         })
 }
 
+// ── Test block parser ────────────────────────────────────────
+
+fn test_block_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    // Parse a number literal (possibly negative) with optional unit suffix.
+    // Returns the raw f64 value (applying dB conversion is the runtime's job).
+    let test_number = just(Token::Minus)
+        .or_not()
+        .then(select! { Token::Number(n) => n })
+        .then(
+            select! {
+                Token::UnitHz => "Hz",
+                Token::UnitDB => "dB",
+            }
+            .or_not(),
+        )
+        .map(|((neg, n), _unit)| {
+            let val: f64 = n.parse().unwrap_or(0.0);
+            if neg.is_some() { -val } else { val }
+        });
+
+    // input <signal> <count> samples
+    // Signal: silence | sine <freq>Hz | impulse
+    let test_signal = choice((
+        select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "silence")
+            .to(TestSignal::Silence),
+        select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "sine")
+            .then(select! { Token::Number(n) => n })
+            .then_ignore(just(Token::UnitHz))
+            .map(|(_, freq_str)| TestSignal::Sine {
+                frequency: freq_str.parse().unwrap_or(440.0),
+            }),
+        select! { Token::Ident(s) => s }
+            .filter(|s: &String| s == "impulse")
+            .to(TestSignal::Impulse),
+    ));
+
+    let input_stmt = just(Token::Input)
+        .ignore_then(test_signal)
+        .then(select! { Token::Number(n) => n })
+        .then_ignore(
+            select! { Token::Ident(s) => s }.filter(|s: &String| s == "samples"),
+        )
+        .map_with(|(signal, count_str), e| {
+            (
+                TestStatement::Input(TestInput {
+                    signal,
+                    sample_count: count_str.parse().unwrap_or(512),
+                }),
+                e.span(),
+            )
+        });
+
+    // set param.<name> = <value>
+    let set_stmt = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s == "set")
+        .ignore_then(just(Token::Param))
+        .ignore_then(just(Token::Dot))
+        .ignore_then(ident_name())
+        .then_ignore(just(Token::Eq))
+        .then(test_number.clone())
+        .map_with(|(param_path, value), e| {
+            (
+                TestStatement::Set(TestSet { param_path, value }),
+                e.span(),
+            )
+        });
+
+    // assert <property> <op> <value>
+    // property: output.rms | output.peak | input.rms | input.peak
+    let test_property = choice((
+        just(Token::Output)
+            .ignore_then(just(Token::Dot))
+            .ignore_then(select! { Token::Ident(s) => s })
+            .map(|field| match field.as_str() {
+                "rms" => TestProperty::OutputRms,
+                "peak" => TestProperty::OutputPeak,
+                _ => TestProperty::OutputRms, // fallback
+            }),
+        just(Token::Input)
+            .ignore_then(just(Token::Dot))
+            .ignore_then(select! { Token::Ident(s) => s })
+            .map(|field| match field.as_str() {
+                "rms" => TestProperty::InputRms,
+                "peak" => TestProperty::InputPeak,
+                _ => TestProperty::InputRms, // fallback
+            }),
+    ));
+
+    let test_op = choice((
+        just(Token::TildeEq).to(TestOp::ApproxEqual),
+        just(Token::EqEq).to(TestOp::Equal),
+        just(Token::Lt).to(TestOp::LessThan),
+        just(Token::Gt).to(TestOp::GreaterThan),
+    ));
+
+    let assert_stmt = just(Token::Assert)
+        .ignore_then(test_property)
+        .then(test_op)
+        .then(test_number)
+        .map_with(|((property, op), value), e| {
+            (
+                TestStatement::Assert(TestAssert {
+                    property,
+                    op,
+                    value,
+                    tolerance: None,
+                }),
+                e.span(),
+            )
+        });
+
+    let test_stmt = choice((input_stmt, set_stmt, assert_stmt));
+
+    just(Token::Test)
+        .ignore_then(select! { Token::StringLiteral(s) => s })
+        .then(
+            test_stmt
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(name, statements), e| {
+            (
+                PluginItem::TestBlock(TestBlock {
+                    name,
+                    statements,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1000,6 +1139,7 @@ where
         param_decl_parser(),
         midi_decl_parser(),
         process_block_parser(),
+        test_block_parser(),
     ))
     .recover_with(via_parser(nested_delimiters(
         Token::LBrace,

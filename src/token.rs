@@ -112,6 +112,8 @@ pub enum Token {
     Merge,
     #[token("bus")]
     Bus,
+    #[token("assert")]
+    Assert,
 
     // ── Type keywords ────────────────────────────────────────
     #[token("float")]
@@ -152,6 +154,8 @@ pub enum Token {
     LtEq,
     #[token(">=")]
     GtEq,
+    #[token("~=")]
+    TildeEq,
     #[token("&&")]
     AmpAmp,
     #[token("||")]
@@ -270,6 +274,7 @@ impl fmt::Display for Token {
             Token::Split => write!(f, "split"),
             Token::Merge => write!(f, "merge"),
             Token::Bus => write!(f, "bus"),
+            Token::Assert => write!(f, "assert"),
             Token::Float => write!(f, "float"),
             Token::Int => write!(f, "int"),
             Token::Bool => write!(f, "bool"),
@@ -285,6 +290,7 @@ impl fmt::Display for Token {
             Token::BangEq => write!(f, "!="),
             Token::LtEq => write!(f, "<="),
             Token::GtEq => write!(f, ">="),
+            Token::TildeEq => write!(f, "~="),
             Token::AmpAmp => write!(f, "&&"),
             Token::PipePipe => write!(f, "||"),
             Token::DotDot => write!(f, ".."),

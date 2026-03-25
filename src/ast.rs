@@ -27,6 +27,7 @@ pub enum PluginItem {
     ParamDecl(Box<ParamDef>),
     MidiDecl(MidiDecl),
     ProcessBlock(ProcessBlock),
+    TestBlock(TestBlock),
 }
 
 // ── Metadata ─────────────────────────────────────────────────
@@ -296,4 +297,71 @@ pub enum UnitSuffix {
     DB,
     St,
     Percent,
+}
+
+// ── Test blocks ──────────────────────────────────────────────
+
+/// A `test "name" { ... }` block inside a plugin definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestBlock {
+    pub name: String,
+    pub statements: Vec<Spanned<TestStatement>>,
+    pub span: Span,
+}
+
+/// A statement inside a test block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TestStatement {
+    Input(TestInput),
+    Set(TestSet),
+    Assert(TestAssert),
+}
+
+/// `input <signal> <count> samples`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestInput {
+    pub signal: TestSignal,
+    pub sample_count: u64,
+}
+
+/// Signal type for test input generation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TestSignal {
+    Silence,
+    Sine { frequency: f64 },
+    Impulse,
+}
+
+/// `set param.<name> = <value>`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestSet {
+    pub param_path: String,
+    pub value: f64,
+}
+
+/// `assert <property> <op> <value>`
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestAssert {
+    pub property: TestProperty,
+    pub op: TestOp,
+    pub value: f64,
+    pub tolerance: Option<f64>,
+}
+
+/// Assertable signal properties in test blocks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TestProperty {
+    OutputRms,
+    OutputPeak,
+    InputRms,
+    InputPeak,
+}
+
+/// Comparison operators for test assertions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TestOp {
+    LessThan,
+    GreaterThan,
+    Equal,
+    ApproxEqual,
 }
