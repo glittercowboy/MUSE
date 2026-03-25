@@ -7,9 +7,9 @@
 //! Exit codes:
 //!   0 — success
 //!   1 — compile/check error (diagnostics emitted)
-//!   2 — I/O or usage error
+//!   2 — build error (cargo build failed)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use muse_lang::{compile, compile_check, diagnostics_to_json, render_ariadne};
@@ -196,8 +196,47 @@ fn cmd_compile(args: &[String]) {
                 process::exit(0);
             }
 
-            // Full build path — T02 will wire this up. For now, behave
-            // like --no-build since build_plugin() doesn't exist yet.
+            // Full build: cargo build → bundle assembly
+            let dylib_path = match build_plugin(&result.crate_dir, &result.package_name) {
+                Ok(p) => p,
+                Err(e) => {
+                    if opts.json_format {
+                        let json = serde_json::json!({
+                            "status": "error",
+                            "phase": "build",
+                            "message": e,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                    } else {
+                        eprintln!("muse: build failed: {e}");
+                    }
+                    process::exit(2);
+                }
+            };
+
+            let bundle_path = match assemble_clap_bundle(
+                &opts.output_dir,
+                &dylib_path,
+                &result.plugin_name,
+                &result.clap_id,
+                &result.version,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    if opts.json_format {
+                        let json = serde_json::json!({
+                            "status": "error",
+                            "phase": "bundle",
+                            "message": e,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                    } else {
+                        eprintln!("muse: bundle assembly failed: {e}");
+                    }
+                    process::exit(2);
+                }
+            };
+
             if opts.json_format {
                 let json = serde_json::json!({
                     "status": "ok",
@@ -206,13 +245,14 @@ fn cmd_compile(args: &[String]) {
                     "clap_id": result.clap_id,
                     "version": result.version,
                     "crate_dir": result.crate_dir.display().to_string(),
+                    "bundle_path": bundle_path.display().to_string(),
                 });
                 println!("{}", serde_json::to_string_pretty(&json).unwrap());
             } else {
                 eprintln!(
-                    "Generated crate for '{}' at {}",
+                    "Built '{}' → {}",
                     result.plugin_name,
-                    result.crate_dir.display()
+                    bundle_path.display()
                 );
             }
             process::exit(0);
@@ -258,6 +298,93 @@ fn cmd_check(args: &[String]) {
     }
 }
 
+/// Run `cargo build --release` in the generated crate directory.
+///
+/// Returns the path to the built cdylib on success. On macOS the cdylib
+/// is at `<crate_dir>/target/release/lib<underscored_name>.dylib`.
+fn build_plugin(crate_dir: &Path, package_name: &str) -> Result<PathBuf, String> {
+    let status = std::process::Command::new("cargo")
+        .args(["build", "--release"])
+        .current_dir(crate_dir)
+        .status()
+        .map_err(|e| format!("failed to invoke cargo: {e}"))?;
+
+    if !status.success() {
+        return Err(format!(
+            "cargo build exited with {}",
+            status.code().map_or("signal".to_string(), |c| c.to_string())
+        ));
+    }
+
+    // macOS cdylib naming: lib<name>.dylib where <name> has hyphens → underscores
+    let lib_name = package_name.replace('-', "_");
+    let dylib = crate_dir
+        .join("target")
+        .join("release")
+        .join(format!("lib{lib_name}.dylib"));
+
+    if !dylib.exists() {
+        return Err(format!("expected dylib not found at {}", dylib.display()));
+    }
+
+    Ok(dylib)
+}
+
+/// Assemble a macOS .clap bundle directory from a built cdylib.
+///
+/// Creates:
+/// ```text
+/// <output_dir>/<Plugin Display Name>.clap/
+///   Contents/
+///     Info.plist
+///     MacOS/
+///       <Plugin Display Name>    ← renamed dylib
+/// ```
+fn assemble_clap_bundle(
+    output_dir: &Path,
+    dylib_path: &Path,
+    plugin_name: &str,
+    clap_id: &str,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let bundle_dir = output_dir.join(format!("{plugin_name}.clap"));
+    let contents_dir = bundle_dir.join("Contents");
+    let macos_dir = contents_dir.join("MacOS");
+
+    std::fs::create_dir_all(&macos_dir)
+        .map_err(|e| format!("failed to create bundle directory: {e}"))?;
+
+    // Copy dylib → Contents/MacOS/<Plugin Display Name>
+    let binary_dest = macos_dir.join(plugin_name);
+    std::fs::copy(dylib_path, &binary_dest)
+        .map_err(|e| format!("failed to copy dylib to bundle: {e}"))?;
+
+    // Generate Info.plist
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>{plugin_name}</string>
+    <key>CFBundleExecutable</key>
+    <string>{plugin_name}</string>
+    <key>CFBundleIdentifier</key>
+    <string>{clap_id}</string>
+    <key>CFBundleVersion</key>
+    <string>{version}</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+</dict>
+</plist>
+"#
+    );
+    std::fs::write(contents_dir.join("Info.plist"), plist)
+        .map_err(|e| format!("failed to write Info.plist: {e}"))?;
+
+    Ok(bundle_dir)
+}
+
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  muse compile <file> [--output-dir <dir>] [--format json] [--no-build] [--release]");
@@ -276,5 +403,5 @@ fn print_usage() {
     eprintln!("Exit codes:");
     eprintln!("  0  Success");
     eprintln!("  1  Compile/check error (diagnostics emitted)");
-    eprintln!("  2  I/O or usage error");
+    eprintln!("  2  Build or I/O error");
 }
