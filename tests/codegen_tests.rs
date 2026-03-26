@@ -1802,3 +1802,43 @@ fn codegen_mod_delay_cargo_check() {
 
     assert_cargo_check(&crate_dir);
 }
+
+#[test]
+fn echo_example_cargo_check() {
+    let source = include_str!("../examples/echo.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-echo-example");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+
+    // Verify delay codegen markers
+    assert!(lib_rs.contains("struct DelayLine"), "Should emit DelayLine struct");
+    assert!(lib_rs.contains("process_delay("), "Should emit process_delay function");
+    assert!(lib_rs.contains("delay_state_0"), "Should emit delay state field");
+    assert!(lib_rs.contains(".allocate("), "Should call allocate() in initialize()");
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn phaser_example_cargo_check() {
+    let source = include_str!("../examples/phaser.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-phaser-example");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+
+    // Verify allpass codegen markers — four chained allpass stages need four delay states
+    assert!(lib_rs.contains("struct DelayLine"), "Should emit DelayLine struct");
+    assert!(lib_rs.contains("process_allpass("), "Should emit process_allpass function");
+    assert!(lib_rs.contains("delay_state_0"), "Should emit first delay state");
+    assert!(lib_rs.contains("delay_state_3"), "Should emit fourth delay state for 4 allpass stages");
+
+    assert_cargo_check(&crate_dir);
+}

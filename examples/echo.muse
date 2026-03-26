@@ -1,0 +1,57 @@
+// Echo — a stereo delay effect using the delay() primitive.
+// Demonstrates time-based processing with impulse-based test verification.
+
+plugin "Simple Echo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.simple-echo"
+    description "A clean delay effect"
+    features    [audio_effect, stereo, delay]
+  }
+
+  vst3 {
+    id              "MuseSimplEcho1"
+    subcategories   [Fx, Delay]
+  }
+
+  input  stereo
+  output stereo
+
+  param time: float = 0.25 in 0.01..2.0 {
+    unit "s"
+  }
+
+  param mix_amt: float = 0.5 in 0.0..1.0
+
+  process {
+    let delayed = input -> delay(param.time) -> gain(param.mix_amt)
+    mix(input, delayed) -> output
+  }
+
+  test "impulse produces output with delay content" {
+    input  impulse 2048 samples
+    set    param.time = 0.01
+    set    param.mix_amt = 0.5
+    assert output.peak > 0.0
+    assert output.rms > -60dB
+  }
+
+  test "sine through delay preserves signal" {
+    input  sine 440Hz 4096 samples
+    set    param.time = 0.01
+    set    param.mix_amt = 0.5
+    assert output.rms > -10dB
+  }
+
+  test "silence in produces silence out" {
+    input  silence 1024 samples
+    set    param.time = 0.25
+    set    param.mix_amt = 0.5
+    assert output.rms < -120dB
+  }
+}

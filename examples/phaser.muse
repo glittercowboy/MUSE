@@ -1,0 +1,52 @@
+// Phaser — chained allpass stages for phase-cancellation effects.
+// Demonstrates the allpass() primitive with multiple stages.
+
+plugin "Phase Shift" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.phase-shift"
+    description "A multi-stage allpass phaser"
+    features    [audio_effect, stereo, phaser]
+  }
+
+  vst3 {
+    id              "MusePhaseShft1"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param depth: float = 0.7 in 0.0..0.95
+  param rate_val: float = 0.002 in 0.0001..0.01 {
+    unit "s"
+  }
+
+  process {
+    input
+      -> allpass(param.rate_val, param.depth)
+      -> allpass(param.rate_val, param.depth)
+      -> allpass(param.rate_val, param.depth)
+      -> allpass(param.rate_val, param.depth)
+      -> output
+  }
+
+  test "sine passes through allpass chain" {
+    input  sine 440Hz 1024 samples
+    set    param.depth = 0.7
+    set    param.rate_val = 0.002
+    assert output.rms > -20dB
+  }
+
+  test "silence in produces silence out" {
+    input  silence 1024 samples
+    set    param.depth = 0.7
+    set    param.rate_val = 0.002
+    assert output.rms < -120dB
+  }
+}
