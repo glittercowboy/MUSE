@@ -680,6 +680,12 @@ fn generate_plugin_trait(
 
     layout_fields.push_str("            ..AudioIOLayout::const_default()");
 
+    let aux_param_name = if !info.aux_inputs.is_empty() || !info.aux_outputs.is_empty() {
+        "aux"
+    } else {
+        "_aux"
+    };
+
     format!(
         r#"impl Plugin for {s} {{
     const NAME: &'static str = "{name}";
@@ -706,7 +712,7 @@ fn generate_plugin_trait(
     fn process(
         &mut self,
         buffer: &mut Buffer,
-        _aux: &mut AuxiliaryBuffers,
+        {aux_param_name}: &mut AuxiliaryBuffers,
         {context_param}: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {{
         {{PROCESS_BODY}}

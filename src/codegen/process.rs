@@ -7,10 +7,11 @@
 //! - Multi-DSP chains: lowpass, gain, tanh, mix
 //! - Split/merge parallel routing: `split { branch1; branch2 } -> merge`
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp,
+    BinOp, ElseBody, Expr, IoDirection, PluginDef, PluginItem, ProcessBlock, Spanned, Statement,
+    UnaryOp,
 };
 use crate::codegen::SampleInfo;
 use crate::codegen::WavetableInfo;
@@ -79,6 +80,29 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let mut ctx = ProcessContext::new(sample_infos, wavetable_infos);
     ctx.is_instrument = is_instrument;
     ctx.is_polyphonic = is_instrument && voice_count.is_some();
+
+    // Build aux input/output maps from IoDecl items (same 3-way classification as extract_plugin_info)
+    {
+        let mut aux_in_idx: usize = 0;
+        let mut aux_out_idx: usize = 0;
+        for (item, _) in &plugin.items {
+            if let PluginItem::IoDecl(io) = item {
+                let effective_name = io.name.as_deref().unwrap_or("main");
+                if effective_name != "main" {
+                    match io.direction {
+                        IoDirection::Input => {
+                            ctx.aux_input_map.insert(effective_name.to_string(), aux_in_idx);
+                            aux_in_idx += 1;
+                        }
+                        IoDirection::Output => {
+                            ctx.aux_output_map.insert(effective_name.to_string(), aux_out_idx);
+                            aux_out_idx += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let mut stmt_lines: Vec<String> = Vec::new();
     for (i, (stmt, _)) in process_block.body.iter().enumerate() {
@@ -249,7 +273,38 @@ fn generate_effect_process(ctx: &ProcessContext, stmt_lines: &[String]) -> Strin
         .iter()
         .any(|p| matches!(p, DspPrimitive::Filter(_) | DspPrimitive::EqFilter(_)));
 
-    out.push_str("        for channel_samples in buffer.iter_samples() {\n");
+    let has_aux_inputs = !ctx.aux_input_map.is_empty();
+
+    // Bind aux input slices BEFORE the outer loop to avoid borrow conflicts
+    if has_aux_inputs {
+        // Collect and sort by index for deterministic ordering
+        let mut aux_entries: Vec<(&String, &usize)> = ctx.aux_input_map.iter().collect();
+        aux_entries.sort_by_key(|(_, idx)| **idx);
+        for (name, idx) in &aux_entries {
+            out.push_str(&format!(
+                "        let {}_slices = aux.inputs[{}].as_slice_immutable();\n",
+                name, idx
+            ));
+        }
+    }
+
+    if has_aux_inputs {
+        out.push_str("        for (sample_idx, channel_samples) in buffer.iter_samples().enumerate() {\n");
+    } else {
+        out.push_str("        for channel_samples in buffer.iter_samples() {\n");
+    }
+
+    // Emit per-sample aux reads at top of outer loop body
+    if has_aux_inputs {
+        let mut aux_entries: Vec<(&String, &usize)> = ctx.aux_input_map.iter().collect();
+        aux_entries.sort_by_key(|(_, idx)| **idx);
+        for (name, _) in &aux_entries {
+            out.push_str(&format!(
+                "            let {}_sample = {}_slices[0][sample_idx];\n",
+                name, name
+            ));
+        }
+    }
 
     for param_name in &ctx.smoothed_params {
         out.push_str(&format!(
@@ -318,6 +373,8 @@ struct ProcessContext<'a> {
     _wavetable_infos: &'a [WavetableInfo],
     is_instrument: bool,
     is_polyphonic: bool,
+    aux_input_map: HashMap<String, usize>,
+    aux_output_map: HashMap<String, usize>,
 }
 
 impl<'a> ProcessContext<'a> {
@@ -348,6 +405,8 @@ impl<'a> ProcessContext<'a> {
             _wavetable_infos: wavetable_infos,
             is_instrument: false,
             is_polyphonic: false,
+            aux_input_map: HashMap::new(),
+            aux_output_map: HashMap::new(),
         }
     }
 
@@ -648,6 +707,9 @@ fn generate_branch_chain(expr: &Expr, branch_var: &str, ctx: &mut ProcessContext
         }
         Expr::FnCall { .. } => generate_dsp_call_with_input(expr, branch_var, ctx),
         Expr::Ident(name) if name == "input" => branch_var.to_string(),
+        Expr::Ident(name) if ctx.aux_input_map.contains_key(name) => {
+            format!("{}_sample", name)
+        }
         _ => generate_expr(expr, ctx),
     }
 }
@@ -665,7 +727,13 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "*sample".to_string()
                 }
             }
-            _ => name.clone(),
+            _ => {
+                if ctx.aux_input_map.contains_key(name) {
+                    format!("{}_sample", name)
+                } else {
+                    name.clone()
+                }
+            }
         },
         Expr::FieldAccess(base, field) => {
             if let Expr::Ident(base_name) = &base.0 {

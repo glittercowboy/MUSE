@@ -2366,3 +2366,116 @@ plugin "Sidechain Comp" {
         "Main stereo input should still be declared"
     );
 }
+
+#[test]
+fn codegen_aux_buffer_reads() {
+    let source = r#"
+plugin "Sidechain Comp" {
+    vendor "Test"
+    input main stereo
+    input sidechain stereo
+    output stereo
+
+    param threshold: float = 0.1 in 0.001..1.0
+
+    clap {
+        id "dev.test.sidechain-comp"
+        description "Test sidechain"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestSidechain1234"
+        subcategories [Fx, Dynamics]
+    }
+
+    process {
+        let sc_level = sidechain -> rms(10ms)
+        input -> output
+    }
+}
+"#;
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // Verify aux buffer reads are generated
+    assert!(
+        lib_rs.contains("as_slice_immutable"),
+        "Generated code should contain as_slice_immutable() for aux buffer reads.\nGenerated:\n{}",
+        lib_rs
+    );
+    assert!(
+        lib_rs.contains("sidechain_slices"),
+        "Generated code should contain sidechain_slices variable.\nGenerated:\n{}",
+        lib_rs
+    );
+    assert!(
+        lib_rs.contains("sidechain_sample"),
+        "Generated code should contain sidechain_sample variable.\nGenerated:\n{}",
+        lib_rs
+    );
+    assert!(
+        lib_rs.contains("sample_idx"),
+        "Generated code should contain sample_idx from enumerate().\nGenerated:\n{}",
+        lib_rs
+    );
+    // Verify aux param name is not prefixed with underscore
+    assert!(
+        lib_rs.contains("aux: &mut AuxiliaryBuffers"),
+        "Generated code should use 'aux' (not '_aux') when plugin has aux buses.\nGenerated:\n{}",
+        lib_rs
+    );
+    // Verify non-aux plugins still use _aux
+    assert!(
+        !lib_rs.contains("_aux: &mut AuxiliaryBuffers"),
+        "Generated code should NOT use '_aux' when plugin has aux buses.\nGenerated:\n{}",
+        lib_rs
+    );
+}
+
+#[test]
+fn codegen_no_aux_buffer_reads_for_simple_plugin() {
+    // A simple plugin with no aux buses should NOT emit enumerate or aux reads
+    let source = r#"
+plugin "Simple Gain" {
+    vendor "Test"
+    input stereo
+    output stereo
+
+    param gain: float = 0.0 in -24.0..24.0
+
+    clap {
+        id "dev.test.simple-gain"
+        description "Test gain"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestSimpleGain123"
+        subcategories [Fx]
+    }
+
+    process {
+        input -> gain(param.gain) -> output
+    }
+}
+"#;
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // Verify NO aux buffer reads for simple plugins
+    assert!(
+        !lib_rs.contains("as_slice_immutable"),
+        "Simple plugin should NOT contain as_slice_immutable().\nGenerated:\n{}",
+        lib_rs
+    );
+    assert!(
+        !lib_rs.contains("sample_idx"),
+        "Simple plugin should NOT contain sample_idx.\nGenerated:\n{}",
+        lib_rs
+    );
+    // Verify _aux is used (with underscore) when no aux buses
+    assert!(
+        lib_rs.contains("_aux: &mut AuxiliaryBuffers"),
+        "Simple plugin should use '_aux' (with underscore).\nGenerated:\n{}",
+        lib_rs
+    );
+}
