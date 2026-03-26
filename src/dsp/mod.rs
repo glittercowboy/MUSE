@@ -3,6 +3,6 @@
 pub mod primitives;
 
 pub use primitives::{
-    builtin_registry, DspFunction, DspParam, DspPrimitive, DspRegistry, EnvKind, FilterKind,
-    OscKind,
+    builtin_registry, DspFunction, DspParam, DspPrimitive, DspRegistry, EnvKind, EqKind,
+    FilterKind, OscKind,
 };

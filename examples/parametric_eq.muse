@@ -1,0 +1,98 @@
+// Parametric EQ — a 4-band equalizer using EQ/shelving filter primitives.
+// Demonstrates chaining low_shelf, peak_eq, and high_shelf with per-band
+// independent biquad state.
+
+plugin "Parametric EQ" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.parametric-eq"
+    description "A 4-band parametric equalizer"
+    features    [audio_effect, stereo, equalizer]
+  }
+
+  vst3 {
+    id              "MuseParamEQ001"
+    subcategories   [Fx, EQ]
+  }
+
+  input  stereo
+  output stereo
+
+  param low_freq: float = 200.0 in 20.0..500.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param low_gain: float = 3.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  param mid1_freq: float = 1000.0 in 200.0..5000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param mid1_gain: float = -2.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  param mid1_q: float = 1.4 in 0.1..10.0
+
+  param mid2_freq: float = 4000.0 in 1000.0..15000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param mid2_gain: float = 2.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  param mid2_q: float = 2.0 in 0.1..10.0
+
+  param high_freq: float = 8000.0 in 2000.0..20000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param high_gain: float = -1.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  process {
+    input
+      -> low_shelf(param.low_freq, param.low_gain)
+      -> peak_eq(param.mid1_freq, param.mid1_gain, param.mid1_q)
+      -> peak_eq(param.mid2_freq, param.mid2_gain, param.mid2_q)
+      -> high_shelf(param.high_freq, param.high_gain)
+      -> output
+  }
+
+  test "passes signal through EQ chain" {
+    input  sine 1000Hz 4096 samples
+    set    param.low_freq = 200.0
+    set    param.low_gain = 0.0
+    set    param.mid1_freq = 1000.0
+    set    param.mid1_gain = 0.0
+    set    param.mid1_q = 1.4
+    set    param.mid2_freq = 4000.0
+    set    param.mid2_gain = 0.0
+    set    param.mid2_q = 2.0
+    set    param.high_freq = 8000.0
+    set    param.high_gain = 0.0
+    assert output.rms > -6dB
+  }
+
+  test "silence in produces silence out" {
+    input  silence 1024 samples
+    set    param.low_gain = 3.0
+    set    param.mid1_gain = -2.0
+    set    param.mid2_gain = 2.0
+    set    param.high_gain = -1.0
+    assert output.rms < -120dB
+  }
+}

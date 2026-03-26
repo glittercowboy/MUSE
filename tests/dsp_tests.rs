@@ -291,6 +291,41 @@ fn comb_signature() {
     assert_eq!(f.primitive, DspPrimitive::Comb);
 }
 
+// ── EQ / Shelving filters ────────────────────────────────────
+
+#[test]
+fn dsp_registry_peak_eq() {
+    let f = lookup("peak_eq");
+    assert_eq!(f.params.len(), 3);
+    assert_param(&f.params[0], "freq", DspType::Frequency, false);
+    assert_param(&f.params[1], "gain_db", DspType::Gain, false);
+    assert_param(&f.params[2], "q", DspType::Number, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::EqFilter(EqKind::PeakEq));
+}
+
+#[test]
+fn dsp_registry_low_shelf() {
+    let f = lookup("low_shelf");
+    assert_eq!(f.params.len(), 3);
+    assert_param(&f.params[0], "freq", DspType::Frequency, false);
+    assert_param(&f.params[1], "gain_db", DspType::Gain, false);
+    assert_param(&f.params[2], "q", DspType::Number, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::EqFilter(EqKind::LowShelf));
+}
+
+#[test]
+fn dsp_registry_high_shelf() {
+    let f = lookup("high_shelf");
+    assert_eq!(f.params.len(), 3);
+    assert_param(&f.params[0], "freq", DspType::Frequency, false);
+    assert_param(&f.params[1], "gain_db", DspType::Gain, false);
+    assert_param(&f.params[2], "q", DspType::Number, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::EqFilter(EqKind::HighShelf));
+}
+
 // ── Type compatibility ───────────────────────────────────────
 
 #[test]

@@ -1842,3 +1842,64 @@ fn phaser_example_cargo_check() {
 
     assert_cargo_check(&crate_dir);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EQ / Shelving filter codegen
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn codegen_peak_eq_cargo_check() {
+    let source = include_str!("../examples/parametric_eq.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-parametric-eq");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn codegen_eq_contains_expected_structures() {
+    let source = include_str!("../examples/parametric_eq.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // BiquadState struct must be emitted
+    assert!(
+        lib_rs.contains("struct BiquadState"),
+        "Generated code should contain BiquadState struct"
+    );
+
+    // Four chained EQ calls → four independent eq_biquad_state fields
+    assert!(
+        lib_rs.contains("eq_biquad_state_0"),
+        "Generated code should contain eq_biquad_state_0 for low_shelf"
+    );
+    assert!(
+        lib_rs.contains("eq_biquad_state_1"),
+        "Generated code should contain eq_biquad_state_1 for first peak_eq"
+    );
+    assert!(
+        lib_rs.contains("eq_biquad_state_2"),
+        "Generated code should contain eq_biquad_state_2 for second peak_eq"
+    );
+    assert!(
+        lib_rs.contains("eq_biquad_state_3"),
+        "Generated code should contain eq_biquad_state_3 for high_shelf"
+    );
+
+    // Process functions for each EQ type
+    assert!(
+        lib_rs.contains("process_biquad_low_shelf("),
+        "Generated code should contain process_biquad_low_shelf function"
+    );
+    assert!(
+        lib_rs.contains("process_biquad_peak_eq("),
+        "Generated code should contain process_biquad_peak_eq function"
+    );
+    assert!(
+        lib_rs.contains("process_biquad_high_shelf("),
+        "Generated code should contain process_biquad_high_shelf function"
+    );
+}
