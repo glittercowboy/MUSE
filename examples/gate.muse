@@ -1,0 +1,51 @@
+// Noise Gate — silences input below a threshold.
+// Demonstrates the gate DSP primitive as an effect plugin.
+
+plugin "Noise Gate" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.noise-gate"
+    description "A noise gate with adjustable threshold and timing"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseNoiseGt1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param threshold: float = -40.0 in -80.0..0.0 {
+    smoothing logarithmic 10ms
+    unit "dB"
+  }
+
+  param attack: float = 1.0 in 0.1..50.0 {
+    smoothing linear 5ms
+  }
+
+  param release: float = 50.0 in 5.0..500.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    input -> gate(-40dB, param.attack, param.release, 10.0) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "loud sine passes through gate" {
+    input  sine 440Hz 1024 samples
+    assert output.rms > -10dB
+  }
+}

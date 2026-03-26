@@ -1903,3 +1903,44 @@ fn codegen_eq_contains_expected_structures() {
         "Generated code should contain process_biquad_high_shelf function"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Dynamics: gate codegen
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn codegen_gate_cargo_check() {
+    let source = include_str!("../examples/gate.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-gate");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn codegen_gate_contains_expected_structures() {
+    let source = include_str!("../examples/gate.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // GateState struct must be emitted
+    assert!(
+        lib_rs.contains("struct GateState"),
+        "Generated code should contain GateState struct"
+    );
+
+    // Process function for gate
+    assert!(
+        lib_rs.contains("process_gate("),
+        "Generated code should contain process_gate function"
+    );
+
+    // Per-call-site state field
+    assert!(
+        lib_rs.contains("gate_state_0"),
+        "Generated code should contain gate_state_0 field"
+    );
+}

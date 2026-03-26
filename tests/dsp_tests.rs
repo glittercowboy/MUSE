@@ -7,7 +7,7 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_30_functions() {
+fn registry_contains_all_33_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
@@ -15,6 +15,7 @@ fn registry_contains_all_30_functions() {
         "mix", "clip", "tanh",
         "fold", "bitcrush", "lfo", "pulse", "chorus", "compressor", "semitones_to_ratio",
         "peak_eq", "low_shelf", "high_shelf",
+        "rms", "peak_follow", "gate",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
     for name in &expected {
@@ -324,6 +325,39 @@ fn dsp_registry_high_shelf() {
     assert_param(&f.params[2], "q", DspType::Number, true);
     assert_eq!(f.return_type, DspType::Processor);
     assert_eq!(f.primitive, DspPrimitive::EqFilter(EqKind::HighShelf));
+}
+
+// ── Dynamics analysis / gating ────────────────────────────────
+
+#[test]
+fn rms_signature() {
+    let f = lookup("rms");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "window_ms", DspType::Time, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Rms);
+}
+
+#[test]
+fn peak_follow_signature() {
+    let f = lookup("peak_follow");
+    assert_eq!(f.params.len(), 2);
+    assert_param(&f.params[0], "attack_ms", DspType::Time, true);
+    assert_param(&f.params[1], "release_ms", DspType::Time, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::PeakFollow);
+}
+
+#[test]
+fn gate_signature() {
+    let f = lookup("gate");
+    assert_eq!(f.params.len(), 4);
+    assert_param(&f.params[0], "threshold_db", DspType::Gain, true);
+    assert_param(&f.params[1], "attack_ms", DspType::Time, true);
+    assert_param(&f.params[2], "release_ms", DspType::Time, true);
+    assert_param(&f.params[3], "hold_ms", DspType::Time, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Gate);
 }
 
 // ── Type compatibility ───────────────────────────────────────
