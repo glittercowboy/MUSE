@@ -60,6 +60,8 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     let has_rms = process_info.rms_count > 0;
     let has_peak_follow = process_info.peak_follow_count > 0;
     let has_gate = process_info.gate_count > 0;
+    let _has_dc_block = process_info.dc_block_count > 0;
+    let _has_sample_hold = process_info.sample_hold_count > 0;
     let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
@@ -107,6 +109,12 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
         }
         for i in 0..process_info.gate_count {
             out.push_str(&format!("    gate_state_{}: GateState,\n", i));
+        }
+        for i in 0..process_info.dc_block_count {
+            out.push_str(&format!("    dc_block_state_{}: DcBlockState,\n", i));
+        }
+        for i in 0..process_info.sample_hold_count {
+            out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
         }
     }
 
@@ -173,6 +181,12 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
         }
         for i in 0..process_info.gate_count {
             out.push_str(&format!("            gate_state_{}: GateState::default(),\n", i));
+        }
+        for i in 0..process_info.dc_block_count {
+            out.push_str(&format!("            dc_block_state_{}: DcBlockState::default(),\n", i));
+        }
+        for i in 0..process_info.sample_hold_count {
+            out.push_str(&format!("            sample_hold_state_{}: SampleAndHoldState::default(),\n", i));
         }
     }
 
@@ -263,6 +277,12 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.gate_count {
         out.push_str(&format!("    gate_state_{}: GateState,\n", i));
     }
+    for i in 0..process_info.dc_block_count {
+        out.push_str(&format!("    dc_block_state_{}: DcBlockState,\n", i));
+    }
+    for i in 0..process_info.sample_hold_count {
+        out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
+    }
     for i in 0..process_info.eq_biquad_count {
         out.push_str(&format!("    eq_biquad_state_{}: BiquadState,\n", i));
     }
@@ -296,6 +316,12 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     }
     for i in 0..process_info.gate_count {
         fields.push(format!("gate_state_{}: GateState::default()", i));
+    }
+    for i in 0..process_info.dc_block_count {
+        fields.push(format!("dc_block_state_{}: DcBlockState::default()", i));
+    }
+    for i in 0..process_info.sample_hold_count {
+        fields.push(format!("sample_hold_state_{}: SampleAndHoldState::default()", i));
     }
     for i in 0..process_info.eq_biquad_count {
         fields.push(format!("eq_biquad_state_{}: BiquadState::default()", i));

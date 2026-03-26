@@ -1,0 +1,26 @@
+plugin "Soft Clip DC Block" {
+  vendor "Test"
+  version "0.1.0"
+
+  input stereo
+  output stereo
+
+  param drive: float = 2.0 in 1.0..10.0 {
+    unit "x"
+  }
+
+  process {
+    input -> soft_clip(param.drive) -> dc_block() -> output
+  }
+
+  clap {
+    id "com.test.soft-clip-dc-block"
+    description "Test soft_clip and dc_block"
+    features [audio_effect, stereo]
+  }
+
+  vst3 {
+    id "SClipDcBlockTest"
+    subcategories [Fx]
+  }
+}

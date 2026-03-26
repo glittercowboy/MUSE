@@ -203,6 +203,30 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         out.push('\n');
     }
 
+    // ── DC Block ─────────────────────────────────────────────
+    let needs_dc_block = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::DcBlock)
+    });
+
+    if needs_dc_block {
+        out.push_str(&generate_dc_block_state());
+        out.push('\n');
+        out.push_str(&generate_process_dc_block());
+        out.push('\n');
+    }
+
+    // ── Sample and Hold ──────────────────────────────────────
+    let needs_sample_hold = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::SampleAndHold)
+    });
+
+    if needs_sample_hold {
+        out.push_str(&generate_sample_hold_state());
+        out.push('\n');
+        out.push_str(&generate_process_sample_hold());
+        out.push('\n');
+    }
+
     // ── Delay ────────────────────────────────────────────────
     let needs_delay = used_primitives.iter().any(|p| {
         matches!(p, DspPrimitive::Delay | DspPrimitive::ModDelay | DspPrimitive::Allpass | DspPrimitive::Comb)
@@ -1179,6 +1203,88 @@ fn process_gate(state: &mut GateState, input: f32, threshold_db: f32, attack_ms:
     }
 
     input * state.gain
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// DC Block helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the DcBlockState struct.
+fn generate_dc_block_state() -> String {
+    r#"/// Per-call-site DC blocking filter state.
+#[derive(Clone, Copy)]
+struct DcBlockState {
+    prev_x: f32,
+    prev_y: f32,
+}
+
+impl Default for DcBlockState {
+    fn default() -> Self {
+        Self {
+            prev_x: 0.0,
+            prev_y: 0.0,
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_dc_block function.
+fn generate_process_dc_block() -> String {
+    r#"/// Process one sample through a DC blocking filter.
+///
+/// Removes DC offset using a first-order highpass: y[n] = x[n] - x[n-1] + 0.995 * y[n-1]
+fn process_dc_block(state: &mut DcBlockState, input: f32) -> f32 {
+    let y = input - state.prev_x + 0.995 * state.prev_y;
+    state.prev_x = input;
+    state.prev_y = y;
+    y
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Sample and Hold helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the SampleAndHoldState struct.
+fn generate_sample_hold_state() -> String {
+    r#"/// Per-call-site sample-and-hold state.
+#[derive(Clone, Copy)]
+struct SampleAndHoldState {
+    held_value: f32,
+    prev_trigger: f32,
+}
+
+impl Default for SampleAndHoldState {
+    fn default() -> Self {
+        Self {
+            held_value: 0.0,
+            prev_trigger: 0.0,
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_sample_and_hold function.
+fn generate_process_sample_hold() -> String {
+    r#"/// Process one sample through a sample-and-hold.
+///
+/// On a rising edge (trigger crosses above 0.5), captures the input value.
+/// Always outputs the most recently held value.
+fn process_sample_and_hold(state: &mut SampleAndHoldState, input: f32, trigger: f32) -> f32 {
+    if trigger > 0.5 && state.prev_trigger <= 0.5 {
+        state.held_value = input;
+    }
+    state.prev_trigger = trigger;
+    state.held_value
 }
 "#
     .to_string()

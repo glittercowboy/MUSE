@@ -7,7 +7,7 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_33_functions() {
+fn registry_contains_all_37_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
@@ -16,6 +16,7 @@ fn registry_contains_all_33_functions() {
         "fold", "bitcrush", "lfo", "pulse", "chorus", "compressor", "semitones_to_ratio",
         "peak_eq", "low_shelf", "high_shelf",
         "rms", "peak_follow", "gate",
+        "soft_clip", "dc_block", "crossfade", "sample_and_hold",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
     for name in &expected {
@@ -358,6 +359,45 @@ fn gate_signature() {
     assert_param(&f.params[3], "hold_ms", DspType::Time, true);
     assert_eq!(f.return_type, DspType::Processor);
     assert_eq!(f.primitive, DspPrimitive::Gate);
+}
+
+// ── Utility primitives ───────────────────────────────────────
+
+#[test]
+fn dsp_registry_soft_clip() {
+    let f = lookup("soft_clip");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "drive", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::SoftClip);
+}
+
+#[test]
+fn dsp_registry_dc_block() {
+    let f = lookup("dc_block");
+    assert_eq!(f.params.len(), 0);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::DcBlock);
+}
+
+#[test]
+fn dsp_registry_crossfade() {
+    let f = lookup("crossfade");
+    assert_eq!(f.params.len(), 3);
+    assert_param(&f.params[0], "a", DspType::Signal, false);
+    assert_param(&f.params[1], "b", DspType::Signal, false);
+    assert_param(&f.params[2], "mix", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Signal);
+    assert_eq!(f.primitive, DspPrimitive::Crossfade);
+}
+
+#[test]
+fn dsp_registry_sample_and_hold() {
+    let f = lookup("sample_and_hold");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "trigger", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::SampleAndHold);
 }
 
 // ── Type compatibility ───────────────────────────────────────

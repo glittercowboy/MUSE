@@ -1944,3 +1944,48 @@ fn codegen_gate_contains_expected_structures() {
         "Generated code should contain gate_state_0 field"
     );
 }
+
+// ── Soft Clip + DC Block codegen integration ─────────────────
+
+#[test]
+fn soft_clip_dc_block_codegen_compiles() {
+    let source = include_str!("fixtures/soft_clip_dc_block.muse");
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-codegen-test-soft-clip-dc-block-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn soft_clip_dc_block_codegen_contains_structs() {
+    let source = include_str!("fixtures/soft_clip_dc_block.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // DC block state and processing
+    assert!(
+        lib_rs.contains("struct DcBlockState"),
+        "Generated code should contain DcBlockState struct"
+    );
+    assert!(
+        lib_rs.contains("process_dc_block("),
+        "Generated code should contain process_dc_block function"
+    );
+    assert!(
+        lib_rs.contains("dc_block_state_0"),
+        "Generated code should contain dc_block_state_0 field"
+    );
+
+    // Soft clip inline math
+    assert!(
+        lib_rs.contains("__x / (1.0 + __x.abs())"),
+        "Generated code should contain soft clip formula"
+    );
+}

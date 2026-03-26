@@ -69,6 +69,10 @@ pub enum DspPrimitive {
     Rms,
     PeakFollow,
     Gate,
+    SoftClip,
+    DcBlock,
+    Crossfade,
+    SampleAndHold,
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -352,6 +356,39 @@ pub fn builtin_registry() -> DspRegistry {
             ],
             return_type: DspType::Processor,
             primitive: DspPrimitive::Gate,
+        },
+        // ── Utility primitives ──
+        // soft_clip(drive: Number) → Processor — soft saturation without tanh
+        DspFunction {
+            name: "soft_clip".into(),
+            params: vec![param("drive", DspType::Number)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::SoftClip,
+        },
+        // dc_block() → Processor — remove DC offset
+        DspFunction {
+            name: "dc_block".into(),
+            params: vec![],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::DcBlock,
+        },
+        // crossfade(a: Signal, b: Signal, mix: Number) → Signal — equal-power crossfade
+        DspFunction {
+            name: "crossfade".into(),
+            params: vec![
+                param("a", DspType::Signal),
+                param("b", DspType::Signal),
+                param("mix", DspType::Number),
+            ],
+            return_type: DspType::Signal,
+            primitive: DspPrimitive::Crossfade,
+        },
+        // sample_and_hold(trigger: Number) → Processor — sample on rising edge
+        DspFunction {
+            name: "sample_and_hold".into(),
+            params: vec![param("trigger", DspType::Number)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::SampleAndHold,
         },
     ];
 

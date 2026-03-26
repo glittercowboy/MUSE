@@ -33,6 +33,8 @@ pub struct ProcessInfo {
     pub rms_count: usize,
     pub peak_follow_count: usize,
     pub gate_count: usize,
+    pub dc_block_count: usize,
+    pub sample_hold_count: usize,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> (String, ProcessInfo) {
@@ -59,6 +61,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     rms_count: 0,
                     peak_follow_count: 0,
                     gate_count: 0,
+                    dc_block_count: 0,
+                    sample_hold_count: 0,
                 },
             )
         }
@@ -87,6 +91,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let rms_count = ctx.rms_counter;
     let peak_follow_count = ctx.peak_follow_counter;
     let gate_count = ctx.gate_counter;
+    let dc_block_count = ctx.dc_block_counter;
+    let sample_hold_count = ctx.sample_hold_counter;
 
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
@@ -120,6 +126,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         rms_count,
         peak_follow_count,
         gate_count,
+        dc_block_count,
+        sample_hold_count,
     };
 
     (process_body, info)
@@ -287,6 +295,8 @@ struct ProcessContext {
     rms_counter: usize,
     peak_follow_counter: usize,
     gate_counter: usize,
+    dc_block_counter: usize,
+    sample_hold_counter: usize,
     is_instrument: bool,
     is_polyphonic: bool,
 }
@@ -310,6 +320,8 @@ impl ProcessContext {
             rms_counter: 0,
             peak_follow_counter: 0,
             gate_counter: 0,
+            dc_block_counter: 0,
+            sample_hold_counter: 0,
             is_instrument: false,
             is_polyphonic: false,
         }
@@ -477,6 +489,13 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "rms" => generate_rms_call_with_input(input_code, args, ctx),
                 "peak_follow" => generate_peak_follow_call_with_input(input_code, args, ctx),
                 "gate" => generate_gate_call_with_input(input_code, args, ctx),
+                "soft_clip" => {
+                    ctx.used_primitives.insert(DspPrimitive::SoftClip);
+                    let drive = generate_expr_as_param(&args[0].0, ctx);
+                    format!("{{ let __x = {} * {}; __x / (1.0 + __x.abs()) }}", input_code, drive)
+                }
+                "dc_block" => generate_dc_block_call_with_input(input_code, args, ctx),
+                "sample_and_hold" => generate_sample_hold_call_with_input(input_code, args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -822,6 +841,20 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "rms" => return generate_rms_call_with_input("*sample", args, ctx),
                     "peak_follow" => return generate_peak_follow_call_with_input("*sample", args, ctx),
                     "gate" => return generate_gate_call_with_input("*sample", args, ctx),
+                    "soft_clip" => {
+                        ctx.used_primitives.insert(DspPrimitive::SoftClip);
+                        let drive = generate_expr_as_param(&args[0].0, ctx);
+                        return format!("{{ let __x = *sample * {}; __x / (1.0 + __x.abs()) }}", drive);
+                    }
+                    "dc_block" => return generate_dc_block_call_with_input("*sample", args, ctx),
+                    "sample_and_hold" => return generate_sample_hold_call_with_input("*sample", args, ctx),
+                    "crossfade" => {
+                        ctx.used_primitives.insert(DspPrimitive::Crossfade);
+                        let a = generate_chain_value(&args[0].0, ctx);
+                        let b = generate_chain_value(&args[1].0, ctx);
+                        let mix = generate_expr_as_param(&args[2].0, ctx);
+                        return format!("{{ let __a = {}; let __b = {}; let __m = {}; __a * (1.0 - __m).sqrt() + __b * __m.sqrt() }}", a, b, mix);
+                    }
                     "adsr" => return generate_adsr_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
@@ -1472,5 +1505,55 @@ fn generate_gate_call_with_input(
     format!(
         "process_gate(&mut {}, {}, {}, {}, {}, {}, self.sample_rate)",
         state_target, input_code, threshold_db, attack_ms, release_ms, hold_ms
+    )
+}
+
+fn generate_dc_block_call_with_input(
+    input_code: &str,
+    _args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::DcBlock);
+
+    let dc_idx = ctx.dc_block_counter;
+    ctx.dc_block_counter += 1;
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.dc_block_state_{}", dc_idx)
+    } else {
+        format!("self.dc_block_state_{}", dc_idx)
+    };
+
+    format!(
+        "process_dc_block(&mut {}, {})",
+        state_target, input_code
+    )
+}
+
+fn generate_sample_hold_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::SampleAndHold);
+
+    let sh_idx = ctx.sample_hold_counter;
+    ctx.sample_hold_counter += 1;
+
+    let trigger = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.0_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.sample_hold_state_{}", sh_idx)
+    } else {
+        format!("self.sample_hold_state_{}", sh_idx)
+    };
+
+    format!(
+        "process_sample_and_hold(&mut {}, {}, {})",
+        state_target, input_code, trigger
     )
 }
