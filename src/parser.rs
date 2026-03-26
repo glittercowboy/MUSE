@@ -1032,15 +1032,22 @@ where
             .to(TestSignal::Impulse),
     ));
 
+    // Optional bus name: any identifier that is NOT a signal keyword
+    let optional_bus_name = select! { Token::Ident(s) => s }
+        .filter(|s: &String| s != "silence" && s != "sine" && s != "impulse")
+        .or_not();
+
     let input_stmt = just(Token::Input)
-        .ignore_then(test_signal)
+        .ignore_then(optional_bus_name)
+        .then(test_signal)
         .then(select! { Token::Number(n) => n })
         .then_ignore(
             select! { Token::Ident(s) => s }.filter(|s: &String| s == "samples"),
         )
-        .map_with(|(signal, count_str), e| {
+        .map_with(|((bus_name, signal), count_str), e| {
             (
                 TestStatement::Input(TestInput {
+                    bus_name,
                     signal,
                     sample_count: count_str.parse().unwrap_or(512),
                 }),

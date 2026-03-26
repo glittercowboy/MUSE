@@ -2479,3 +2479,100 @@ fn parse_wavetable_external_mode() {
     assert!(!wt_items[0].embed, "Expected embed=false for external mode");
     assert_eq!(wt_items[0].frame_size, 2048);
 }
+
+#[test]
+fn parse_named_bus_test_input() {
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        input sidechain stereo
+        process { input }
+
+        test "sidechain test" {
+            input sidechain sine 440Hz 1024 samples
+            input sine 880Hz 512 samples
+            assert output.rms > 0.0
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    assert_eq!(tb.name, "sidechain test");
+
+    // First input: named bus "sidechain"
+    match &tb.statements[0].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.bus_name, Some("sidechain".to_string()));
+            assert_eq!(input.signal, TestSignal::Sine { frequency: 440.0 });
+            assert_eq!(input.sample_count, 1024);
+        }
+        other => panic!("Expected Input with sidechain bus, got {:?}", other),
+    }
+
+    // Second input: main bus (no bus name)
+    match &tb.statements[1].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.bus_name, None);
+            assert_eq!(input.signal, TestSignal::Sine { frequency: 880.0 });
+            assert_eq!(input.sample_count, 512);
+        }
+        other => panic!("Expected Input without bus name, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_test_input_backward_compat() {
+    // Verify that existing test inputs without bus names still parse correctly
+    let source = r#"
+    plugin "TestPlugin" {
+        vendor "Test"
+        input stereo
+        output stereo
+        process { input }
+
+        test "basic test" {
+            input silence 256 samples
+            input sine 440Hz 1024 samples
+            input impulse 128 samples
+        }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let tb = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::TestBlock(tb) = item { Some(tb) } else { None }
+    }).unwrap();
+
+    // All inputs should have bus_name = None
+    match &tb.statements[0].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.bus_name, None);
+            assert_eq!(input.signal, TestSignal::Silence);
+        }
+        other => panic!("Expected Input silence, got {:?}", other),
+    }
+    match &tb.statements[1].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.bus_name, None);
+            assert_eq!(input.signal, TestSignal::Sine { frequency: 440.0 });
+        }
+        other => panic!("Expected Input sine, got {:?}", other),
+    }
+    match &tb.statements[2].0 {
+        TestStatement::Input(input) => {
+            assert_eq!(input.bus_name, None);
+            assert_eq!(input.signal, TestSignal::Impulse);
+        }
+        other => panic!("Expected Input impulse, got {:?}", other),
+    }
+}

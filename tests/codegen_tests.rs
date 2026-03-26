@@ -2479,3 +2479,68 @@ plugin "Simple Gain" {
         lib_rs
     );
 }
+
+#[test]
+fn codegen_test_harness_aux_buffer_construction() {
+    let source = r#"
+plugin "Sidechain Test" {
+    vendor "Test"
+    input main stereo
+    input sidechain stereo
+    output stereo
+
+    param threshold: float = 0.1 in 0.001..1.0
+
+    clap {
+        id "dev.test.sidechain-test"
+        description "Test sidechain"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestSidechainT234"
+        subcategories [Fx, Dynamics]
+    }
+
+    process {
+        let sc_level = sidechain -> rms(10ms)
+        input -> output
+    }
+
+    test "sidechain reduces" {
+        input sidechain sine 100Hz 1024 samples
+        input sine 440Hz 1024 samples
+        assert output.rms > 0.0
+    }
+}
+"#;
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // Verify test code contains aux_input_data construction
+    assert!(
+        lib_rs.contains("aux_input_data"),
+        "Generated test code should contain aux_input_data variable.\nGenerated test section:\n{}",
+        &lib_rs[lib_rs.find("#[cfg(test)]").unwrap_or(0)..]
+    );
+
+    // Verify run_process is called with aux_input_data
+    assert!(
+        lib_rs.contains("&mut aux_input_data"),
+        "Generated test code should pass &mut aux_input_data to run_process.\nGenerated test section:\n{}",
+        &lib_rs[lib_rs.find("#[cfg(test)]").unwrap_or(0)..]
+    );
+
+    // Verify AuxiliaryBuffers is constructed in run_process
+    assert!(
+        lib_rs.contains("AuxiliaryBuffers"),
+        "Generated test code should contain AuxiliaryBuffers.\nGenerated test section:\n{}",
+        &lib_rs[lib_rs.find("#[cfg(test)]").unwrap_or(0)..]
+    );
+
+    // Verify aux_input_ports is set in AudioIOLayout
+    assert!(
+        lib_rs.contains("aux_input_ports"),
+        "Generated test code should set aux_input_ports in AudioIOLayout.\nGenerated test section:\n{}",
+        &lib_rs[lib_rs.find("#[cfg(test)]").unwrap_or(0)..]
+    );
+}

@@ -11,8 +11,8 @@
 //! that the `muse test` CLI can parse into structured results.
 
 use crate::ast::{
-    Expr, ParamOption, ParamType, PluginDef, PluginItem, TestBlock, TestOp, TestProperty,
-    TestSignal, TestStatement,
+    ChannelSpec, Expr, IoDirection, ParamOption, ParamType, PluginDef, PluginItem,
+    TestBlock, TestOp, TestProperty, TestSignal, TestStatement,
 };
 use crate::codegen::process::ProcessInfo;
 
@@ -68,12 +68,36 @@ pub fn generate_test_module(plugin: &PluginDef, process_info: &ProcessInfo) -> S
     // Generate the mock ProcessContext (parameterized by struct name)
     out.push_str(&generate_mock_process_context(&struct_name));
 
+    // Collect aux input bus info from IoDecl items (same 3-way classification as extract_plugin_info)
+    let aux_inputs: Vec<(String, u32)> = plugin
+        .items
+        .iter()
+        .filter_map(|(item, _)| {
+            if let PluginItem::IoDecl(io) = item {
+                let effective_name = io.name.as_deref().unwrap_or("main");
+                if effective_name != "main" && io.direction == IoDirection::Input {
+                    let ch = match io.channels {
+                        ChannelSpec::Mono => 1,
+                        ChannelSpec::Stereo => 2,
+                        ChannelSpec::Count(n) => n,
+                    };
+                    Some((effective_name.to_string(), ch))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+    let has_aux_inputs = !aux_inputs.is_empty();
+
     // Generate helper functions (parameterized by struct name)
-    out.push_str(&generate_helpers(&struct_name, needs_fft));
+    out.push_str(&generate_helpers(&struct_name, needs_fft, has_aux_inputs));
 
     // Generate each test function
     for tb in &test_blocks {
-        out.push_str(&generate_test_fn(tb, &struct_name, is_instrument, &db_params, &param_defaults));
+        out.push_str(&generate_test_fn(tb, &struct_name, is_instrument, &db_params, &param_defaults, &aux_inputs));
     }
 
     out.push_str("}\n");
@@ -125,7 +149,7 @@ fn generate_mock_process_context(struct_name: &str) -> String {
 }
 
 /// Generate helper functions for buffer creation and measurement.
-fn generate_helpers(struct_name: &str, needs_fft: bool) -> String {
+fn generate_helpers(struct_name: &str, needs_fft: bool, _has_aux_inputs: bool) -> String {
     let mut out = format!(
         r#"    const TEST_SAMPLE_RATE: f32 = 44100.0;
     const TEST_CHANNELS: usize = 2;
@@ -172,6 +196,7 @@ fn generate_helpers(struct_name: &str, needs_fft: bool) -> String {
     fn run_process(
         plugin: &mut {s},
         channel_data: &mut Vec<Vec<f32>>,
+        aux_input_data: &mut Vec<Vec<Vec<f32>>>,
         ctx: &mut TestProcessContext,
     ) -> Vec<Vec<f32>> {{
         let num_samples = channel_data[0].len();
@@ -187,8 +212,27 @@ fn generate_helpers(struct_name: &str, needs_fft: bool) -> String {
                 }}
             }});
         }}
+        // Construct aux input buffers from aux_input_data[aux_idx][channel][sample]
+        let mut aux_bufs: Vec<Buffer> = Vec::new();
+        for aux_channels in aux_input_data.iter_mut() {{
+            let mut aux_buf = Buffer::default();
+            if !aux_channels.is_empty() {{
+                let aux_samples = aux_channels[0].len();
+                unsafe {{
+                    aux_buf.set_slices(aux_samples, |slices| {{
+                        slices.clear();
+                        for ch in aux_channels.iter_mut() {{
+                            let slice: &mut [f32] = &mut ch[..];
+                            let slice: &'static mut [f32] = std::mem::transmute(slice);
+                            slices.push(slice);
+                        }}
+                    }});
+                }}
+            }}
+            aux_bufs.push(aux_buf);
+        }}
         let mut aux = AuxiliaryBuffers {{
-            inputs: &mut [],
+            inputs: &mut aux_bufs,
             outputs: &mut [],
         }};
         plugin.process(&mut buffer, &mut aux, ctx);
@@ -233,7 +277,7 @@ fn generate_helpers(struct_name: &str, needs_fft: bool) -> String {
 }
 
 /// Generate one `#[test]` function from a TestBlock.
-fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_params: &[String], param_defaults: &[ParamInfo]) -> String {
+fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_params: &[String], param_defaults: &[ParamInfo], aux_inputs: &[(String, u32)]) -> String {
     let fn_name = sanitize_test_name(&tb.name);
     let test_name = &tb.name;
 
@@ -250,6 +294,17 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
     out.push_str("        let layout = AudioIOLayout {\n");
     out.push_str("            main_input_channels: NonZeroU32::new(TEST_CHANNELS as u32),\n");
     out.push_str("            main_output_channels: NonZeroU32::new(TEST_CHANNELS as u32),\n");
+    if !aux_inputs.is_empty() {
+        // Emit explicit aux_input_ports for plugins with aux buses
+        let aux_ports: Vec<String> = aux_inputs
+            .iter()
+            .map(|(_, ch)| format!("new_nonzero_u32({})", ch))
+            .collect();
+        out.push_str(&format!(
+            "            aux_input_ports: &[{}],\n",
+            aux_ports.join(", ")
+        ));
+    }
     out.push_str("            ..AudioIOLayout::const_default()\n");
     out.push_str("        };\n");
     out.push_str("        let buffer_config = BufferConfig {\n");
@@ -295,35 +350,51 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
     let input_var = "channel_data".to_string();
     let mut sample_count: u64 = 512;
 
+    // Partition test inputs into main bus vs aux buses
+    let mut has_main_input = false;
+    let mut aux_test_inputs: Vec<(&str, &TestSignal, u64)> = Vec::new(); // (bus_name, signal, count)
+
     // Process test statements
     for (stmt, _span) in &tb.statements {
         match stmt {
             TestStatement::Input(input) => {
-                sample_count = input.sample_count;
-                let buf_expr = match &input.signal {
-                    TestSignal::Silence => {
-                        format!("make_silence({})", input.sample_count)
-                    }
-                    TestSignal::Sine { frequency } => {
-                        format!("make_sine({:.1}, {})", frequency, input.sample_count)
-                    }
-                    TestSignal::Impulse => {
-                        format!("make_impulse({})", input.sample_count)
-                    }
-                };
-                out.push_str(&format!(
-                    "        let mut {} = {};\n",
-                    input_var, buf_expr
-                ));
-                // Compute input properties before processing (for input.rms/input.peak assertions)
-                out.push_str(&format!(
-                    "        let input_rms = compute_rms(&{}[0]);\n",
-                    input_var
-                ));
-                out.push_str(&format!(
-                    "        let input_peak = compute_peak(&{}[0]);\n",
-                    input_var
-                ));
+                let is_main = input.bus_name.is_none()
+                    || input.bus_name.as_deref() == Some("main");
+                if is_main {
+                    has_main_input = true;
+                    sample_count = input.sample_count;
+                    let buf_expr = match &input.signal {
+                        TestSignal::Silence => {
+                            format!("make_silence({})", input.sample_count)
+                        }
+                        TestSignal::Sine { frequency } => {
+                            format!("make_sine({:.1}, {})", frequency, input.sample_count)
+                        }
+                        TestSignal::Impulse => {
+                            format!("make_impulse({})", input.sample_count)
+                        }
+                    };
+                    out.push_str(&format!(
+                        "        let mut {} = {};\n",
+                        input_var, buf_expr
+                    ));
+                    // Compute input properties before processing (for input.rms/input.peak assertions)
+                    out.push_str(&format!(
+                        "        let input_rms = compute_rms(&{}[0]);\n",
+                        input_var
+                    ));
+                    out.push_str(&format!(
+                        "        let input_peak = compute_peak(&{}[0]);\n",
+                        input_var
+                    ));
+                } else {
+                    // Collect aux input for later construction
+                    aux_test_inputs.push((
+                        input.bus_name.as_deref().unwrap(),
+                        &input.signal,
+                        input.sample_count,
+                    ));
+                }
             }
             TestStatement::Set(set) => {
                 // Use smoother.reset() to set param value immediately.
@@ -358,12 +429,8 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
         }
     }
 
-    // If no input statement was found, default to silence 512 samples
-    let has_input = tb
-        .statements
-        .iter()
-        .any(|(s, _)| matches!(s, TestStatement::Input(_)));
-    if !has_input {
+    // If no main input statement was found, default to silence 512 samples
+    if !has_main_input {
         out.push_str(&format!(
             "        let mut {} = make_silence({});\n",
             input_var, sample_count
@@ -376,6 +443,33 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
             "        let input_peak = compute_peak(&{}[0]);\n",
             input_var
         ));
+    }
+
+    // Construct aux input data: Vec<Vec<Vec<f32>>> indexed by aux bus order
+    // Each plugin aux bus maps to an index (order of declaration, excluding main)
+    if !aux_inputs.is_empty() && !aux_test_inputs.is_empty() {
+        // Build aux data — one entry per declared aux bus, defaulting to silence
+        out.push_str(&format!(
+            "        let mut aux_input_data: Vec<Vec<Vec<f32>>> = vec![make_silence({}); {}];\n",
+            sample_count,
+            aux_inputs.len()
+        ));
+        // Map each test input to the correct aux index
+        for (bus_name, signal, count) in &aux_test_inputs {
+            if let Some(idx) = aux_inputs.iter().position(|(name, _)| name == bus_name) {
+                let buf_expr = match signal {
+                    TestSignal::Silence => format!("make_silence({})", count),
+                    TestSignal::Sine { frequency } => format!("make_sine({:.1}, {})", frequency, count),
+                    TestSignal::Impulse => format!("make_impulse({})", count),
+                };
+                out.push_str(&format!(
+                    "        aux_input_data[{}] = {};\n",
+                    idx, buf_expr
+                ));
+            }
+        }
+    } else {
+        out.push_str("        let mut aux_input_data: Vec<Vec<Vec<f32>>> = vec![];\n");
     }
 
     // Create the test process context and push MIDI events
@@ -400,7 +494,7 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
 
     // Run process
     out.push_str(&format!(
-        "        let output = run_process(&mut plugin, &mut {}, &mut ctx);\n\n",
+        "        let output = run_process(&mut plugin, &mut {}, &mut aux_input_data, &mut ctx);\n\n",
         input_var
     ));
 

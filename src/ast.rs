@@ -358,9 +358,10 @@ pub enum SafetyCheck {
     NoInf,
 }
 
-/// `input <signal> <count> samples`
+/// `input [bus_name] <signal> <count> samples`
 #[derive(Debug, Clone, PartialEq)]
 pub struct TestInput {
+    pub bus_name: Option<String>,
     pub signal: TestSignal,
     pub sample_count: u64,
 }
