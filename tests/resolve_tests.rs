@@ -1656,3 +1656,163 @@ plugin "Test" {
 "##;
     resolve_expect_ok(source);
 }
+
+// ── Named bus resolution ─────────────────────────────────────
+
+#[test]
+fn resolve_named_bus_as_identifier() {
+    // A named input bus 'sidechain' should resolve as Signal in the process block
+    let source = r#"
+plugin "Test" {
+    input main stereo
+    input sidechain stereo
+    output stereo
+    process {
+        let sc = sidechain
+        input -> gain(0.5) -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    // sidechain should have resolved — type map should be non-empty
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn resolve_duplicate_bus_name_error() {
+    // Two inputs both named 'sidechain' should produce E016
+    let source = r#"
+plugin "Test" {
+    input sidechain stereo
+    input sidechain mono
+    output stereo
+    process {
+        input -> output
+    }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e016 = find_error(&diags, "E016");
+    assert!(
+        e016.message.contains("duplicate bus name 'sidechain'"),
+        "Expected duplicate bus name error, got: {}",
+        e016.message
+    );
+}
+
+#[test]
+fn resolve_reserved_bus_name_error() {
+    // 'input', 'output', 'param', 'note' are keyword tokens and can't appear
+    // as bus names at the parser level (only Token::Ident is accepted).
+    // This test verifies that the parser rejects `input input stereo`.
+    let source = r#"
+plugin "Test" {
+    input input stereo
+    output stereo
+    process {
+        input -> output
+    }
+}
+"#;
+    // Should fail at parse time, not resolve time
+    let (ast, parse_diags) = muse_lang::parser::parse_to_diagnostics(source);
+    assert!(
+        !parse_diags.is_empty() || ast.is_none(),
+        "Parser should reject 'input' as a bus name (it's a keyword token, not an identifier)"
+    );
+}
+
+#[test]
+fn resolve_reserved_bus_name_output_error() {
+    // 'output' as an explicit bus name should be rejected at parse level
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output output stereo
+    process {
+        input -> output
+    }
+}
+"#;
+    let (ast, parse_diags) = muse_lang::parser::parse_to_diagnostics(source);
+    assert!(
+        !parse_diags.is_empty() || ast.is_none(),
+        "Parser should reject 'output' as a bus name (it's a keyword token, not an identifier)"
+    );
+}
+
+#[test]
+fn resolve_reserved_bus_name_param_error() {
+    // 'param' as an explicit bus name should be rejected at parse level
+    let source = r#"
+plugin "Test" {
+    input param stereo
+    output stereo
+    process {
+        input -> output
+    }
+}
+"#;
+    let (ast, parse_diags) = muse_lang::parser::parse_to_diagnostics(source);
+    assert!(
+        !parse_diags.is_empty() || ast.is_none(),
+        "Parser should reject 'param' as a bus name (it's a keyword token, not an identifier)"
+    );
+}
+
+#[test]
+fn resolve_unnamed_bus_backward_compat() {
+    // Unnamed I/O declarations should still work (backward compatibility)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    process {
+        input -> gain(0.5) -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn resolve_unnamed_and_named_buses_coexist() {
+    // Unnamed (default 'main') + named buses should coexist
+    let source = r#"
+plugin "Test" {
+    input stereo
+    input sidechain stereo
+    output stereo
+    output fx_send mono
+    process {
+        let sc = sidechain
+        input -> gain(0.5) -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn resolve_duplicate_unnamed_buses_error() {
+    // Two unnamed inputs both default to 'main' — should produce E016
+    let source = r#"
+plugin "Test" {
+    input stereo
+    input mono
+    output stereo
+    process {
+        input -> output
+    }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e016 = find_error(&diags, "E016");
+    assert!(
+        e016.message.contains("duplicate bus name 'main'"),
+        "Expected duplicate default 'main' bus name error, got: {}",
+        e016.message
+    );
+}

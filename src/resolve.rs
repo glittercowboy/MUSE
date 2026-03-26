@@ -15,6 +15,9 @@
 //!
 //! GUI validation:
 //! - E014: invalid gui block values (bad theme, bad accent color, duplicate block)
+//!
+//! Bus name validation:
+//! - E016: duplicate bus name
 
 use std::collections::{HashMap, HashSet};
 
@@ -94,6 +97,11 @@ struct Resolver<'a> {
     wavetables: HashMap<String, String>,
     /// Duplicate wavetable detection
     seen_wavetables: HashSet<String>,
+    /// Bus names (effective name → direction) for identifier resolution in process blocks.
+    /// Named buses resolve as DspType::Signal (e.g. `sidechain` in `sidechain -> gain(0.5)`).
+    bus_names: HashMap<String, IoDirection>,
+    /// Duplicate bus name detection scoped by direction: (direction, effective_name)
+    seen_bus_names: HashSet<(IoDirection, String)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -114,6 +122,8 @@ impl<'a> Resolver<'a> {
             seen_samples: HashSet::new(),
             wavetables: HashMap::new(),
             seen_wavetables: HashSet::new(),
+            bus_names: HashMap::new(),
+            seen_bus_names: HashSet::new(),
         }
     }
 
@@ -167,6 +177,43 @@ impl<'a> Resolver<'a> {
                     } else {
                         self.seen_wavetables.insert(decl.name.clone());
                         self.wavetables.insert(decl.name.clone(), decl.path.clone());
+                    }
+                }
+                PluginItem::IoDecl(io_decl) => {
+                    let reserved = ["input", "output", "param", "note"];
+                    let effective_name = io_decl.name.clone().unwrap_or_else(|| "main".to_string());
+
+                    // Reject reserved words as explicit bus names
+                    if io_decl.name.is_some() && reserved.contains(&effective_name.as_str()) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E016",
+                                io_decl.span,
+                                format!(
+                                    "'{}' is a reserved word and cannot be used as a bus name",
+                                    effective_name
+                                ),
+                            )
+                            .with_suggestion("Choose a different name for this bus (e.g. 'sidechain', 'fx_send')."),
+                        );
+                    } else {
+                        let key = (io_decl.direction.clone(), effective_name.clone());
+                        if !self.seen_bus_names.insert(key) {
+                            // E016: duplicate bus name within the same direction
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E016",
+                                    io_decl.span,
+                                    format!("duplicate bus name '{}'", effective_name),
+                                )
+                                .with_suggestion("Each bus must have a unique name within its direction (input/output)."),
+                            );
+                        } else {
+                            // Register for identifier resolution (only non-main named buses)
+                            if io_decl.name.is_some() && effective_name != "main" {
+                                self.bus_names.insert(effective_name, io_decl.direction.clone());
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -775,6 +822,10 @@ impl<'a> Resolver<'a> {
             "input" => Some(DspType::Signal),
             "output" => Some(DspType::Signal),
             _ => {
+                // Check named bus declarations (e.g. `sidechain` from `input sidechain stereo`)
+                if self.bus_names.contains_key(name) {
+                    return Some(DspType::Signal);
+                }
                 // Check let-binding scope
                 self.scope.get(name).copied()
             }

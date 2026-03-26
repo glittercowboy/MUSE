@@ -107,7 +107,7 @@ pub struct IoDecl {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IoDirection {
     Input,
     Output,
