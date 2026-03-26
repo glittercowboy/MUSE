@@ -33,7 +33,7 @@ Signal chains use `->` to pipe audio left-to-right:
 input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 ```
 
-24 built-in DSP functions + 3 audio primitives: `play`, `loop`, `wavetable_osc`. DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`, `semitones_to_ratio`. Audio primitives operate on declared samples/wavetables (not in the DSP registry).
+37 built-in DSP functions + 3 audio primitives: `play`, `loop`, `wavetable_osc`. DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `peak_eq`, `low_shelf`, `high_shelf`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mod_delay`, `allpass`, `comb`, `mix`, `crossfade`, `clip`, `tanh`, `fold`, `bitcrush`, `soft_clip`, `chorus`, `compressor`, `rms`, `peak_follow`, `gate`, `dc_block`, `sample_and_hold`, `semitones_to_ratio`. Audio primitives operate on declared samples/wavetables (not in the DSP registry).
 
 ## Key Constraints
 

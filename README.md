@@ -171,14 +171,17 @@ cp -R "./build/Warm Gain.clap" ~/Library/Audio/Plug-Ins/CLAP/
 
 ## Built-in DSP
 
-24 primitives — oscillators, filters, envelopes, dynamics, modulation, and utilities:
+37 primitives — oscillators, filters, EQ, envelopes, dynamics, delay, modulation, and utilities:
 
 ```
 sine  saw  square  triangle  noise  pulse  lfo
 lowpass  highpass  bandpass  notch
+peak_eq  low_shelf  high_shelf
 adsr  ar
-gain  pan  delay  mix  clip  tanh  fold  bitcrush
-chorus  compressor  semitones_to_ratio
+gain  pan  delay  mod_delay  allpass  comb
+mix  crossfade  clip  tanh  fold  bitcrush  soft_clip
+chorus  compressor  rms  peak_follow  gate
+dc_block  sample_and_hold  semitones_to_ratio
 ```
 
 Numbers carry domain types. The compiler won't let you pass milliseconds where Hertz belong:
@@ -190,7 +193,7 @@ lowpass(500Hz)  // correct
 
 ## Examples
 
-Eighteen working plugins in [`examples/`](examples/):
+Twenty-six working plugins in [`examples/`](examples/):
 
 | Plugin | What it does |
 |--------|-------------|
@@ -212,6 +215,14 @@ Eighteen working plugins in [`examples/`](examples/):
 | [gui_spectrum.muse](examples/gui_spectrum.muse) | Spectrum analyzer + XY pad |
 | [gui_styled.muse](examples/gui_styled.muse) | Tier 3 CSS escape hatch demo |
 | [gui_compressor.muse](examples/gui_compressor.muse) | Compressor with custom GUI |
+| [echo.muse](examples/echo.muse) | Stereo delay effect |
+| [phaser.muse](examples/phaser.muse) | Allpass-based phaser |
+| [parametric_eq.muse](examples/parametric_eq.muse) | 4-band parametric EQ |
+| [gate.muse](examples/gate.muse) | Noise gate |
+| [sidechain_compressor.muse](examples/sidechain_compressor.muse) | Sidechain ducker with named buses |
+| [drum_machine.muse](examples/drum_machine.muse) | Sample-based drum machine |
+| [wavetable_synth.muse](examples/wavetable_synth.muse) | Wavetable synthesizer |
+| [looping_sampler.muse](examples/looping_sampler.muse) | Looping sample playback |
 
 Every example compiles to a real plugin binary. Every example has test blocks that pass.
 
@@ -231,7 +242,7 @@ Every example compiles to a real plugin binary. Every example has test blocks th
 
 The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-390 tests. Zero clippy warnings.
+461 tests. Zero clippy warnings.
 
 ## AI Skill File
 
@@ -239,7 +250,7 @@ Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write p
 
 ## What's Next
 
-Cross-platform builds (Windows/Linux), expanded DSP primitives (delay lines, EQ shelves, reverb), package system, sample loading.
+Cross-platform builds (Windows/Linux), reverb primitives, oversampling, package system/imports.
 
 ## Requirements
 

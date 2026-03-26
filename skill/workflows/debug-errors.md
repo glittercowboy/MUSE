@@ -62,7 +62,7 @@ Based on the error code, apply the corresponding fix:
 
 **E002 (Unterminated Construct):** Count braces. Every `{` needs a `}`. Every `(` needs a `)`. Every `[` needs a `]`. Check the block around the reported span.
 
-**E003 (Unknown Function):** Check the function name against the 24 registered DSP primitives: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`, `semitones_to_ratio`. If the compiler gives a "Did you mean?" suggestion, use it.
+**E003 (Unknown Function):** Check the function name against the 37 registered DSP primitives: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `peak_eq`, `low_shelf`, `high_shelf`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mod_delay`, `allpass`, `comb`, `mix`, `crossfade`, `clip`, `tanh`, `fold`, `bitcrush`, `soft_clip`, `chorus`, `compressor`, `rms`, `peak_follow`, `gate`, `dc_block`, `sample_and_hold`, `semitones_to_ratio`. Plus 3 audio primitives: `play`, `loop`, `wavetable_osc`. If the compiler gives a "Did you mean?" suggestion, use it.
 
 **E004 (Wrong Argument Count):** Check the function signature in ../references/dsp-primitives.md. Remember: `noise()` and `tanh()` take 0 args. `adsr` takes exactly 4. Filter resonance is optional (1 or 2 args).
 
