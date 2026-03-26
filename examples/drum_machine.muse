@@ -1,0 +1,67 @@
+// Drum Machine — a sample-based drum machine with kick, snare, and hihat.
+// Demonstrates sample declarations, play() calls with note.number dispatch,
+// and polyphonic voice allocation for layered hits.
+
+plugin "Drum Machine" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.drum-machine"
+    description "A sample-based drum machine"
+    features    [instrument, stereo]
+  }
+
+  vst3 {
+    id              "MuseDrumMach01"
+    subcategories   [Instrument]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  sample kick "samples/kick.wav"
+  sample snare "samples/snare.wav"
+  sample hihat "samples/hihat.wav"
+
+  midi {
+    note {
+      let num = note.number
+    }
+  }
+
+  process {
+    let snd = if note.number == 36.0 {
+      play(kick)
+    } else if note.number == 38.0 {
+      play(snare)
+    } else if note.number == 42.0 {
+      play(hihat)
+    } else {
+      0.0
+    }
+    snd -> gain(note.velocity) -> output
+  }
+
+  test "silence before any notes" {
+    input silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "kick on note 36" {
+    note on 36 0.8 at 0
+    note off 36 at 4096
+    input silence 8192 samples
+    assert output.rms > -40dB
+    assert no_nan
+  }
+
+  test "snare on note 38" {
+    note on 38 0.8 at 0
+    note off 38 at 4096
+    input silence 8192 samples
+    assert output.rms > -40dB
+  }
+}

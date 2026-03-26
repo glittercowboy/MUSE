@@ -1,0 +1,14 @@
+[package]
+name = "drum-machine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149ec4d" }
+hound = "3.5"
+
+[features]
+preview = []

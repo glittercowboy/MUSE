@@ -76,7 +76,7 @@ pub fn generate_plugin(
     let plugin_code = plugin::generate_plugin_struct(plugin, &process_info, &sample_infos);
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
-    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref(), &sample_infos);
+    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref(), &sample_infos, process_info.has_adsr);
 
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
@@ -293,6 +293,7 @@ fn assemble_lib_rs(
     include_poly_helpers: bool,
     unison_config: Option<&CodegenUnisonConfig>,
     sample_infos: &[SampleInfo],
+    has_adsr: bool,
 ) -> String {
     let mut out = String::new();
 
@@ -336,9 +337,15 @@ fn assemble_lib_rs(
         out.push_str(
             "fn voice_is_silent(voice: &Voice) -> bool {\n    if let Some(level) = voice_adsr_level(voice) {\n        level <= 0.0001\n    } else {\n        false\n    }\n}\n\n",
         );
-        out.push_str(
-            "fn voice_adsr_level(voice: &Voice) -> Option<f32> {\n    Some(voice.adsr_state.level)\n}\n\n",
-        );
+        if has_adsr {
+            out.push_str(
+                "fn voice_adsr_level(voice: &Voice) -> Option<f32> {\n    Some(voice.adsr_state.level)\n}\n\n",
+            );
+        } else {
+            out.push_str(
+                "fn voice_adsr_level(_voice: &Voice) -> Option<f32> {\n    None\n}\n\n",
+            );
+        }
     }
 
     out.push_str(plugin_code);
