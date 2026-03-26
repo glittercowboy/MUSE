@@ -1,6 +1,6 @@
 # Plugin Recipes
 
-14 annotated examples from the Muse codebase, showing common plugin patterns.
+18 annotated examples from the Muse codebase, showing common plugin patterns.
 
 ---
 
@@ -999,6 +999,333 @@ plugin "Spectrum Demo" {
 
 ---
 
+## Recipe 15: Echo/Delay Effect
+
+A clean delay effect — demonstrates `delay()` with dry/wet mixing via `mix()`.
+
+**Pattern:** `let delayed = input -> delay(time) -> gain(mix)` → `mix(input, delayed) -> output`
+
+**Source:** `examples/echo.muse`
+
+```muse
+plugin "Simple Echo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.simple-echo"
+    description "A clean delay effect"
+    features    [audio_effect, stereo, delay]
+  }
+
+  vst3 {
+    id              "MuseSimplEcho1"
+    subcategories   [Fx, Delay]
+  }
+
+  input  stereo
+  output stereo
+
+  param time: float = 0.25 in 0.01..2.0 {
+    unit "s"
+  }
+
+  param mix_amt: float = 0.5 in 0.0..1.0
+
+  process {
+    let delayed = input -> delay(param.time) -> gain(param.mix_amt)
+    mix(input, delayed) -> output
+  }
+
+  test "impulse produces output with delay content" {
+    input  impulse 2048 samples
+    set    param.time = 0.01
+    set    param.mix_amt = 0.5
+    assert output.peak > 0.0
+    assert output.rms > -60dB
+  }
+
+  test "sine through delay preserves signal" {
+    input  sine 440Hz 4096 samples
+    set    param.time = 0.01
+    set    param.mix_amt = 0.5
+    assert output.rms > -10dB
+  }
+
+  test "silence in produces silence out" {
+    input  silence 1024 samples
+    set    param.time = 0.25
+    set    param.mix_amt = 0.5
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `delay(time)` creates a delay line — time in seconds (use `s` suffix or bare float)
+- `mix(input, delayed)` blends dry and wet signals (simple average)
+- The `let` binding captures the delayed signal for blending
+- Use `impulse` test input to verify delay produces output at the expected time
+- For feedback delay (echo trail), use a `feedback { }` block instead of simple delay
+
+---
+
+## Recipe 16: Parametric EQ
+
+A 4-band parametric equalizer — demonstrates `low_shelf`, `peak_eq`, and `high_shelf` chained together.
+
+**Pattern:** `input -> low_shelf(...) -> peak_eq(...) -> peak_eq(...) -> high_shelf(...) -> output`
+
+**Source:** `examples/parametric_eq.muse`
+
+```muse
+plugin "Parametric EQ" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.parametric-eq"
+    description "A 4-band parametric equalizer"
+    features    [audio_effect, stereo, equalizer]
+  }
+
+  vst3 {
+    id              "MuseParamEQ001"
+    subcategories   [Fx, EQ]
+  }
+
+  input  stereo
+  output stereo
+
+  param low_freq: float = 200.0 in 20.0..500.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param low_gain: float = 3.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  param mid1_freq: float = 1000.0 in 200.0..5000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param mid1_gain: float = -2.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  param mid1_q: float = 1.4 in 0.1..10.0
+
+  param mid2_freq: float = 4000.0 in 1000.0..15000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param mid2_gain: float = 2.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  param mid2_q: float = 2.0 in 0.1..10.0
+
+  param high_freq: float = 8000.0 in 2000.0..20000.0 {
+    smoothing logarithmic 20ms
+    unit "Hz"
+  }
+
+  param high_gain: float = -1.0 in -12.0..12.0 {
+    unit "dB"
+  }
+
+  process {
+    input
+      -> low_shelf(param.low_freq, param.low_gain)
+      -> peak_eq(param.mid1_freq, param.mid1_gain, param.mid1_q)
+      -> peak_eq(param.mid2_freq, param.mid2_gain, param.mid2_q)
+      -> high_shelf(param.high_freq, param.high_gain)
+      -> output
+  }
+
+  test "passes signal through EQ chain" {
+    input  sine 1000Hz 4096 samples
+    set    param.low_freq = 200.0
+    set    param.low_gain = 0.0
+    set    param.mid1_freq = 1000.0
+    set    param.mid1_gain = 0.0
+    set    param.mid1_q = 1.4
+    set    param.mid2_freq = 4000.0
+    set    param.mid2_gain = 0.0
+    set    param.mid2_q = 2.0
+    set    param.high_freq = 8000.0
+    set    param.high_gain = 0.0
+    assert output.rms > -6dB
+  }
+
+  test "silence in produces silence out" {
+    input  silence 1024 samples
+    set    param.low_gain = 3.0
+    set    param.mid1_gain = -2.0
+    set    param.mid2_gain = 2.0
+    set    param.high_gain = -1.0
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- Chain multiple EQ bands in series: `low_shelf -> peak_eq -> peak_eq -> high_shelf`
+- Each band has independent biquad state — order doesn't affect correctness (but may affect numerical precision)
+- `gain_db` is in dB: positive boosts, negative cuts, 0 = transparent
+- `q` parameter on `peak_eq` controls bandwidth: 0.1 = wide, 10.0 = narrow surgical cut
+- Test with 0dB gain on all bands to verify signal passes through transparently
+
+---
+
+## Recipe 17: Noise Gate
+
+A noise gate effect — demonstrates the `gate()` primitive for silencing signal below a threshold.
+
+**Pattern:** `input -> gate(threshold, attack, release, hold) -> output`
+
+**Source:** `examples/gate.muse`
+
+```muse
+plugin "Noise Gate" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.noise-gate"
+    description "A noise gate with adjustable threshold and timing"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseNoiseGt1"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input  stereo
+  output stereo
+
+  param threshold: float = -40.0 in -80.0..0.0 {
+    smoothing logarithmic 10ms
+    unit "dB"
+  }
+
+  param attack: float = 1.0 in 0.1..50.0 {
+    smoothing linear 5ms
+  }
+
+  param release: float = 50.0 in 5.0..500.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    input -> gate(-40dB, param.attack, param.release, 10.0) -> output
+  }
+
+  test "silence in produces silence out" {
+    input  silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "loud sine passes through gate" {
+    input  sine 440Hz 1024 samples
+    assert output.rms > -10dB
+  }
+}
+```
+
+**Key points:**
+- `gate(threshold_db, attack_ms, release_ms, hold_ms)` — all parameters optional
+- Threshold uses dB suffix: `-40dB` means signals below -40dB are silenced
+- Attack/release control how fast the gate opens/closes (in ms)
+- Hold prevents rapid on/off chattering: gate stays open for at least `hold_ms` after signal drops
+- Use `gate()` with no args for sensible defaults as a starting point
+- Gate is a dynamics processor — it maintains its own envelope follower state per call site
+
+---
+
+## Recipe 18: Phaser Effect
+
+A multi-stage allpass phaser — demonstrates chaining multiple `allpass()` stages for phase-cancellation effects.
+
+**Pattern:** `input -> allpass(...) -> allpass(...) -> allpass(...) -> allpass(...) -> output`
+
+**Source:** `examples/phaser.muse`
+
+```muse
+plugin "Phase Shift" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category effect
+
+  clap {
+    id          "dev.museaudio.phase-shift"
+    description "A multi-stage allpass phaser"
+    features    [audio_effect, stereo, phaser]
+  }
+
+  vst3 {
+    id              "MusePhaseShft1"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param depth: float = 0.7 in 0.0..0.95
+  param rate_val: float = 0.002 in 0.0001..0.01 {
+    unit "s"
+  }
+
+  process {
+    input
+      -> allpass(param.rate_val, param.depth)
+      -> allpass(param.rate_val, param.depth)
+      -> allpass(param.rate_val, param.depth)
+      -> allpass(param.rate_val, param.depth)
+      -> output
+  }
+
+  test "sine passes through allpass chain" {
+    input  sine 440Hz 1024 samples
+    set    param.depth = 0.7
+    set    param.rate_val = 0.002
+    assert output.rms > -20dB
+  }
+
+  test "silence in produces silence out" {
+    input  silence 1024 samples
+    set    param.depth = 0.7
+    set    param.rate_val = 0.002
+    assert output.rms < -120dB
+  }
+}
+```
+
+**Key points:**
+- `allpass(time, feedback)` is a Schroeder allpass filter — it passes all frequencies but shifts phase
+- Chaining 4+ stages creates the characteristic phaser sweep
+- More stages = deeper/more pronounced phasing effect (2 = subtle, 4 = classic, 8 = dramatic)
+- Each `allpass()` call site maintains its own state — chaining is safe
+- `feedback` controls resonance: 0.0 = subtle, 0.95 = intense. Keep below 1.0!
+- For an LFO-modulated phaser, modulate the `time` parameter with `lfo()` (see Recipe 5 for LFO pattern)
+
+---
+
 ## Choosing a Pattern
 
 | I want to... | Use recipe |
@@ -1017,3 +1344,7 @@ plugin "Spectrum Demo" {
 | Add thick unison detuning | Recipe 12 (Unison Synth) |
 | Add a custom GUI with auto-generated knobs | Recipe 13 (GUI Effect — Tier 1) |
 | Build a custom GUI with explicit layout and visualizations | Recipe 14 (GUI with Layout — Tier 2) |
+| Add echo/delay effects | Recipe 15 (Echo) |
+| Build a parametric equalizer | Recipe 16 (Parametric EQ) |
+| Gate noise or silence quiet signals | Recipe 17 (Noise Gate) |
+| Add phaser/phase-shifting effects | Recipe 18 (Phaser) |

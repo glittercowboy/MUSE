@@ -1,6 +1,6 @@
 # DSP Primitives
 
-All 24 built-in DSP functions available in `process` blocks. These compile to real-time-safe Rust code.
+All 37 built-in DSP functions available in `process` blocks. These compile to real-time-safe Rust code.
 
 ## Oscillators
 
@@ -66,6 +66,35 @@ input -> bandpass(1000Hz) -> output
 input -> notch(60Hz, 0.9) -> output
 ```
 
+## EQ / Shelving Filters
+
+Parametric and shelving equalizer bands. Return type: `Processor`. Each call site maintains its own biquad state.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `peak_eq(freq, gain_db, q?)` | `Frequency, Gain, Number? → Processor` | Parametric EQ band (bell curve) |
+| `low_shelf(freq, gain_db, q?)` | `Frequency, Gain, Number? → Processor` | Low shelf filter — boost/cut below freq |
+| `high_shelf(freq, gain_db, q?)` | `Frequency, Gain, Number? → Processor` | High shelf filter — boost/cut above freq |
+
+- `freq`: center/corner frequency in Hz
+- `gain_db`: boost/cut amount in dB (positive = boost, negative = cut)
+- `q`: optional Q factor (default: 0.707 if omitted). Higher = narrower band for peak_eq, steeper slope for shelves.
+
+### Usage
+
+```muse
+// 4-band parametric EQ chain
+input
+  -> low_shelf(param.low_freq, param.low_gain)
+  -> peak_eq(param.mid1_freq, param.mid1_gain, param.mid1_q)
+  -> peak_eq(param.mid2_freq, param.mid2_gain, param.mid2_q)
+  -> high_shelf(param.high_freq, param.high_gain)
+  -> output
+
+// Simple high-frequency cut
+input -> high_shelf(8000Hz, -3.0) -> output
+```
+
 ## Envelopes
 
 Generate time-varying control signals (0.0–1.0). Return type: `Envelope`.
@@ -91,6 +120,42 @@ let amp = ar(10ms, 200ms)
 
 Envelopes are driven by MIDI gate state — they respond to `note.gate` automatically.
 
+## Time-Based Effects
+
+Delay-based processors for echo, chorus, flanging, and phasing. Return type: `Processor`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `delay(time)` | `Time → Processor` | Delay line |
+| `mod_delay(time, depth, rate)` | `Time, Number, Frequency → Processor` | Modulated delay for chorus/flanger |
+| `allpass(time, feedback)` | `Time, Number → Processor` | Schroeder allpass (for phasers) |
+| `comb(time, feedback)` | `Time, Number → Processor` | Feedback comb filter |
+
+- `time`: delay length in seconds or milliseconds (use `s` or `ms` suffix)
+- `feedback`: feedback amount, typically 0.0–0.95 (>1.0 will blow up)
+- `depth`/`rate`: modulation parameters for mod_delay
+
+### Usage
+
+```muse
+// Simple echo: delay + mix dry/wet
+let delayed = input -> delay(param.time) -> gain(param.mix_amt)
+mix(input, delayed) -> output
+
+// Phaser: chained allpass stages
+input
+  -> allpass(param.rate_val, param.depth)
+  -> allpass(param.rate_val, param.depth)
+  -> allpass(param.rate_val, param.depth)
+  -> allpass(param.rate_val, param.depth)
+  -> output
+
+// Comb filter for metallic/resonant effects
+input -> comb(0.005s, 0.8) -> output
+```
+
+Each call site maintains its own delay buffer. Multiple allpass stages create deeper phasing.
+
 ## Dynamics
 
 Processors for controlling signal level and dynamics. Return type: `Processor`.
@@ -98,10 +163,14 @@ Processors for controlling signal level and dynamics. Return type: `Processor`.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `compressor(threshold, ratio)` | `Gain, Number → Processor` | Dynamics compressor with envelope follower |
+| `rms(window_ms?)` | `Time? → Processor` | Sliding-window RMS level measurement |
+| `peak_follow(attack_ms?, release_ms?)` | `Time?, Time? → Processor` | Envelope follower (peak detection) |
+| `gate(threshold_db?, attack_ms?, release_ms?, hold_ms?)` | `Gain?, Time?, Time?, Time? → Processor` | Noise gate — silences below threshold |
 
-- `threshold`: linear gain value (0.0–1.0), not dB
-- `ratio`: compression ratio (e.g., 4.0 = 4:1)
-- Fixed ~10ms attack and ~100ms release (not user-configurable in this version)
+- `compressor`: threshold is linear gain (0.0–1.0, NOT dB), ratio is compression ratio (e.g. 4.0 = 4:1). Fixed ~10ms attack and ~100ms release.
+- `rms`: optional window size in ms (default varies). Outputs RMS level of incoming signal.
+- `peak_follow`: optional attack/release times. Tracks the peak envelope of the signal.
+- `gate`: all params optional. `threshold_db` is in dB (use `dB` suffix). Silences signal below threshold with configurable timing.
 
 ### Usage
 
@@ -109,8 +178,11 @@ Processors for controlling signal level and dynamics. Return type: `Processor`.
 // Simple compression
 input -> compressor(param.threshold, param.ratio) -> output
 
-// Compressor before output gain
-input -> compressor(0.3, 4.0) -> gain(param.volume) -> output
+// Noise gate with explicit threshold
+input -> gate(-40dB, param.attack, param.release, 10.0) -> output
+
+// Gate with all defaults (useful as starting point)
+input -> gate() -> output
 ```
 
 Each call site maintains its own envelope follower state.
@@ -148,12 +220,16 @@ Nonlinear processors for adding harmonics and character. Return type: `Processor
 | `fold(amount)` | `Number → Processor` | Wavefolding distortion |
 | `bitcrush(bits)` | `Number → Processor` | Bit depth reduction |
 | `clip(min, max)` | `Number, Number → Processor` | Hard clip signal to range |
+| `soft_clip(drive)` | `Number → Processor` | Soft saturation: `x/(1+|x|)` — gentler than tanh |
 
 ### Usage
 
 ```muse
 // Soft saturation chain
 input -> gain(param.drive) -> tanh() -> output
+
+// Gentler saturation without tanh harshness
+input -> soft_clip(param.drive) -> output
 
 // Wavefolder (amount controls fold intensity, 1.0 = mild, 10.0 = aggressive)
 input -> fold(param.drive) -> output
@@ -167,15 +243,27 @@ input -> fold(param.drive) -> bitcrush(param.bits) -> gain(param.mix) -> output
 
 ## Utilities
 
-General-purpose audio processors.
+General-purpose audio processors and signal functions.
 
 | Function | Signature | Return Type | Description |
 |----------|-----------|-------------|-------------|
 | `gain(amount)` | `Gain → Processor` | Processor | Apply gain (linear multiplier or dB with suffix) |
 | `pan(position)` | `Number → Processor` | Processor | Stereo pan: -1.0 (left) to 1.0 (right) |
-| `delay(time)` | `Time → Processor` | Processor | Delay line |
 | `mix(dry, wet)` | `Signal, Signal → Signal` | Signal | Mix two signals (averages them) |
+| `crossfade(a, b, mix)` | `Signal, Signal, Number → Signal` | Signal | Equal-power crossfade between two signals |
+| `dc_block()` | `() → Processor` | Processor | Remove DC offset (first-order highpass) |
+| `sample_and_hold(trigger)` | `Number → Processor` | Processor | Capture input on rising edge of trigger |
 | `semitones_to_ratio(semitones)` | `Number → Number` | Number | Convert semitones to frequency ratio (2^(st/12)) |
+
+**Note on `crossfade`:** Unlike most processors, `crossfade` is a **standalone function** returning `Signal`, NOT a chain `Processor`. Use it like `mix()`:
+
+```muse
+let dry = input
+let wet = input -> lowpass(param.cutoff)
+crossfade(dry, wet, param.mix) -> output
+```
+
+It uses equal-power crossfade: `a * sqrt(1 - mix) + b * sqrt(mix)`. At mix=0 you hear only `a`, at mix=1 only `b`, at mix=0.5 both at equal power with no volume dip.
 
 ### Usage
 
@@ -188,10 +276,16 @@ let dry = input
 let wet = input -> lowpass(param.cutoff)
 mix(dry, wet) -> gain(param.mix) -> output
 
-// Delay in feedback loop
-input -> feedback {
-  delay(100ms) -> lowpass(2000Hz) -> gain(0.7)
-} -> output
+// Equal-power crossfade (better than mix for wet/dry blending)
+let dry = input
+let wet = input -> lowpass(param.cutoff) -> gain(2.0)
+crossfade(dry, wet, param.blend) -> output
+
+// DC blocking after distortion (removes accumulated DC offset)
+input -> fold(param.drive) -> dc_block() -> output
+
+// Sample-and-hold for glitchy/stepped effects
+input -> sample_and_hold(param.trigger) -> output
 
 // MPE pitch bend: convert semitones to frequency ratio
 let bent_freq = note.pitch * semitones_to_ratio(note.bend)
@@ -202,12 +296,14 @@ let osc = saw(bent_freq)
 
 | Category | Functions |
 |----------|-----------|
-| Oscillators | `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo` |
-| Filters | `lowpass`, `highpass`, `bandpass`, `notch` |
-| Envelopes | `adsr`, `ar` |
-| Dynamics | `compressor` |
-| Modulation | `chorus` |
-| Waveshaping | `tanh`, `fold`, `bitcrush`, `clip` |
-| Utilities | `gain`, `pan`, `delay`, `mix`, `semitones_to_ratio` |
+| Oscillators (7) | `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo` |
+| Filters (4) | `lowpass`, `highpass`, `bandpass`, `notch` |
+| EQ / Shelving (3) | `peak_eq`, `low_shelf`, `high_shelf` |
+| Envelopes (2) | `adsr`, `ar` |
+| Time-Based (4) | `delay`, `mod_delay`, `allpass`, `comb` |
+| Dynamics (4) | `compressor`, `rms`, `peak_follow`, `gate` |
+| Modulation (1) | `chorus` |
+| Waveshaping (5) | `tanh`, `fold`, `bitcrush`, `clip`, `soft_clip` |
+| Utilities (7) | `gain`, `pan`, `mix`, `crossfade`, `dc_block`, `sample_and_hold`, `semitones_to_ratio` |
 
-**Total: 24 functions**
+**Total: 37 functions**
