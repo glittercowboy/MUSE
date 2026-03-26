@@ -98,10 +98,11 @@ pub enum Vst3Item {
 
 // ── I/O ──────────────────────────────────────────────────────
 
-/// `input stereo`, `output mono`, `input 4`
+/// `input stereo`, `output mono`, `input 4`, `input sidechain stereo`
 #[derive(Debug, Clone, PartialEq)]
 pub struct IoDecl {
     pub direction: IoDirection,
+    pub name: Option<String>,
     pub channels: ChannelSpec,
     pub span: Span,
 }

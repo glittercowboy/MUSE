@@ -594,6 +594,65 @@ fn parse_io_declarations() {
     assert_eq!(ios[1].channels, ChannelSpec::Mono);
 }
 
+#[test]
+fn parse_named_io_declarations() {
+    let source = r#"plugin "Test" {
+  input main stereo
+  input sidechain stereo
+  output fx_send mono
+  process {
+    input -> output
+  }
+}"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let ios: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::IoDecl(io) = item { Some(io) } else { None }
+    }).collect();
+
+    assert_eq!(ios.len(), 3);
+
+    assert_eq!(ios[0].direction, IoDirection::Input);
+    assert_eq!(ios[0].name, Some("main".to_string()));
+    assert_eq!(ios[0].channels, ChannelSpec::Stereo);
+
+    assert_eq!(ios[1].direction, IoDirection::Input);
+    assert_eq!(ios[1].name, Some("sidechain".to_string()));
+    assert_eq!(ios[1].channels, ChannelSpec::Stereo);
+
+    assert_eq!(ios[2].direction, IoDirection::Output);
+    assert_eq!(ios[2].name, Some("fx_send".to_string()));
+    assert_eq!(ios[2].channels, ChannelSpec::Mono);
+}
+
+#[test]
+fn parse_unnamed_io_still_works() {
+    let source = r#"plugin "Test" {
+  input stereo
+  output mono
+  process {
+    input -> output
+  }
+}"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let ios: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::IoDecl(io) = item { Some(io) } else { None }
+    }).collect();
+
+    assert_eq!(ios.len(), 2);
+    assert_eq!(ios[0].direction, IoDirection::Input);
+    assert_eq!(ios[0].name, None);
+    assert_eq!(ios[0].channels, ChannelSpec::Stereo);
+    assert_eq!(ios[1].direction, IoDirection::Output);
+    assert_eq!(ios[1].name, None);
+    assert_eq!(ios[1].channels, ChannelSpec::Mono);
+}
+
 // ── Format block tests ───────────────────────────────────────
 
 #[test]

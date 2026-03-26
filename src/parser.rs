@@ -777,11 +777,13 @@ where
     ));
 
     direction
+        .then(select! { Token::Ident(s) => s }.or_not())
         .then(channel_spec)
-        .map_with(|(direction, channels), e| {
+        .map_with(|((direction, name), channels), e| {
             (
                 PluginItem::IoDecl(IoDecl {
                     direction,
+                    name,
                     channels,
                     span: e.span(),
                 }),
