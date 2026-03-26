@@ -29,7 +29,15 @@ coverage/
 tmp/
 .bg-shell/
 
-# Build artifacts
+# Build artifacts — compiled plugin bundles and generated crates
+# muse build/compile creates these in the output directory
 *.clap/
 *.vst3/
+
+# Generated Rust crates from muse compile/build
+# Use --output-dir to control where these go
 warm-gain/
+drum-machine/
+looping-sampler/
+sidechain-comp/
+wavetable-synth/
