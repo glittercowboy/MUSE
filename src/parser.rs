@@ -25,15 +25,29 @@ pub fn parse(source: &str) -> (Option<PluginDef>, Vec<Rich<'_, Token, Span>>) {
     let len = source.len();
     let lex_results = lex(source);
 
-    let token_iter = lex_results.into_iter().filter_map(|r| match r {
-        Ok((tok, span)) => Some((tok, Span::new(span.start, span.end))),
-        Err(_) => None,
-    });
+    // Partition lex results into tokens and error spans
+    let mut tokens = Vec::new();
+    let mut lex_error_spans = Vec::new();
+    for r in lex_results {
+        match r {
+            Ok((tok, span)) => tokens.push((tok, Span::new(span.start, span.end))),
+            Err(span) => lex_error_spans.push(span),
+        }
+    }
 
     let stream =
-        Stream::from_iter(token_iter).map((len..len).into(), |(t, s): (_, _)| (t, s));
+        Stream::from_iter(tokens).map((len..len).into(), |(t, s): (_, _)| (t, s));
 
-    let (ast, errs) = plugin_parser().parse(stream).into_output_errors();
+    let (ast, mut errs) = plugin_parser().parse(stream).into_output_errors();
+
+    // Include lexer errors (invalid characters, unterminated comments) in diagnostics
+    for span in lex_error_spans {
+        errs.push(Rich::custom(
+            Span::new(span.start, span.end),
+            "unexpected character",
+        ));
+    }
+
     (ast, errs)
 }
 
@@ -175,6 +189,9 @@ fn number_with_unit<'src, I>() -> impl Parser<'src, I, Spanned<Expr>, ParserExtr
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
+    // Note: Token::Percent is NOT included here because it conflicts with the
+    // modulo operator `%`. Instead, `%` as a unit suffix is handled as a postfix
+    // operator in the expression parser (see postfix section).
     let unit_suffix = select! {
         Token::UnitHz => UnitSuffix::Hz,
         Token::UnitKHz => UnitSuffix::KHz,
@@ -182,7 +199,6 @@ where
         Token::UnitS => UnitSuffix::S,
         Token::UnitDB => UnitSuffix::DB,
         Token::UnitSt => UnitSuffix::St,
-        Token::Percent => UnitSuffix::Percent,
     };
 
     select! { Token::Number(n) => n }
