@@ -18,6 +18,10 @@ struct PluginInfo {
     input_channels: u32,
     output_channels: u32,
     struct_name: String,
+    /// Auxiliary input buses: (name, channel_count)
+    aux_inputs: Vec<(String, u32)>,
+    /// Auxiliary output buses: (name, channel_count)
+    aux_outputs: Vec<(String, u32)>,
 }
 
 struct ClapInfo {
@@ -433,6 +437,8 @@ fn extract_plugin_info(plugin: &PluginDef) -> PluginInfo {
     let mut version = "0.1.0".to_string();
     let mut input_channels = 2u32;
     let mut output_channels = 2u32;
+    let mut aux_inputs: Vec<(String, u32)> = Vec::new();
+    let mut aux_outputs: Vec<(String, u32)> = Vec::new();
 
     for (item, _) in &plugin.items {
         match item {
@@ -449,10 +455,23 @@ fn extract_plugin_info(plugin: &PluginDef) -> PluginInfo {
                     MetadataKey::Category => {}
                 }
             }
-            PluginItem::IoDecl(io) => match io.direction {
-                IoDirection::Input => input_channels = channel_count(&io.channels),
-                IoDirection::Output => output_channels = channel_count(&io.channels),
-            },
+            PluginItem::IoDecl(io) => {
+                let ch = channel_count(&io.channels);
+                let effective_name = io.name.as_deref().unwrap_or("main");
+                if effective_name == "main" {
+                    // Main bus — assign to main channel counts (last one wins, matching existing behavior)
+                    match io.direction {
+                        IoDirection::Input => input_channels = ch,
+                        IoDirection::Output => output_channels = ch,
+                    }
+                } else {
+                    // Auxiliary bus
+                    match io.direction {
+                        IoDirection::Input => aux_inputs.push((effective_name.to_string(), ch)),
+                        IoDirection::Output => aux_outputs.push((effective_name.to_string(), ch)),
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -466,6 +485,8 @@ fn extract_plugin_info(plugin: &PluginDef) -> PluginInfo {
         input_channels,
         output_channels,
         struct_name,
+        aux_inputs,
+        aux_outputs,
     }
 }
 
@@ -607,6 +628,58 @@ fn generate_plugin_trait(
 
     let context_param = if is_instrument { "context" } else { "_context" };
 
+    // Build AUDIO_IO_LAYOUTS block — include aux ports when declared
+    let mut layout_fields = String::new();
+    layout_fields.push_str(&main_input);
+    layout_fields.push('\n');
+    layout_fields.push_str(&format!("            main_output_channels: NonZeroU32::new({out_ch}),\n"));
+
+    if !info.aux_inputs.is_empty() {
+        layout_fields.push_str("            aux_input_ports: &[");
+        for (i, (_name, ch)) in info.aux_inputs.iter().enumerate() {
+            if i > 0 { layout_fields.push_str(", "); }
+            layout_fields.push_str(&format!("new_nonzero_u32({ch})"));
+        }
+        layout_fields.push_str("],\n");
+    }
+
+    if !info.aux_outputs.is_empty() {
+        layout_fields.push_str("            aux_output_ports: &[");
+        for (i, (_name, ch)) in info.aux_outputs.iter().enumerate() {
+            if i > 0 { layout_fields.push_str(", "); }
+            layout_fields.push_str(&format!("new_nonzero_u32({ch})"));
+        }
+        layout_fields.push_str("],\n");
+    }
+
+    // If there are any named aux ports, emit PortNames to carry human-readable names
+    if !info.aux_inputs.is_empty() || !info.aux_outputs.is_empty() {
+        layout_fields.push_str("            names: PortNames {\n");
+        if !info.aux_inputs.is_empty() {
+            layout_fields.push_str("                aux_inputs: &[");
+            for (i, (name, _)) in info.aux_inputs.iter().enumerate() {
+                if i > 0 { layout_fields.push_str(", "); }
+                // Capitalize first letter per nih-plug convention
+                let capitalized = capitalize_first(name);
+                layout_fields.push_str(&format!("\"{}\"", capitalized));
+            }
+            layout_fields.push_str("],\n");
+        }
+        if !info.aux_outputs.is_empty() {
+            layout_fields.push_str("                aux_outputs: &[");
+            for (i, (name, _)) in info.aux_outputs.iter().enumerate() {
+                if i > 0 { layout_fields.push_str(", "); }
+                let capitalized = capitalize_first(name);
+                layout_fields.push_str(&format!("\"{}\"", capitalized));
+            }
+            layout_fields.push_str("],\n");
+        }
+        layout_fields.push_str("                ..PortNames::const_default()\n");
+        layout_fields.push_str("            },\n");
+    }
+
+    layout_fields.push_str("            ..AudioIOLayout::const_default()");
+
     format!(
         r#"impl Plugin for {s} {{
     const NAME: &'static str = "{name}";
@@ -617,9 +690,7 @@ fn generate_plugin_trait(
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[
         AudioIOLayout {{
-{main_input}
-            main_output_channels: NonZeroU32::new({out_ch}),
-            ..AudioIOLayout::const_default()
+{layout_fields}
         }},
     ];
 
@@ -650,6 +721,7 @@ fn generate_plugin_trait(
         version = info.version,
         lifecycle_fns = lifecycle_fns,
         editor_fn = editor_fn,
+        layout_fields = layout_fields,
     )
 }
 
@@ -766,6 +838,18 @@ fn channel_count(spec: &ChannelSpec) -> u32 {
         ChannelSpec::Mono => 1,
         ChannelSpec::Stereo => 2,
         ChannelSpec::Count(n) => *n,
+    }
+}
+
+/// Capitalize the first letter of a string (for nih-plug port name convention).
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => {
+            let upper: String = c.to_uppercase().collect();
+            upper + chars.as_str()
+        }
     }
 }
 

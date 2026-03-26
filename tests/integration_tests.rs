@@ -1131,3 +1131,39 @@ fn which_clap_validator() -> Option<std::path::PathBuf> {
     }
     None
 }
+
+#[test]
+fn check_named_bus_plugin() {
+    let source = r#"
+plugin "Bus Test" {
+    vendor "Test"
+    input main stereo
+    input sidechain stereo
+    output stereo
+    output fx_send mono
+
+    param mix: float = 1.0 in 0.0..1.0
+
+    clap {
+        id "dev.test.bus-test"
+        description "Named bus test"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestBusPlugin12345"
+        subcategories [Fx]
+    }
+
+    process {
+        input -> gain(param.mix) -> output
+    }
+}
+"#;
+    let (ast, errors) = muse_lang::parse(source);
+    assert!(errors.is_empty(), "parse errors: {:?}", errors);
+    let ast = ast.expect("parse should return AST");
+    let registry = builtin_registry();
+    let resolved = resolve_plugin(&ast, &registry);
+    assert!(resolved.is_ok(), "resolve should succeed for named bus plugin, got: {:?}", resolved.err());
+}

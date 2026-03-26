@@ -2310,3 +2310,59 @@ fn loop_codegen_contains_wraparound() {
     assert!(plugin_code.contains("loop_pos_0: f32"), "Voice struct should have loop_pos_0: f32");
     assert!(plugin_code.contains("loop_active_0: bool"), "Voice struct should have loop_active_0: bool");
 }
+
+#[test]
+fn codegen_aux_input_ports() {
+    let source = r#"
+plugin "Sidechain Comp" {
+    vendor "Test"
+    input main stereo
+    input sidechain stereo
+    output stereo
+
+    param gain: float = 0.0 in -24.0..24.0 {
+        unit "dB"
+    }
+
+    clap {
+        id "dev.test.sidechain-comp"
+        description "Test sidechain"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestSidechain1234"
+        subcategories [Fx, Dynamics]
+    }
+
+    process {
+        input -> gain(param.gain) -> output
+    }
+}
+"#;
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // Verify aux_input_ports is generated with the sidechain bus
+    assert!(
+        lib_rs.contains("aux_input_ports"),
+        "Generated code should contain aux_input_ports for sidechain bus"
+    );
+    assert!(
+        lib_rs.contains("new_nonzero_u32(2)"),
+        "Sidechain stereo bus should use new_nonzero_u32(2)"
+    );
+    // Verify PortNames with sidechain name
+    assert!(
+        lib_rs.contains("Sidechain"),
+        "Generated code should contain sidechain port name"
+    );
+    assert!(
+        lib_rs.contains("PortNames"),
+        "Generated code should contain PortNames for aux bus names"
+    );
+    // Main bus should still be present
+    assert!(
+        lib_rs.contains("main_input_channels: NonZeroU32::new(2)"),
+        "Main stereo input should still be declared"
+    );
+}
