@@ -73,6 +73,7 @@ pub enum DspPrimitive {
     DcBlock,
     Crossfade,
     SampleAndHold,
+    Play,
 }
 
 // ── Function signature types ─────────────────────────────────

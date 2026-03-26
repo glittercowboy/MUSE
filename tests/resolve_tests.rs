@@ -1461,3 +1461,84 @@ plugin "Test" {
 "##;
     resolve_expect_ok(source);
 }
+// ── Sample declaration resolution ────────────────────────────
+
+#[test]
+fn sample_declaration_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    sample kick "samples/kick.wav"
+    process { input -> output }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn duplicate_sample_name_produces_e015() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    sample kick "samples/kick.wav"
+    sample kick "samples/kick2.wav"
+    process { input -> output }
+}
+"##;
+    let diags = resolve_expect_errors(source);
+    let e015 = find_error(&diags, "E015");
+    assert!(e015.message.contains("duplicate sample name 'kick'"));
+}
+
+#[test]
+fn play_with_declared_sample_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    sample kick "samples/kick.wav"
+    process {
+        play(kick) -> output
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn play_with_unknown_sample_produces_e003() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    process {
+        play(kick) -> output
+    }
+}
+"##;
+    let diags = resolve_expect_errors(source);
+    let e003 = find_error(&diags, "E003");
+    assert!(e003.message.contains("unknown sample 'kick'"));
+}
+
+#[test]
+fn note_number_resolves_to_number() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    midi {
+        note {
+            let num = note.number
+        }
+    }
+    process { input -> output }
+}
+"##;
+    let resolved = resolve_expect_ok(source);
+    // note.number should resolve to DspType::Number
+    let has_number = resolved.type_map.values().any(|t| *t == DspType::Number);
+    assert!(has_number, "Expected note.number to resolve to Number type");
+}

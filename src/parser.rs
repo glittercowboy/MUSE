@@ -1605,6 +1605,31 @@ where
         })
 }
 
+// ── Sample declaration parser ─────────────────────────────────
+
+fn sample_decl_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    // Parse: sample <name> "<path>"
+    // Token::Sample is a keyword. The name is an Ident token.
+    // The path is a StringLiteral token.
+    just(Token::Sample)
+        .ignore_then(ident_name())
+        .then(select! { Token::StringLiteral(s) => s })
+        .map_with(|(name, path), e| {
+            (
+                PluginItem::SampleDecl(SampleDecl {
+                    name,
+                    path,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1622,6 +1647,7 @@ where
         unison_block_parser(),
         preset_block_parser(),
         gui_block_parser(),
+        sample_decl_parser(),
         process_block_parser(),
         test_block_parser(),
     ))

@@ -32,6 +32,7 @@ pub enum PluginItem {
     TestBlock(TestBlock),
     PresetDecl(PresetBlock),
     GuiDecl(GuiBlock),
+    SampleDecl(SampleDecl),
 }
 
 // ── Metadata ─────────────────────────────────────────────────
@@ -437,6 +438,14 @@ pub enum PresetValue {
 }
 
 // ── GUI blocks ───────────────────────────────────────────────
+
+/// `sample kick "samples/kick.wav"` — a sample declaration for playback.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleDecl {
+    pub name: String,
+    pub path: String,
+    pub span: Span,
+}
 
 /// `gui { theme dark accent "#E8A87C" layout vertical { ... } }`
 #[derive(Debug, Clone, PartialEq)]

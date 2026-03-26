@@ -693,6 +693,13 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                                 "0.0_f32".to_string()
                             }
                         }
+                        "number" => {
+                            if ctx.is_polyphonic {
+                                "voice.note as f32".to_string()
+                            } else {
+                                "self.active_note.unwrap_or(0) as f32".to_string()
+                            }
+                        }
                         _ => format!("self.{}", field),
                     };
                 }

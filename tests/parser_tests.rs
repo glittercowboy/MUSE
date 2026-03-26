@@ -2222,3 +2222,78 @@ plugin "Test" {
         WidgetType::Reduction,
     ]);
 }
+
+// ── Sample declaration tests ─────────────────────────────────
+
+#[test]
+fn parse_sample_declaration() {
+    let source = r#"
+        plugin "Test" {
+            sample kick "samples/kick.wav"
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let sample_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::SampleDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(sample_items.len(), 1);
+    assert_eq!(sample_items[0].name, "kick");
+    assert_eq!(sample_items[0].path, "samples/kick.wav");
+}
+
+#[test]
+fn parse_multiple_sample_declarations() {
+    let source = r#"
+        plugin "Test" {
+            sample kick "samples/kick.wav"
+            sample snare "samples/snare.wav"
+            sample hihat "samples/hihat.wav"
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let sample_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::SampleDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(sample_items.len(), 3);
+    assert_eq!(sample_items[0].name, "kick");
+    assert_eq!(sample_items[1].name, "snare");
+    assert_eq!(sample_items[2].name, "hihat");
+}
+
+#[test]
+fn parse_sample_with_process_block() {
+    let source = r#"
+        plugin "Drum Machine" {
+            input mono
+            output stereo
+
+            sample kick "samples/kick.wav"
+
+            process {
+                play(kick) -> output
+            }
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let has_sample = plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::SampleDecl(_)));
+    let has_process = plugin.items.iter().any(|(item, _)| matches!(item, PluginItem::ProcessBlock(_)));
+    assert!(has_sample, "Expected sample declaration");
+    assert!(has_process, "Expected process block");
+}

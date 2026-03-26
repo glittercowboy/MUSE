@@ -16,7 +16,7 @@
 //! GUI validation:
 //! - E014: invalid gui block values (bad theme, bad accent color, duplicate block)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
 use crate::diagnostic::Diagnostic;
@@ -86,6 +86,10 @@ struct Resolver<'a> {
     /// Incremented when `Expr::Split` is resolved in a chain, decremented
     /// when `Expr::Merge` is encountered. Used to validate E007/E008.
     split_depth: usize,
+    /// Sample declarations: name → path
+    samples: HashMap<String, String>,
+    /// Duplicate sample detection
+    seen_samples: HashSet<String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -102,6 +106,8 @@ impl<'a> Resolver<'a> {
             type_map: HashMap::new(),
             diagnostics: Vec::new(),
             split_depth: 0,
+            samples: HashMap::new(),
+            seen_samples: HashSet::new(),
         }
     }
 
@@ -112,7 +118,7 @@ impl<'a> Resolver<'a> {
     // ── Plugin-level ─────────────────────────────────────────
 
     fn resolve_plugin(&mut self, plugin: &PluginDef) {
-        // Phase 1: extract param declarations and detect MIDI note handlers
+        // Phase 1: extract param declarations, detect MIDI note handlers, and register samples
         for (item, _span) in &plugin.items {
             match item {
                 PluginItem::ParamDecl(param_def) => {
@@ -125,6 +131,21 @@ impl<'a> Resolver<'a> {
                         if matches!(midi_item, MidiItem::NoteHandler(_)) {
                             self.has_midi_note = true;
                         }
+                    }
+                }
+                PluginItem::SampleDecl(decl) => {
+                    if self.seen_samples.contains(&decl.name) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E015",
+                                decl.span,
+                                format!("duplicate sample name '{}'", decl.name),
+                            )
+                            .with_suggestion("Each sample must have a unique name."),
+                        );
+                    } else {
+                        self.seen_samples.insert(decl.name.clone());
+                        self.samples.insert(decl.name.clone(), decl.path.clone());
                     }
                 }
                 _ => {}
@@ -788,6 +809,7 @@ impl<'a> Resolver<'a> {
             "pressure" => Some(DspType::Number),
             "bend" => Some(DspType::Number),
             "slide" => Some(DspType::Number),
+            "number" => Some(DspType::Number),
             _ => Some(DspType::Number),
         }
     }
@@ -812,6 +834,27 @@ impl<'a> Resolver<'a> {
                 return None;
             }
         };
+
+        // Special handling for play() — takes a sample name, not standard DSP types
+        if callee_name == "play" && args.len() == 1 {
+            if let Expr::Ident(ref sample_name) = args[0].0 {
+                if self.samples.contains_key(sample_name) {
+                    // Resolve the arg (for type_map completeness)
+                    self.record(args[0].1, DspType::Signal);
+                    return Some(DspType::Signal);
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E003",
+                            span,
+                            format!("unknown sample '{}' in play() call", sample_name),
+                        )
+                        .with_suggestion("Declare the sample first: `sample {} \"path/to/file.wav\"`"),
+                    );
+                    return None;
+                }
+            }
+        }
 
         // Look up in DSP registry first (takes priority over local scope)
         let func = match self.registry.lookup(&callee_name) {
