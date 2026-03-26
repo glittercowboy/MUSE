@@ -2059,7 +2059,7 @@ fn sample_codegen_contains_include_bytes_and_hound_decode() {
     // Test the process codegen directly
     let voice_count = Some(4u32);
     let (process_body, process_info) = muse_lang::codegen::process::generate_process(
-        &plugin, voice_count, None, &sample_infos,
+        &plugin, voice_count, None, &sample_infos, &[],
     );
 
     // Verify play codegen was generated
@@ -2069,7 +2069,7 @@ fn sample_codegen_contains_include_bytes_and_hound_decode() {
     assert!(process_body.contains("self.sample_kick"), "Process body should reference sample_kick buffer");
 
     // Test the plugin struct codegen
-    let plugin_code = muse_lang::codegen::plugin::generate_plugin_struct(&plugin, &process_info, &sample_infos);
+    let plugin_code = muse_lang::codegen::plugin::generate_plugin_struct(&plugin, &process_info, &sample_infos, &[]);
     assert!(plugin_code.contains("sample_kick: Vec<f32>"), "Plugin struct should have sample_kick: Vec<f32>");
     assert!(plugin_code.contains("sample_kick_rate: u32"), "Plugin struct should have sample_kick_rate: u32");
     assert!(plugin_code.contains("play_pos_0: f32"), "Voice struct should have play_pos_0: f32");

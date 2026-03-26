@@ -227,6 +227,18 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         out.push('\n');
     }
 
+    // ── Wavetable oscillator ─────────────────────────────────
+    let needs_wavetable_osc = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::WavetableOsc)
+    });
+
+    if needs_wavetable_osc {
+        out.push_str(&generate_wt_osc_state());
+        out.push('\n');
+        out.push_str(&generate_process_wavetable_osc());
+        out.push('\n');
+    }
+
     // ── Delay ────────────────────────────────────────────────
     let needs_delay = used_primitives.iter().any(|p| {
         matches!(p, DspPrimitive::Delay | DspPrimitive::ModDelay | DspPrimitive::Allpass | DspPrimitive::Comb)
@@ -1285,6 +1297,87 @@ fn process_sample_and_hold(state: &mut SampleAndHoldState, input: f32, trigger: 
     }
     state.prev_trigger = trigger;
     state.held_value
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Wavetable oscillator helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the WtOscState struct.
+fn generate_wt_osc_state() -> String {
+    r#"/// Per-call-site wavetable oscillator state (phase accumulator).
+#[derive(Clone, Copy)]
+struct WtOscState {
+    phase: f32,
+}
+
+impl Default for WtOscState {
+    fn default() -> Self {
+        Self { phase: 0.0 }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_wavetable_osc function with dual-axis linear interpolation.
+fn generate_process_wavetable_osc() -> String {
+    r#"/// Process one sample of a wavetable oscillator with frame morphing.
+///
+/// `data` is the full wavetable (all frames concatenated), `frame_size` is samples per frame,
+/// `frame_count` is the number of frames. `position` (0.0..1.0) morphs between frames.
+/// Uses dual-axis linear interpolation: within-frame (phase) and between-frame (position).
+fn process_wavetable_osc(
+    state: &mut WtOscState,
+    data: &[f32],
+    frame_size: usize,
+    frame_count: usize,
+    frequency: f32,
+    position: f32,
+    sample_rate: f32,
+) -> f32 {
+    if data.is_empty() || frame_size == 0 || frame_count == 0 {
+        return 0.0_f32;
+    }
+
+    // Clamp position to valid range
+    let position = position.clamp(0.0, 1.0);
+
+    // Compute frame indices for interpolation
+    let frame_pos = position * (frame_count as f32 - 1.0);
+    let frame_idx0 = (frame_pos.floor() as usize).min(frame_count - 1);
+    let frame_idx1 = (frame_idx0 + 1).min(frame_count - 1);
+    let frame_frac = frame_pos.fract();
+
+    // Compute sample position within frame using phase
+    let sample_pos = state.phase * frame_size as f32;
+    let idx0 = sample_pos.floor() as usize % frame_size;
+    let idx1 = (idx0 + 1) % frame_size;
+    let sample_frac = sample_pos.fract();
+
+    // Read from frame 0
+    let offset0 = frame_idx0 * frame_size;
+    let s0a = data[offset0 + idx0];
+    let s0b = data[offset0 + idx1];
+    let val0 = s0a + (s0b - s0a) * sample_frac;
+
+    // Read from frame 1
+    let offset1 = frame_idx1 * frame_size;
+    let s1a = data[offset1 + idx0];
+    let s1b = data[offset1 + idx1];
+    let val1 = s1a + (s1b - s1a) * sample_frac;
+
+    // Interpolate between frames
+    let output = val0 + (val1 - val0) * frame_frac;
+
+    // Advance phase
+    state.phase += frequency / sample_rate;
+    state.phase -= state.phase.floor();
+
+    output
 }
 "#
     .to_string()

@@ -31,6 +31,15 @@ pub struct SampleInfo {
     pub absolute_path: String,
 }
 
+/// Wavetable info resolved for codegen: name, paths, and frame geometry.
+#[derive(Debug, Clone)]
+pub struct WavetableInfo {
+    pub name: String,
+    pub path: String,
+    pub absolute_path: String,
+    pub frame_size: u32,
+}
+
 /// Codegen-side unison configuration extracted from the AST.
 #[derive(Debug, Clone)]
 pub struct CodegenUnisonConfig {
@@ -58,25 +67,31 @@ pub fn generate_plugin(
         return Err(diagnostics);
     }
 
+    // Extract wavetable declarations and resolve absolute paths
+    let wavetable_infos = find_wavetable_decls(plugin, source_dir, &mut diagnostics);
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+
     let needs_fft = has_frequency_assertions(plugin);
     let has_gui = gui::find_gui_block(plugin).is_some();
-    let has_samples = !sample_infos.is_empty();
+    let has_samples = !sample_infos.is_empty() || !wavetable_infos.is_empty();
     let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft, has_gui, has_samples);
     let params_code = params::generate_params(plugin);
     let preset_code = presets::generate_presets(plugin);
     let voice_count = find_voice_count(plugin);
     let unison_config = find_unison_config(plugin);
-    let (process_body, process_info) = process::generate_process(plugin, voice_count, unison_config.as_ref(), &sample_infos);
+    let (process_body, process_info) = process::generate_process(plugin, voice_count, unison_config.as_ref(), &sample_infos, &wavetable_infos);
 
     if !process_info.diagnostics.is_empty() {
         return Err(process_info.diagnostics);
     }
 
     let dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
-    let plugin_code = plugin::generate_plugin_struct(plugin, &process_info, &sample_infos);
+    let plugin_code = plugin::generate_plugin_struct(plugin, &process_info, &sample_infos, &wavetable_infos);
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
-    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref(), &sample_infos, process_info.has_adsr);
+    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref(), &sample_infos, &wavetable_infos, process_info.has_adsr);
 
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
@@ -209,6 +224,66 @@ fn find_sample_decls(
     samples
 }
 
+/// Extract wavetable declarations from the AST and resolve their absolute paths.
+/// Validates that the WAV file exists and that total sample count is divisible by frame_size.
+fn find_wavetable_decls(
+    plugin: &PluginDef,
+    source_dir: Option<&Path>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<WavetableInfo> {
+    let base_dir = source_dir.unwrap_or(Path::new("."));
+    let mut wavetables = Vec::new();
+    for (item, _) in &plugin.items {
+        if let PluginItem::WavetableDecl(decl) = item {
+            let abs_path = if Path::new(&decl.path).is_absolute() {
+                decl.path.clone()
+            } else {
+                let resolved = base_dir.join(&decl.path);
+                match resolved.canonicalize() {
+                    Ok(p) => p.to_string_lossy().to_string(),
+                    Err(_) => {
+                        diagnostics.push(Diagnostic::error(
+                            "E015",
+                            decl.span,
+                            format!(
+                                "wavetable file not found: '{}' (resolved to '{}')",
+                                decl.path,
+                                resolved.display()
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+            };
+
+            // Validate frame divisibility (hound available on macOS and in tests)
+            #[cfg(any(target_os = "macos", test))]
+            if let Ok(reader) = hound::WavReader::open(&abs_path) {
+                let sample_count = reader.len() as u32;
+                if sample_count % decl.frame_size != 0 {
+                    diagnostics.push(Diagnostic::error(
+                        "E015",
+                        decl.span,
+                        format!(
+                            "wavetable '{}' has {} samples which is not divisible by frame_size {} — each frame must be exactly {} samples",
+                            decl.name, sample_count, decl.frame_size, decl.frame_size
+                        ),
+                    ));
+                    continue;
+                }
+            }
+
+            wavetables.push(WavetableInfo {
+                name: decl.name.clone(),
+                path: decl.path.clone(),
+                absolute_path: abs_path,
+                frame_size: decl.frame_size,
+            });
+        }
+    }
+    wavetables
+}
+
 fn validate_codegen_requirements(plugin: &PluginDef, diagnostics: &mut Vec<Diagnostic>) {
     use crate::ast::{FormatBlock, MetadataKey, PluginItem};
 
@@ -293,6 +368,7 @@ fn assemble_lib_rs(
     include_poly_helpers: bool,
     unison_config: Option<&CodegenUnisonConfig>,
     sample_infos: &[SampleInfo],
+    wavetable_infos: &[WavetableInfo],
     has_adsr: bool,
 ) -> String {
     let mut out = String::new();
@@ -325,6 +401,19 @@ fn assemble_lib_rs(
         ));
     }
     if !sample_infos.is_empty() {
+        out.push('\n');
+    }
+
+    // Emit include_bytes!() consts for embedded wavetables
+    for wt in wavetable_infos {
+        let const_name = format!("WAVETABLE_{}_DATA", wt.name.to_uppercase());
+        let path_escaped = wt.absolute_path.replace('\\', "/");
+        out.push_str(&format!(
+            "const {}: &[u8] = include_bytes!(\"{}\");\n",
+            const_name, path_escaped
+        ));
+    }
+    if !wavetable_infos.is_empty() {
         out.push('\n');
     }
 

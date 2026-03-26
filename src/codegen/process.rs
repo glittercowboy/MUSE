@@ -13,6 +13,7 @@ use crate::ast::{
     BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp,
 };
 use crate::codegen::SampleInfo;
+use crate::codegen::WavetableInfo;
 use crate::dsp::primitives::{DspPrimitive, EnvKind, EqKind, OscKind};
 
 pub const MAX_BLOCK_SIZE: usize = 64;
@@ -37,9 +38,10 @@ pub struct ProcessInfo {
     pub dc_block_count: usize,
     pub sample_hold_count: usize,
     pub play_call_count: usize,
+    pub wt_osc_call_count: usize,
 }
 
-pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo]) -> (String, ProcessInfo) {
+pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> (String, ProcessInfo) {
     let is_instrument = find_midi_decl(plugin);
 
     let process_block = match find_process_block(plugin) {
@@ -66,12 +68,13 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     dc_block_count: 0,
                     sample_hold_count: 0,
                     play_call_count: 0,
+                    wt_osc_call_count: 0,
                 },
             )
         }
     };
 
-    let mut ctx = ProcessContext::new(sample_infos);
+    let mut ctx = ProcessContext::new(sample_infos, wavetable_infos);
     ctx.is_instrument = is_instrument;
     ctx.is_polyphonic = is_instrument && voice_count.is_some();
 
@@ -100,7 +103,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
     } else if is_instrument {
-        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines, ctx.play_counter)
+        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines, ctx.play_counter, ctx.wt_osc_counter)
     } else {
         generate_effect_process(&ctx, &stmt_lines)
     };
@@ -132,6 +135,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         dc_block_count,
         sample_hold_count,
         play_call_count: ctx.play_counter,
+        wt_osc_call_count: ctx.wt_osc_counter,
     };
 
     (process_body, info)
@@ -141,6 +145,7 @@ fn generate_monophonic_instrument_process(
     smoothed_params: &[String],
     stmt_lines: &[String],
     play_call_count: usize,
+    wt_osc_call_count: usize,
 ) -> String {
     let mut out = String::new();
     out.push_str("        let mut next_event = context.next_event();\n");
@@ -152,7 +157,7 @@ fn generate_monophonic_instrument_process(
         ));
     }
 
-    let midi_loop = crate::codegen::midi::generate_midi_event_loop(play_call_count);
+    let midi_loop = crate::codegen::midi::generate_midi_event_loop(play_call_count, wt_osc_call_count);
     for line in midi_loop.lines() {
         out.push_str("            ");
         out.push_str(line);
@@ -303,13 +308,15 @@ struct ProcessContext<'a> {
     dc_block_counter: usize,
     sample_hold_counter: usize,
     play_counter: usize,
+    wt_osc_counter: usize,
     _sample_infos: &'a [SampleInfo],
+    _wavetable_infos: &'a [WavetableInfo],
     is_instrument: bool,
     is_polyphonic: bool,
 }
 
 impl<'a> ProcessContext<'a> {
-    fn new(sample_infos: &'a [SampleInfo]) -> Self {
+    fn new(sample_infos: &'a [SampleInfo], wavetable_infos: &'a [WavetableInfo]) -> Self {
         Self {
             smoothed_params: Vec::new(),
             used_primitives: HashSet::new(),
@@ -330,7 +337,9 @@ impl<'a> ProcessContext<'a> {
             dc_block_counter: 0,
             sample_hold_counter: 0,
             play_counter: 0,
+            wt_osc_counter: 0,
             _sample_infos: sample_infos,
+            _wavetable_infos: wavetable_infos,
             is_instrument: false,
             is_polyphonic: false,
         }
@@ -506,6 +515,7 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "dc_block" => generate_dc_block_call_with_input(input_code, args, ctx),
                 "sample_and_hold" => generate_sample_hold_call_with_input(input_code, args, ctx),
                 "play" => generate_play_call(args, ctx),
+                "wavetable_osc" => generate_wavetable_osc_call(args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -874,6 +884,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     }
                     "adsr" => return generate_adsr_call(args, ctx),
                     "play" => return generate_play_call(args, ctx),
+                    "wavetable_osc" => return generate_wavetable_osc_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
                         let semitones = generate_expr(&args[0].0, ctx);
@@ -1139,6 +1150,37 @@ fn generate_adsr_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> Strin
     format!(
         "process_adsr(&mut {}, {}, {}, {}, {}, {}, self.sample_rate)",
         state_target, gate, attack, decay, sustain, release
+    )
+}
+
+/// Generate code for a wavetable_osc() call with table name, pitch, and position arguments.
+///
+/// Each call-site gets its own WtOscState (phase accumulator). The wavetable data,
+/// frame_size, and frame_count are read from plugin struct fields populated in initialize().
+fn generate_wavetable_osc_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    let wt_idx = ctx.wt_osc_counter;
+    ctx.wt_osc_counter += 1;
+    ctx.used_primitives.insert(DspPrimitive::WavetableOsc);
+
+    // Extract wavetable name from the first argument (an Ident)
+    let wt_name = if let Expr::Ident(name) = &args[0].0 {
+        name.clone()
+    } else {
+        "unknown".to_string()
+    };
+
+    let pitch = generate_expr(&args[1].0, ctx);
+    let position = generate_expr_as_param(&args[2].0, ctx);
+
+    let state_field = if ctx.is_polyphonic {
+        format!("voice.wt_osc_state_{}", wt_idx)
+    } else {
+        format!("self.wt_osc_state_{}", wt_idx)
+    };
+
+    format!(
+        "process_wavetable_osc(&mut {}, &self.wavetable_{}, self.wavetable_{}_frame_size, self.wavetable_{}_frame_count, {}, {}, self.sample_rate)",
+        state_field, wt_name, wt_name, wt_name, pitch, position
     )
 }
 

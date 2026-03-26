@@ -6,6 +6,7 @@ use crate::ast::{
 };
 use crate::codegen::process::ProcessInfo;
 use crate::codegen::SampleInfo;
+use crate::codegen::WavetableInfo;
 use crate::dsp::primitives::DspPrimitive;
 
 struct PluginInfo {
@@ -30,7 +31,7 @@ struct Vst3Info {
     subcategories: Vec<String>,
 }
 
-pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sample_infos: &[SampleInfo]) -> String {
+pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> String {
     let info = extract_plugin_info(plugin);
     let clap = extract_clap_info(plugin);
     let vst3 = extract_vst3_info(plugin);
@@ -63,7 +64,8 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     let has_gate = process_info.gate_count > 0;
     let _has_dc_block = process_info.dc_block_count > 0;
     let _has_sample_hold = process_info.sample_hold_count > 0;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate;
+    let has_wt_osc = process_info.wt_osc_call_count > 0;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate || has_wt_osc;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
@@ -151,6 +153,18 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
             out.push_str(&format!("    play_active_{}: bool,\n", i));
         }
     }
+    // Wavetable buffer fields (shared data, not per-voice)
+    for wt in wavetable_infos {
+        out.push_str(&format!("    wavetable_{}: Vec<f32>,\n", wt.name));
+        out.push_str(&format!("    wavetable_{}_frame_size: usize,\n", wt.name));
+        out.push_str(&format!("    wavetable_{}_frame_count: usize,\n", wt.name));
+    }
+    // Per-call-site wavetable oscillator state (monophonic only — polyphonic is on Voice)
+    if !is_polyphonic {
+        for i in 0..process_info.wt_osc_call_count {
+            out.push_str(&format!("    wt_osc_state_{}: WtOscState,\n", i));
+        }
+    }
     out.push_str("}\n\n");
 
     out.push_str(&format!(
@@ -233,9 +247,21 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
             out.push_str(&format!("            play_active_{}: false,\n", i));
         }
     }
+    // Wavetable buffer defaults
+    for wt in wavetable_infos {
+        out.push_str(&format!("            wavetable_{}: Vec::new(),\n", wt.name));
+        out.push_str(&format!("            wavetable_{}_frame_size: 0,\n", wt.name));
+        out.push_str(&format!("            wavetable_{}_frame_count: 0,\n", wt.name));
+    }
+    // Wavetable oscillator state defaults (monophonic only)
+    if !is_polyphonic {
+        for i in 0..process_info.wt_osc_call_count {
+            out.push_str(&format!("            wt_osc_state_{}: WtOscState::default(),\n", i));
+        }
+    }
     out.push_str("        }\n    }\n}\n\n");
 
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, sample_infos));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, sample_infos, wavetable_infos));
 
     if is_polyphonic {
         let helper_defaults = generate_voice_field_defaults(process_info);
@@ -316,6 +342,10 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
         out.push_str(&format!("    play_pos_{}: f32,\n", i));
         out.push_str(&format!("    play_active_{}: bool,\n", i));
     }
+    // Per-voice wavetable oscillator state
+    for i in 0..process_info.wt_osc_call_count {
+        out.push_str(&format!("    wt_osc_state_{}: WtOscState,\n", i));
+    }
     out.push_str("}\n");
     out
 }
@@ -359,6 +389,9 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.play_call_count {
         fields.push(format!("play_pos_{}: 0.0", i));
         fields.push(format!("play_active_{}: true", i));
+    }
+    for i in 0..process_info.wt_osc_call_count {
+        fields.push(format!("wt_osc_state_{}: WtOscState::default()", i));
     }
     if fields.is_empty() {
         String::new()
@@ -463,13 +496,14 @@ fn generate_plugin_trait(
     has_gui: bool,
     delay_count: usize,
     sample_infos: &[SampleInfo],
+    wavetable_infos: &[WavetableInfo],
 ) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
     let out_ch = info.output_channels;
 
     let mut lifecycle_fns = String::new();
-    let needs_initialize = needs_sample_rate || !sample_infos.is_empty();
+    let needs_initialize = needs_sample_rate || !sample_infos.is_empty() || !wavetable_infos.is_empty();
     if needs_initialize {
         let mut init_body = String::new();
         if needs_sample_rate {
@@ -488,6 +522,16 @@ fn generate_plugin_trait(
             init_body.push_str(&format!(
                 "        {{\n            let cursor = std::io::Cursor::new(SAMPLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            self.sample_{}_rate = spec.sample_rate;\n            self.sample_{} = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n        }}\n",
                 upper_name, field_name, field_name, field_name
+            ));
+        }
+        // Wavetable decode: hound-based WAV decode from embedded bytes
+        for wt in wavetable_infos {
+            let upper_name = wt.name.to_uppercase();
+            let field_name = &wt.name;
+            let frame_size = wt.frame_size;
+            init_body.push_str(&format!(
+                "        {{\n            let cursor = std::io::Cursor::new(WAVETABLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            let data: Vec<f32> = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n            self.wavetable_{}_frame_size = {};\n            self.wavetable_{}_frame_count = data.len() / {};\n            self.wavetable_{} = data;\n        }}\n",
+                upper_name, field_name, field_name, frame_size, field_name, frame_size, field_name
             ));
         }
         init_body.push_str("        true");

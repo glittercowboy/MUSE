@@ -4,11 +4,14 @@
 //! block-based event handling with explicit voice allocation and termination.
 
 /// Generate the Rust code for a sample-accurate MIDI event loop for mono instruments.
-pub fn generate_midi_event_loop(play_call_count: usize) -> String {
+pub fn generate_midi_event_loop(play_call_count: usize, wt_osc_call_count: usize) -> String {
     let mut play_reset = String::new();
     for i in 0..play_call_count {
         play_reset.push_str(&format!("            self.play_pos_{} = 0.0;\n", i));
         play_reset.push_str(&format!("            self.play_active_{} = true;\n", i));
+    }
+    for i in 0..wt_osc_call_count {
+        play_reset.push_str(&format!("            self.wt_osc_state_{}.phase = 0.0;\n", i));
     }
     format!(
         r#"// Sample-accurate MIDI event processing
@@ -284,7 +287,7 @@ mod tests {
 
     #[test]
     fn midi_event_loop_contains_note_on() {
-        let code = generate_midi_event_loop(0);
+        let code = generate_midi_event_loop(0, 0);
         assert!(
             code.contains("NoteEvent::NoteOn"),
             "MIDI loop should handle NoteOn events"
@@ -293,7 +296,7 @@ mod tests {
 
     #[test]
     fn midi_event_loop_contains_note_off() {
-        let code = generate_midi_event_loop(0);
+        let code = generate_midi_event_loop(0, 0);
         assert!(
             code.contains("NoteEvent::NoteOff"),
             "MIDI loop should handle NoteOff events"
@@ -302,7 +305,7 @@ mod tests {
 
     #[test]
     fn midi_event_loop_contains_timing_check() {
-        let code = generate_midi_event_loop(0);
+        let code = generate_midi_event_loop(0, 0);
         assert!(
             code.contains("event.timing()"),
             "MIDI loop should check event timing for sample accuracy"
@@ -311,7 +314,7 @@ mod tests {
 
     #[test]
     fn midi_event_loop_contains_next_event() {
-        let code = generate_midi_event_loop(0);
+        let code = generate_midi_event_loop(0, 0);
         assert!(
             code.contains("context.next_event()"),
             "MIDI loop should advance to next event"
@@ -320,7 +323,7 @@ mod tests {
 
     #[test]
     fn midi_event_loop_uses_struct_fields() {
-        let code = generate_midi_event_loop(0);
+        let code = generate_midi_event_loop(0, 0);
         assert!(
             code.contains("self.active_note"),
             "MIDI loop should use self.active_note for note tracking"
