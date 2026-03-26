@@ -28,6 +28,7 @@ pub struct ProcessInfo {
     pub has_adsr: bool,
     pub chorus_count: usize,
     pub compressor_count: usize,
+    pub delay_count: usize,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> (String, ProcessInfo) {
@@ -49,6 +50,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     has_adsr: false,
                     chorus_count: 0,
                     compressor_count: 0,
+                    delay_count: 0,
                 },
             )
         }
@@ -72,6 +74,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let oscillator_count = ctx.oscillator_counter;
     let chorus_count = ctx.chorus_counter;
     let compressor_count = ctx.compressor_counter;
+    let delay_count = ctx.delay_counter;
 
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
@@ -100,6 +103,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         has_adsr,
         chorus_count,
         compressor_count,
+        delay_count,
     };
 
     (process_body, info)
@@ -262,6 +266,7 @@ struct ProcessContext {
     oscillator_counter: usize,
     chorus_counter: usize,
     compressor_counter: usize,
+    delay_counter: usize,
     is_instrument: bool,
     is_polyphonic: bool,
 }
@@ -280,6 +285,7 @@ impl ProcessContext {
             oscillator_counter: 0,
             chorus_counter: 0,
             compressor_counter: 0,
+            delay_counter: 0,
             is_instrument: false,
             is_polyphonic: false,
         }
@@ -437,6 +443,7 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 }
                 "chorus" => generate_chorus_call_with_input(input_code, args, ctx),
                 "compressor" => generate_compressor_call_with_input(input_code, args, ctx),
+                "delay" => generate_delay_call_with_input(input_code, args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -772,6 +779,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "compressor" => {
                         return generate_compressor_call_with_input("*sample", args, ctx)
                     }
+                    "delay" => return generate_delay_call_with_input("*sample", args, ctx),
                     "adsr" => return generate_adsr_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
@@ -1121,5 +1129,34 @@ fn generate_compressor_call_with_input(
     format!(
         "process_compressor(&mut {}, {}, {}, {}, self.sample_rate)",
         state_target, input_code, threshold, ratio
+    )
+}
+
+fn generate_delay_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Delay);
+
+    let delay_idx = ctx.delay_counter;
+    ctx.delay_counter += 1;
+
+    // delay(time: Time) — time in seconds (unit literals like 0.5s are already converted)
+    let delay_time = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.delay_state_{}", delay_idx)
+    } else {
+        format!("self.delay_state_{}", delay_idx)
+    };
+
+    format!(
+        "process_delay(&mut {}, {}, {}, self.sample_rate)",
+        state_target, input_code, delay_time
     )
 }

@@ -55,7 +55,8 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     let has_adsr = process_info.has_adsr;
     let has_chorus = process_info.chorus_count > 0;
     let has_compressor = process_info.compressor_count > 0;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor;
+    let has_delay = process_info.delay_count > 0;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
@@ -94,6 +95,11 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
         for i in 0..process_info.compressor_count {
             out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
         }
+    }
+
+    // Delay state fields are outside the poly/mono guard — delays work in both effects and instruments
+    for i in 0..process_info.delay_count {
+        out.push_str(&format!("    delay_state_{}: DelayLine,\n", i));
     }
 
     if is_instrument && !is_polyphonic {
@@ -141,6 +147,10 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
         }
     }
 
+    for i in 0..process_info.delay_count {
+        out.push_str(&format!("            delay_state_{}: DelayLine::default(),\n", i));
+    }
+
     if is_instrument && !is_polyphonic {
         out.push_str("            active_note: None,\n");
         out.push_str("            note_freq: 440.0,\n");
@@ -151,7 +161,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     }
     out.push_str("        }\n    }\n}\n\n");
 
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count));
 
     if is_polyphonic {
         let helper_defaults = generate_voice_field_defaults(process_info);
@@ -332,6 +342,7 @@ fn generate_plugin_trait(
     is_instrument: bool,
     is_polyphonic: bool,
     has_gui: bool,
+    delay_count: usize,
 ) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
@@ -339,9 +350,18 @@ fn generate_plugin_trait(
 
     let mut lifecycle_fns = String::new();
     if needs_sample_rate {
-        lifecycle_fns.push_str(
-            "\n    fn initialize(\n        &mut self,\n        _audio_io_layout: &AudioIOLayout,\n        buffer_config: &BufferConfig,\n        _context: &mut impl InitContext<Self>,\n    ) -> bool {\n        self.sample_rate = buffer_config.sample_rate;\n        true\n    }\n",
-        );
+        let mut init_body = String::from("self.sample_rate = buffer_config.sample_rate;\n");
+        for i in 0..delay_count {
+            init_body.push_str(&format!(
+                "        self.delay_state_{}.allocate(buffer_config.sample_rate);\n",
+                i
+            ));
+        }
+        init_body.push_str("        true");
+        lifecycle_fns.push_str(&format!(
+            "\n    fn initialize(\n        &mut self,\n        _audio_io_layout: &AudioIOLayout,\n        buffer_config: &BufferConfig,\n        _context: &mut impl InitContext<Self>,\n    ) -> bool {{\n        {}\n    }}\n",
+            init_body
+        ));
     }
     if is_polyphonic {
         lifecycle_fns.push_str(

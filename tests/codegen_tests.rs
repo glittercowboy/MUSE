@@ -1540,3 +1540,67 @@ fn preview_instrument_midi_round_trip() {
 
     eprintln!("preview_instrument_midi_round_trip: all assertions passed");
 }
+
+#[test]
+fn codegen_delay_cargo_check() {
+    let source = r#"plugin "Echo FX" {
+    vendor "Test Audio"
+    version "0.1.0"
+    url "https://test.dev"
+    email "test@test.dev"
+    category effect
+
+    clap {
+        id "dev.test.echo-fx"
+        description "Simple echo effect"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestEchoFX00001"
+        subcategories [Fx, Delay]
+    }
+
+    input stereo
+    output stereo
+
+    param time: float = 0.5 in 0.01..5.0 {
+        unit "s"
+    }
+
+    param mix_amt: float = 0.3 in 0.0..0.95
+
+    process {
+        input -> delay(param.time) -> gain(param.mix_amt) -> output
+    }
+}"#;
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-delay");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    // Verify generated code contains delay-specific structures
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("struct DelayLine"),
+        "Generated code should contain DelayLine struct"
+    );
+    assert!(
+        lib_rs.contains("process_delay("),
+        "Generated code should contain process_delay function"
+    );
+    assert!(
+        lib_rs.contains("delay_state_0"),
+        "Generated code should contain delay_state_0 field"
+    );
+    assert!(
+        lib_rs.contains(".allocate("),
+        "Generated code should contain allocate() call in initialize()"
+    );
+
+    assert_cargo_check(&crate_dir);
+}

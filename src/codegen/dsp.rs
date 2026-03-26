@@ -139,6 +139,18 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         out.push('\n');
     }
 
+    // ── Delay ────────────────────────────────────────────────
+    let needs_delay = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Delay)
+    });
+
+    if needs_delay {
+        out.push_str(&generate_delay_state());
+        out.push('\n');
+        out.push_str(&generate_process_delay());
+        out.push('\n');
+    }
+
     out
 }
 
@@ -609,6 +621,76 @@ fn process_compressor(state: &mut CompressorState, input: f32, threshold: f32, r
     } else {
         input
     }
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Delay helper
+// ══════════════════════════════════════════════════════════════
+
+/// Maximum delay time in seconds. Buffer is allocated at this size × sample_rate.
+pub const MAX_DELAY_SECONDS: f32 = 5.0;
+
+/// Generate the DelayLine state struct.
+pub fn generate_delay_state() -> String {
+    r#"/// Per-call-site delay line with heap-allocated ring buffer.
+///
+/// Buffer is allocated in initialize() at MAX_DELAY_SECONDS × sample_rate.
+/// Not Copy/Clone — contains a Vec.
+struct DelayLine {
+    buffer: Vec<f32>,
+    write_pos: usize,
+}
+
+impl Default for DelayLine {
+    fn default() -> Self {
+        Self {
+            buffer: Vec::new(),
+            write_pos: 0,
+        }
+    }
+}
+
+impl DelayLine {
+    fn allocate(&mut self, sample_rate: f32) {
+        let max_samples = (5.0_f32 * sample_rate) as usize;
+        self.buffer.resize(max_samples, 0.0);
+        self.write_pos = 0;
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_delay function (simple delay with linear interpolation).
+pub fn generate_process_delay() -> String {
+    r#"/// Process one sample through a delay line.
+///
+/// `delay_time` is in seconds. Reads from the ring buffer at the appropriate
+/// offset behind the write head, using linear interpolation for sub-sample accuracy.
+/// Returns only the delayed (wet) signal — caller mixes dry/wet as needed.
+fn process_delay(state: &mut DelayLine, input: f32, delay_time: f32, sample_rate: f32) -> f32 {
+    if state.buffer.is_empty() {
+        return input;
+    }
+    let buf_len = state.buffer.len();
+
+    // Write input
+    state.buffer[state.write_pos] = input;
+    state.write_pos = (state.write_pos + 1) % buf_len;
+
+    // Compute read position
+    let delay_samples = (delay_time * sample_rate).clamp(0.0, (buf_len - 1) as f32);
+    let read_pos = state.write_pos as f32 - delay_samples - 1.0;
+    let read_pos = if read_pos < 0.0 { read_pos + buf_len as f32 } else { read_pos };
+
+    // Linear interpolation
+    let idx0 = read_pos.floor() as usize % buf_len;
+    let idx1 = (idx0 + 1) % buf_len;
+    let frac = read_pos.fract();
+    state.buffer[idx0] * (1.0 - frac) + state.buffer[idx1] * frac
 }
 "#
     .to_string()
