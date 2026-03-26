@@ -7,13 +7,14 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_27_functions() {
+fn registry_contains_all_30_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
         "adsr", "ar", "gain", "pan", "delay", "mod_delay", "allpass", "comb",
         "mix", "clip", "tanh",
         "fold", "bitcrush", "lfo", "pulse", "chorus", "compressor", "semitones_to_ratio",
+        "peak_eq", "low_shelf", "high_shelf",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
     for name in &expected {

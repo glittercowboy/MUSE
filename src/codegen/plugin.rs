@@ -56,7 +56,8 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     let has_chorus = process_info.chorus_count > 0;
     let has_compressor = process_info.compressor_count > 0;
     let has_delay = process_info.delay_count > 0;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay;
+    let has_eq_biquad = process_info.eq_biquad_count > 0;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
@@ -100,6 +101,13 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     // Delay state fields are outside the poly/mono guard — delays work in both effects and instruments
     for i in 0..process_info.delay_count {
         out.push_str(&format!("    delay_state_{}: DelayLine,\n", i));
+    }
+
+    // EQ biquad state fields — per-call-site, per-channel (outside poly/mono guard)
+    if !is_polyphonic {
+        for i in 0..process_info.eq_biquad_count {
+            out.push_str(&format!("    eq_biquad_state_{}: [BiquadState; {}],\n", i, num_channels));
+        }
     }
 
     if is_instrument && !is_polyphonic {
@@ -149,6 +157,12 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
 
     for i in 0..process_info.delay_count {
         out.push_str(&format!("            delay_state_{}: DelayLine::default(),\n", i));
+    }
+
+    if !is_polyphonic {
+        for i in 0..process_info.eq_biquad_count {
+            out.push_str(&format!("            eq_biquad_state_{}: [BiquadState::default(); {}],\n", i, num_channels));
+        }
     }
 
     if is_instrument && !is_polyphonic {
@@ -219,6 +233,9 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.compressor_count {
         out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
     }
+    for i in 0..process_info.eq_biquad_count {
+        out.push_str(&format!("    eq_biquad_state_{}: BiquadState,\n", i));
+    }
     out.push_str("}\n");
     out
 }
@@ -240,6 +257,9 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     }
     for i in 0..process_info.compressor_count {
         fields.push(format!("compressor_state_{}: CompressorState::default()", i));
+    }
+    for i in 0..process_info.eq_biquad_count {
+        fields.push(format!("eq_biquad_state_{}: BiquadState::default()", i));
     }
     if fields.is_empty() {
         String::new()

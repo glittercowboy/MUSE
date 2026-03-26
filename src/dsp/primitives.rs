@@ -24,6 +24,14 @@ pub enum FilterKind {
     Notch,
 }
 
+/// EQ/Shelving filter variants (per-call-site biquad state).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EqKind {
+    PeakEq,
+    LowShelf,
+    HighShelf,
+}
+
 /// Envelope variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EnvKind {
@@ -57,6 +65,7 @@ pub enum DspPrimitive {
     Chorus,
     SemitonesToRatio,
     Compressor,
+    EqFilter(EqKind),
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -276,6 +285,40 @@ pub fn builtin_registry() -> DspRegistry {
             ],
             return_type: DspType::Processor,
             primitive: DspPrimitive::Compressor,
+        },
+        // ── EQ / Shelving filters (per-call-site biquad state) ──
+        // peak_eq(freq: Frequency, gain_db: Gain, q: Number) → Processor
+        DspFunction {
+            name: "peak_eq".into(),
+            params: vec![
+                param("freq", DspType::Frequency),
+                param("gain_db", DspType::Gain),
+                optional_param("q", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::EqFilter(EqKind::PeakEq),
+        },
+        // low_shelf(freq: Frequency, gain_db: Gain, q: Number) → Processor
+        DspFunction {
+            name: "low_shelf".into(),
+            params: vec![
+                param("freq", DspType::Frequency),
+                param("gain_db", DspType::Gain),
+                optional_param("q", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::EqFilter(EqKind::LowShelf),
+        },
+        // high_shelf(freq: Frequency, gain_db: Gain, q: Number) → Processor
+        DspFunction {
+            name: "high_shelf".into(),
+            params: vec![
+                param("freq", DspType::Frequency),
+                param("gain_db", DspType::Gain),
+                optional_param("q", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::EqFilter(EqKind::HighShelf),
         },
     ];
 

@@ -8,7 +8,7 @@
 
 use std::collections::HashSet;
 
-use crate::dsp::primitives::{DspPrimitive, EnvKind, FilterKind, OscKind};
+use crate::dsp::primitives::{DspPrimitive, EnvKind, EqKind, FilterKind, OscKind};
 
 /// Generate DSP helper code for the set of primitives used in the plugin.
 ///
@@ -30,7 +30,19 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
     });
     let needs_any_biquad = needs_lowpass || needs_bandpass || needs_highpass || needs_notch;
 
-    if needs_any_biquad {
+    // EQ/shelving filters also use BiquadState
+    let needs_peak_eq = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::EqFilter(EqKind::PeakEq))
+    });
+    let needs_low_shelf = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::EqFilter(EqKind::LowShelf))
+    });
+    let needs_high_shelf = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::EqFilter(EqKind::HighShelf))
+    });
+    let needs_any_eq_biquad = needs_peak_eq || needs_low_shelf || needs_high_shelf;
+
+    if needs_any_biquad || needs_any_eq_biquad {
         out.push_str(&generate_biquad_state());
         out.push('\n');
     }
@@ -52,6 +64,22 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
 
     if needs_notch {
         out.push_str(&generate_process_biquad_notch());
+        out.push('\n');
+    }
+
+    // ── EQ / Shelving biquad filters ─────────────────────────
+    if needs_peak_eq {
+        out.push_str(&generate_process_biquad_peak_eq());
+        out.push('\n');
+    }
+
+    if needs_low_shelf {
+        out.push_str(&generate_process_biquad_low_shelf());
+        out.push('\n');
+    }
+
+    if needs_high_shelf {
+        out.push_str(&generate_process_biquad_high_shelf());
         out.push('\n');
     }
 
@@ -821,6 +849,129 @@ fn process_comb(state: &mut DelayLine, input: f32, delay_time: f32, feedback: f3
     // Write output back (feedback path)
     state.buffer[state.write_pos] = output;
     state.write_pos = (state.write_pos + 1) % buf_len;
+
+    output
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// EQ / Shelving biquad helpers (Audio EQ Cookbook)
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the process_biquad_peak_eq function using the Audio EQ Cookbook peakingEQ formula.
+fn generate_process_biquad_peak_eq() -> String {
+    r#"/// Process a single sample through a peaking EQ biquad filter.
+///
+/// `freq` is center frequency in Hz, `gain_db` is boost/cut in dB, `q` controls bandwidth.
+/// Audio EQ Cookbook: peakingEQ (H(s) = (s^2 + s*(A/Q) + 1) / (s^2 + s/(A*Q) + 1))
+fn process_biquad_peak_eq(state: &mut BiquadState, input: f32, freq: f32, gain_db: f32, q: f32, sample_rate: f32) -> f32 {
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let omega = 2.0 * std::f32::consts::PI * freq / sample_rate;
+    let sin_omega = omega.sin();
+    let cos_omega = omega.cos();
+    let alpha = sin_omega / (2.0 * q.max(0.001));
+
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_omega;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos_omega;
+    let a2 = 1.0 - alpha / a;
+
+    let b0 = b0 / a0;
+    let b1 = b1 / a0;
+    let b2 = b2 / a0;
+    let a1 = a1 / a0;
+    let a2 = a2 / a0;
+
+    let output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2;
+
+    state.x2 = state.x1;
+    state.x1 = input;
+    state.y2 = state.y1;
+    state.y1 = output;
+
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_biquad_low_shelf function using the Audio EQ Cookbook lowShelf formula.
+fn generate_process_biquad_low_shelf() -> String {
+    r#"/// Process a single sample through a low shelf biquad filter.
+///
+/// `freq` is shelf frequency in Hz, `gain_db` is boost/cut in dB, `q` controls slope.
+/// Audio EQ Cookbook: lowShelf
+fn process_biquad_low_shelf(state: &mut BiquadState, input: f32, freq: f32, gain_db: f32, q: f32, sample_rate: f32) -> f32 {
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let omega = 2.0 * std::f32::consts::PI * freq / sample_rate;
+    let sin_omega = omega.sin();
+    let cos_omega = omega.cos();
+    let alpha = sin_omega / (2.0 * q.max(0.001));
+    let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+
+    let b0 = a * ((a + 1.0) - (a - 1.0) * cos_omega + two_sqrt_a_alpha);
+    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos_omega);
+    let b2 = a * ((a + 1.0) - (a - 1.0) * cos_omega - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) + (a - 1.0) * cos_omega + two_sqrt_a_alpha;
+    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos_omega);
+    let a2 = (a + 1.0) + (a - 1.0) * cos_omega - two_sqrt_a_alpha;
+
+    let b0 = b0 / a0;
+    let b1 = b1 / a0;
+    let b2 = b2 / a0;
+    let a1 = a1 / a0;
+    let a2 = a2 / a0;
+
+    let output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2;
+
+    state.x2 = state.x1;
+    state.x1 = input;
+    state.y2 = state.y1;
+    state.y1 = output;
+
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_biquad_high_shelf function using the Audio EQ Cookbook highShelf formula.
+fn generate_process_biquad_high_shelf() -> String {
+    r#"/// Process a single sample through a high shelf biquad filter.
+///
+/// `freq` is shelf frequency in Hz, `gain_db` is boost/cut in dB, `q` controls slope.
+/// Audio EQ Cookbook: highShelf
+fn process_biquad_high_shelf(state: &mut BiquadState, input: f32, freq: f32, gain_db: f32, q: f32, sample_rate: f32) -> f32 {
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let omega = 2.0 * std::f32::consts::PI * freq / sample_rate;
+    let sin_omega = omega.sin();
+    let cos_omega = omega.cos();
+    let alpha = sin_omega / (2.0 * q.max(0.001));
+    let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+
+    let b0 = a * ((a + 1.0) + (a - 1.0) * cos_omega + two_sqrt_a_alpha);
+    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos_omega);
+    let b2 = a * ((a + 1.0) + (a - 1.0) * cos_omega - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) - (a - 1.0) * cos_omega + two_sqrt_a_alpha;
+    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos_omega);
+    let a2 = (a + 1.0) - (a - 1.0) * cos_omega - two_sqrt_a_alpha;
+
+    let b0 = b0 / a0;
+    let b1 = b1 / a0;
+    let b2 = b2 / a0;
+    let a1 = a1 / a0;
+    let a2 = a2 / a0;
+
+    let output = b0 * input + b1 * state.x1 + b2 * state.x2 - a1 * state.y1 - a2 * state.y2;
+
+    state.x2 = state.x1;
+    state.x1 = input;
+    state.y2 = state.y1;
+    state.y1 = output;
 
     output
 }

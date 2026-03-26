@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::ast::{
     BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp,
 };
-use crate::dsp::primitives::{DspPrimitive, EnvKind, OscKind};
+use crate::dsp::primitives::{DspPrimitive, EnvKind, EqKind, OscKind};
 
 pub const MAX_BLOCK_SIZE: usize = 64;
 
@@ -29,6 +29,7 @@ pub struct ProcessInfo {
     pub chorus_count: usize,
     pub compressor_count: usize,
     pub delay_count: usize,
+    pub eq_biquad_count: usize,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> (String, ProcessInfo) {
@@ -51,6 +52,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     chorus_count: 0,
                     compressor_count: 0,
                     delay_count: 0,
+                    eq_biquad_count: 0,
                 },
             )
         }
@@ -75,6 +77,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let chorus_count = ctx.chorus_counter;
     let compressor_count = ctx.compressor_counter;
     let delay_count = ctx.delay_counter;
+    let eq_biquad_count = ctx.eq_biquad_counter;
 
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
@@ -89,7 +92,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     } else {
         ctx.used_primitives
             .iter()
-            .any(|p| matches!(p, DspPrimitive::Filter(_)))
+            .any(|p| matches!(p, DspPrimitive::Filter(_) | DspPrimitive::EqFilter(_)))
     };
 
     let info = ProcessInfo {
@@ -104,6 +107,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         chorus_count,
         compressor_count,
         delay_count,
+        eq_biquad_count,
     };
 
     (process_body, info)
@@ -209,7 +213,7 @@ fn generate_effect_process(ctx: &ProcessContext, stmt_lines: &[String]) -> Strin
     let needs_channel_idx = ctx
         .used_primitives
         .iter()
-        .any(|p| matches!(p, DspPrimitive::Filter(_)));
+        .any(|p| matches!(p, DspPrimitive::Filter(_) | DspPrimitive::EqFilter(_)));
 
     out.push_str("        for channel_samples in buffer.iter_samples() {\n");
 
@@ -267,6 +271,7 @@ struct ProcessContext {
     chorus_counter: usize,
     compressor_counter: usize,
     delay_counter: usize,
+    eq_biquad_counter: usize,
     is_instrument: bool,
     is_polyphonic: bool,
 }
@@ -286,6 +291,7 @@ impl ProcessContext {
             chorus_counter: 0,
             compressor_counter: 0,
             delay_counter: 0,
+            eq_biquad_counter: 0,
             is_instrument: false,
             is_polyphonic: false,
         }
@@ -447,6 +453,9 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "mod_delay" => generate_mod_delay_call_with_input(input_code, args, ctx),
                 "allpass" => generate_allpass_call_with_input(input_code, args, ctx),
                 "comb" => generate_comb_call_with_input(input_code, args, ctx),
+                "peak_eq" => generate_eq_call_with_input(input_code, "peak_eq", args, ctx),
+                "low_shelf" => generate_eq_call_with_input(input_code, "low_shelf", args, ctx),
+                "high_shelf" => generate_eq_call_with_input(input_code, "high_shelf", args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -786,6 +795,9 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "mod_delay" => return generate_mod_delay_call_with_input("*sample", args, ctx),
                     "allpass" => return generate_allpass_call_with_input("*sample", args, ctx),
                     "comb" => return generate_comb_call_with_input("*sample", args, ctx),
+                    "peak_eq" => return generate_eq_call_with_input("*sample", "peak_eq", args, ctx),
+                    "low_shelf" => return generate_eq_call_with_input("*sample", "low_shelf", args, ctx),
+                    "high_shelf" => return generate_eq_call_with_input("*sample", "high_shelf", args, ctx),
                     "adsr" => return generate_adsr_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
@@ -1272,5 +1284,61 @@ fn generate_comb_call_with_input(
     format!(
         "process_comb(&mut {}, {}, {}, {}, self.sample_rate)",
         state_target, input_code, delay_time, feedback
+    )
+}
+
+fn generate_eq_call_with_input(
+    input_code: &str,
+    eq_name: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    let eq_kind = match eq_name {
+        "peak_eq" => EqKind::PeakEq,
+        "low_shelf" => EqKind::LowShelf,
+        "high_shelf" => EqKind::HighShelf,
+        _ => EqKind::PeakEq,
+    };
+    ctx.used_primitives.insert(DspPrimitive::EqFilter(eq_kind));
+
+    let eq_idx = ctx.eq_biquad_counter;
+    ctx.eq_biquad_counter += 1;
+
+    let freq = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "1000.0_f32".to_string()
+    };
+
+    let gain_db = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.0_f32".to_string()
+    };
+
+    let q = if args.len() > 2 {
+        generate_expr_as_param(&args[2].0, ctx)
+    } else {
+        "0.707_f32".to_string()
+    };
+
+    let state_field = if ctx.is_polyphonic {
+        format!("voice.eq_biquad_state_{}", eq_idx)
+    } else if ctx.is_instrument {
+        format!("self.eq_biquad_state_{}[0]", eq_idx)
+    } else {
+        format!("self.eq_biquad_state_{}[channel_idx]", eq_idx)
+    };
+
+    let fn_name = match eq_name {
+        "peak_eq" => "process_biquad_peak_eq",
+        "low_shelf" => "process_biquad_low_shelf",
+        "high_shelf" => "process_biquad_high_shelf",
+        _ => "process_biquad_peak_eq",
+    };
+
+    format!(
+        "{}(&mut {}, {}, {}, {}, {}, self.sample_rate)",
+        fn_name, state_field, input_code, freq, gain_db, q
     )
 }
