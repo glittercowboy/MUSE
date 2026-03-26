@@ -7,11 +7,12 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_24_functions() {
+fn registry_contains_all_27_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
-        "adsr", "ar", "gain", "pan", "delay", "mix", "clip", "tanh",
+        "adsr", "ar", "gain", "pan", "delay", "mod_delay", "allpass", "comb",
+        "mix", "clip", "tanh",
         "fold", "bitcrush", "lfo", "pulse", "chorus", "compressor", "semitones_to_ratio",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
@@ -256,6 +257,37 @@ fn compressor_signature() {
     assert_param(&f.params[1], "ratio", DspType::Number, false);
     assert_eq!(f.return_type, DspType::Processor);
     assert_eq!(f.primitive, DspPrimitive::Compressor);
+}
+
+#[test]
+fn mod_delay_signature() {
+    let f = lookup("mod_delay");
+    assert_eq!(f.params.len(), 3);
+    assert_param(&f.params[0], "time", DspType::Time, false);
+    assert_param(&f.params[1], "depth", DspType::Number, false);
+    assert_param(&f.params[2], "rate", DspType::Frequency, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::ModDelay);
+}
+
+#[test]
+fn allpass_signature() {
+    let f = lookup("allpass");
+    assert_eq!(f.params.len(), 2);
+    assert_param(&f.params[0], "time", DspType::Time, false);
+    assert_param(&f.params[1], "feedback", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Allpass);
+}
+
+#[test]
+fn comb_signature() {
+    let f = lookup("comb");
+    assert_eq!(f.params.len(), 2);
+    assert_param(&f.params[0], "time", DspType::Time, false);
+    assert_param(&f.params[1], "feedback", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Comb);
 }
 
 // ── Type compatibility ───────────────────────────────────────

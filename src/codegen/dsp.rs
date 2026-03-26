@@ -141,13 +141,31 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
 
     // ── Delay ────────────────────────────────────────────────
     let needs_delay = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Delay)
+        matches!(p, DspPrimitive::Delay | DspPrimitive::ModDelay | DspPrimitive::Allpass | DspPrimitive::Comb)
     });
 
     if needs_delay {
         out.push_str(&generate_delay_state());
         out.push('\n');
+    }
+
+    if used_primitives.contains(&DspPrimitive::Delay) {
         out.push_str(&generate_process_delay());
+        out.push('\n');
+    }
+
+    if used_primitives.contains(&DspPrimitive::ModDelay) {
+        out.push_str(&generate_process_mod_delay());
+        out.push('\n');
+    }
+
+    if used_primitives.contains(&DspPrimitive::Allpass) {
+        out.push_str(&generate_process_allpass());
+        out.push('\n');
+    }
+
+    if used_primitives.contains(&DspPrimitive::Comb) {
+        out.push_str(&generate_process_comb());
         out.push('\n');
     }
 
@@ -642,6 +660,7 @@ pub fn generate_delay_state() -> String {
 struct DelayLine {
     buffer: Vec<f32>,
     write_pos: usize,
+    lfo_phase: f32,
 }
 
 impl Default for DelayLine {
@@ -649,6 +668,7 @@ impl Default for DelayLine {
         Self {
             buffer: Vec::new(),
             write_pos: 0,
+            lfo_phase: 0.0,
         }
     }
 }
@@ -658,6 +678,7 @@ impl DelayLine {
         let max_samples = (5.0_f32 * sample_rate) as usize;
         self.buffer.resize(max_samples, 0.0);
         self.write_pos = 0;
+        self.lfo_phase = 0.0;
     }
 }
 "#
@@ -691,6 +712,117 @@ fn process_delay(state: &mut DelayLine, input: f32, delay_time: f32, sample_rate
     let idx1 = (idx0 + 1) % buf_len;
     let frac = read_pos.fract();
     state.buffer[idx0] * (1.0 - frac) + state.buffer[idx1] * frac
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_mod_delay function (delay with LFO-modulated read position).
+pub fn generate_process_mod_delay() -> String {
+    r#"/// Process one sample through a modulated delay line.
+///
+/// Like delay() but with an internal LFO modulating the read position.
+/// `delay_time` is center delay in seconds, `depth` controls modulation amount (0..1),
+/// `rate` is LFO frequency in Hz. Uses linear interpolation for fractional reads.
+fn process_mod_delay(state: &mut DelayLine, input: f32, delay_time: f32, depth: f32, rate: f32, sample_rate: f32) -> f32 {
+    if state.buffer.is_empty() {
+        return input;
+    }
+    let buf_len = state.buffer.len();
+
+    // Write input
+    state.buffer[state.write_pos] = input;
+    state.write_pos = (state.write_pos + 1) % buf_len;
+
+    // Internal LFO for read-position modulation
+    let lfo = (state.lfo_phase * std::f32::consts::TAU).sin();
+    state.lfo_phase += rate / sample_rate;
+    state.lfo_phase -= state.lfo_phase.floor();
+
+    // Modulate delay time
+    let center_samples = (delay_time * sample_rate).clamp(1.0, (buf_len - 1) as f32);
+    let mod_amount = center_samples * depth.clamp(0.0, 1.0);
+    let delay_samples = (center_samples + lfo * mod_amount).clamp(1.0, (buf_len - 1) as f32);
+
+    let read_pos = state.write_pos as f32 - delay_samples - 1.0;
+    let read_pos = if read_pos < 0.0 { read_pos + buf_len as f32 } else { read_pos };
+
+    // Linear interpolation
+    let idx0 = read_pos.floor() as usize % buf_len;
+    let idx1 = (idx0 + 1) % buf_len;
+    let frac = read_pos.fract();
+    state.buffer[idx0] * (1.0 - frac) + state.buffer[idx1] * frac
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_allpass function (Schroeder allpass filter).
+pub fn generate_process_allpass() -> String {
+    r#"/// Process one sample through a Schroeder allpass filter.
+///
+/// output = -input*g + delayed + g*feedback. Building block for phasers and reverbs.
+/// `delay_time` is in seconds, `feedback` is the allpass coefficient (typically 0.0..0.9).
+fn process_allpass(state: &mut DelayLine, input: f32, delay_time: f32, feedback: f32, sample_rate: f32) -> f32 {
+    if state.buffer.is_empty() {
+        return input;
+    }
+    let buf_len = state.buffer.len();
+
+    // Read delayed sample
+    let delay_samples = (delay_time * sample_rate).clamp(0.0, (buf_len - 1) as f32);
+    let read_pos = state.write_pos as f32 - delay_samples;
+    let read_pos = if read_pos < 0.0 { read_pos + buf_len as f32 } else { read_pos };
+    let idx0 = read_pos.floor() as usize % buf_len;
+    let idx1 = (idx0 + 1) % buf_len;
+    let frac = read_pos.fract();
+    let delayed = state.buffer[idx0] * (1.0 - frac) + state.buffer[idx1] * frac;
+
+    // Schroeder allpass: output = -g*input + delayed + g*(delayed fed back)
+    let g = feedback.clamp(-0.99, 0.99);
+    let output = -g * input + delayed;
+    let write_val = input + g * delayed;
+
+    // Write to buffer
+    state.buffer[state.write_pos] = write_val;
+    state.write_pos = (state.write_pos + 1) % buf_len;
+
+    output
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_comb function (feedback comb filter).
+pub fn generate_process_comb() -> String {
+    r#"/// Process one sample through a feedback comb filter.
+///
+/// output = input + delayed * feedback. The output feeds back into the buffer.
+/// Building block for Karplus-Strong and reverb.
+/// `delay_time` is in seconds, `feedback` controls decay (typically 0.0..0.99).
+fn process_comb(state: &mut DelayLine, input: f32, delay_time: f32, feedback: f32, sample_rate: f32) -> f32 {
+    if state.buffer.is_empty() {
+        return input;
+    }
+    let buf_len = state.buffer.len();
+
+    // Read delayed sample
+    let delay_samples = (delay_time * sample_rate).clamp(0.0, (buf_len - 1) as f32);
+    let read_pos = state.write_pos as f32 - delay_samples;
+    let read_pos = if read_pos < 0.0 { read_pos + buf_len as f32 } else { read_pos };
+    let idx0 = read_pos.floor() as usize % buf_len;
+    let idx1 = (idx0 + 1) % buf_len;
+    let frac = read_pos.fract();
+    let delayed = state.buffer[idx0] * (1.0 - frac) + state.buffer[idx1] * frac;
+
+    // Comb filter: output = input + delayed * feedback
+    let output = input + delayed * feedback.clamp(-0.99, 0.99);
+
+    // Write output back (feedback path)
+    state.buffer[state.write_pos] = output;
+    state.write_pos = (state.write_pos + 1) % buf_len;
+
+    output
 }
 "#
     .to_string()

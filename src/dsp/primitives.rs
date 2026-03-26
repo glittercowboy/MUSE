@@ -43,6 +43,9 @@ pub enum DspPrimitive {
     Gain,
     Pan,
     Delay,
+    ModDelay,
+    Allpass,
+    Comb,
     Mix,
     Clip,
     Tanh,
@@ -156,6 +159,37 @@ pub fn builtin_registry() -> DspRegistry {
             params: vec![param("time", DspType::Time)],
             return_type: DspType::Processor,
             primitive: DspPrimitive::Delay,
+        },
+        // mod_delay(time: Time, depth: Number, rate: Frequency) → Processor
+        DspFunction {
+            name: "mod_delay".into(),
+            params: vec![
+                param("time", DspType::Time),
+                param("depth", DspType::Number),
+                param("rate", DspType::Frequency),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::ModDelay,
+        },
+        // allpass(time: Time, feedback: Number) → Processor
+        DspFunction {
+            name: "allpass".into(),
+            params: vec![
+                param("time", DspType::Time),
+                param("feedback", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Allpass,
+        },
+        // comb(time: Time, feedback: Number) → Processor
+        DspFunction {
+            name: "comb".into(),
+            params: vec![
+                param("time", DspType::Time),
+                param("feedback", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Comb,
         },
         // mix(dry: Signal, wet: Signal) → Signal
         DspFunction {

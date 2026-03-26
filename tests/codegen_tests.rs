@@ -1604,3 +1604,201 @@ fn codegen_delay_cargo_check() {
 
     assert_cargo_check(&crate_dir);
 }
+
+#[test]
+fn codegen_allpass_cargo_check() {
+    let source = r#"plugin "Phaser FX" {
+    vendor "Test Audio"
+    version "0.1.0"
+    url "https://test.dev"
+    email "test@test.dev"
+    category effect
+
+    clap {
+        id "dev.test.phaser-fx"
+        description "Simple phaser using chained allpass stages"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestPhaserFX0001"
+        subcategories [Fx, Modulation]
+    }
+
+    input stereo
+    output stereo
+
+    param time_val: float = 0.005 in 0.001..0.05 {
+        unit "s"
+    }
+
+    param feedback_amt: float = 0.7 in 0.0..0.95
+
+    process {
+        input -> allpass(param.time_val, param.feedback_amt) -> allpass(param.time_val, param.feedback_amt) -> output
+    }
+}"#;
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-allpass");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("struct DelayLine"),
+        "Generated code should contain DelayLine struct"
+    );
+    assert!(
+        lib_rs.contains("process_allpass("),
+        "Generated code should contain process_allpass function"
+    );
+    assert!(
+        lib_rs.contains("delay_state_0"),
+        "Generated code should contain delay_state_0 field"
+    );
+    assert!(
+        lib_rs.contains("delay_state_1"),
+        "Two allpass calls should produce delay_state_1"
+    );
+    assert!(
+        lib_rs.contains(".allocate("),
+        "Generated code should contain allocate() call in initialize()"
+    );
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn codegen_comb_cargo_check() {
+    let source = r#"plugin "Comb FX" {
+    vendor "Test Audio"
+    version "0.1.0"
+    url "https://test.dev"
+    email "test@test.dev"
+    category effect
+
+    clap {
+        id "dev.test.comb-fx"
+        description "Comb filter effect"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestCombFilter01"
+        subcategories [Fx, Filter]
+    }
+
+    input stereo
+    output stereo
+
+    param time_val: float = 0.01 in 0.001..0.1 {
+        unit "s"
+    }
+
+    param feedback_amt: float = 0.8 in 0.0..0.99
+
+    process {
+        input -> comb(param.time_val, param.feedback_amt) -> output
+    }
+}"#;
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-comb");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("struct DelayLine"),
+        "Generated code should contain DelayLine struct"
+    );
+    assert!(
+        lib_rs.contains("process_comb("),
+        "Generated code should contain process_comb function"
+    );
+    assert!(
+        lib_rs.contains("delay_state_0"),
+        "Generated code should contain delay_state_0 field"
+    );
+    assert!(
+        lib_rs.contains(".allocate("),
+        "Generated code should contain allocate() call in initialize()"
+    );
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
+fn codegen_mod_delay_cargo_check() {
+    let source = r#"plugin "ModDelay FX" {
+    vendor "Test Audio"
+    version "0.1.0"
+    url "https://test.dev"
+    email "test@test.dev"
+    category effect
+
+    clap {
+        id "dev.test.mod-delay-fx"
+        description "Modulated delay effect"
+        features [audio_effect, stereo]
+    }
+
+    vst3 {
+        id "TestModDelay0001"
+        subcategories [Fx, Delay]
+    }
+
+    input stereo
+    output stereo
+
+    param time_val: float = 0.3 in 0.01..2.0 {
+        unit "s"
+    }
+
+    param depth_val: float = 0.5 in 0.0..1.0
+    param rate_val: float = 0.5 in 0.1..10.0
+
+    process {
+        input -> mod_delay(param.time_val, param.depth_val, param.rate_val) -> output
+    }
+}"#;
+
+    let tmp = std::env::temp_dir().join("muse-codegen-test-mod-delay");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert!(crate_dir.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(crate_dir.join("src/lib.rs").exists(), "src/lib.rs missing");
+
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+    assert!(
+        lib_rs.contains("struct DelayLine"),
+        "Generated code should contain DelayLine struct"
+    );
+    assert!(
+        lib_rs.contains("process_mod_delay("),
+        "Generated code should contain process_mod_delay function"
+    );
+    assert!(
+        lib_rs.contains("lfo_phase"),
+        "DelayLine should contain lfo_phase field for mod_delay"
+    );
+    assert!(
+        lib_rs.contains("delay_state_0"),
+        "Generated code should contain delay_state_0 field"
+    );
+    assert!(
+        lib_rs.contains(".allocate("),
+        "Generated code should contain allocate() call in initialize()"
+    );
+
+    assert_cargo_check(&crate_dir);
+}

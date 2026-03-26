@@ -444,6 +444,9 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "chorus" => generate_chorus_call_with_input(input_code, args, ctx),
                 "compressor" => generate_compressor_call_with_input(input_code, args, ctx),
                 "delay" => generate_delay_call_with_input(input_code, args, ctx),
+                "mod_delay" => generate_mod_delay_call_with_input(input_code, args, ctx),
+                "allpass" => generate_allpass_call_with_input(input_code, args, ctx),
+                "comb" => generate_comb_call_with_input(input_code, args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -780,6 +783,9 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         return generate_compressor_call_with_input("*sample", args, ctx)
                     }
                     "delay" => return generate_delay_call_with_input("*sample", args, ctx),
+                    "mod_delay" => return generate_mod_delay_call_with_input("*sample", args, ctx),
+                    "allpass" => return generate_allpass_call_with_input("*sample", args, ctx),
+                    "comb" => return generate_comb_call_with_input("*sample", args, ctx),
                     "adsr" => return generate_adsr_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
@@ -1158,5 +1164,113 @@ fn generate_delay_call_with_input(
     format!(
         "process_delay(&mut {}, {}, {}, self.sample_rate)",
         state_target, input_code, delay_time
+    )
+}
+
+fn generate_mod_delay_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::ModDelay);
+
+    let delay_idx = ctx.delay_counter;
+    ctx.delay_counter += 1;
+
+    let delay_time = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    let depth = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    let rate = if args.len() > 2 {
+        generate_expr_as_param(&args[2].0, ctx)
+    } else {
+        "1.0_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.delay_state_{}", delay_idx)
+    } else {
+        format!("self.delay_state_{}", delay_idx)
+    };
+
+    format!(
+        "process_mod_delay(&mut {}, {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, delay_time, depth, rate
+    )
+}
+
+fn generate_allpass_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Allpass);
+
+    let delay_idx = ctx.delay_counter;
+    ctx.delay_counter += 1;
+
+    let delay_time = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.01_f32".to_string()
+    };
+
+    let feedback = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.7_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.delay_state_{}", delay_idx)
+    } else {
+        format!("self.delay_state_{}", delay_idx)
+    };
+
+    format!(
+        "process_allpass(&mut {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, delay_time, feedback
+    )
+}
+
+fn generate_comb_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Comb);
+
+    let delay_idx = ctx.delay_counter;
+    ctx.delay_counter += 1;
+
+    let delay_time = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.01_f32".to_string()
+    };
+
+    let feedback = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "0.7_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.delay_state_{}", delay_idx)
+    } else {
+        format!("self.delay_state_{}", delay_idx)
+    };
+
+    format!(
+        "process_comb(&mut {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, delay_time, feedback
     )
 }
