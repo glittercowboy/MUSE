@@ -3,7 +3,7 @@
 - ../references/dsp-primitives.md — All 24 DSP functions with signatures, types, and usage examples
 - ../references/test-syntax.md — Test block grammar, signal types, assertions, JSON output format
 - ../references/cli-commands.md — `muse check`, `muse test`, `muse build`, `muse preview` with flags and exit codes
-- ../references/plugin-recipes.md — 14 annotated patterns (gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth, poly, MPE, unison, GUI Tier 1, GUI Tier 2) to use as starting points
+- ../references/plugin-recipes.md — 21 annotated patterns (gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth, poly, MPE, unison, GUI Tier 1, GUI Tier 2, echo, EQ, gate, phaser, drum machine, wavetable synth, looping sampler) to use as starting points
 </required_reading>
 
 <process>
@@ -45,6 +45,9 @@ Select the closest recipe from plugin-recipes.md:
 | Thick unison sound | Recipe 12 (Unison Synth) — `unison { count 3 detune 15 }` |
 | Plugin with custom themed GUI (auto-layout) | Recipe 13 (GUI Effect — Tier 1) — add `gui { theme accent }` |
 | Plugin with explicit layout and visualizations | Recipe 14 (GUI with Layout — Tier 2) — `gui { layout { panel { widgets } } }` |
+| Sample-based drum machine | Recipe 19 (Drum Machine) — `sample` + `play()` + `note.number` dispatch |
+| Wavetable synthesizer | Recipe 20 (Wavetable Synth) — `wavetable` + `wavetable_osc()` |
+| Looping sample instrument | Recipe 21 (Looping Sampler) — `sample` + `loop()` continuous playback |
 
 Copy the recipe's structure as your starting skeleton. Modify the metadata, params, process block, and tests.
 
@@ -74,21 +77,26 @@ plugin "Plugin Name" {
   input  stereo
   output stereo
 
-  // 4. MIDI block (instruments only)
+  // 4. Sample/wavetable declarations (instruments only, if needed)
+  // sample kick "samples/kick.wav"
+  // sample pad "samples/pad.wav" external
+  // wavetable wt "samples/saw_stack.wav"
+
+  // 5. MIDI block (instruments only)
   // midi { note { let freq = note.pitch ... } }
 
-  // 5. Parameters
+  // 6. Parameters
   param name: float = default in min..max {
     smoothing linear 10ms
     unit "Hz"
   }
 
-  // 6. Process block
+  // 7. Process block
   process {
     input -> dsp_chain -> output
   }
 
-  // 7. Test blocks (added in Step 4)
+  // 8. Test blocks (added in Step 4)
 }
 ```
 
@@ -100,6 +108,30 @@ plugin "Plugin Name" {
 - Instruments need a `midi { note { ... } }` block.
 - All param references in process/test use `param.name` syntax.
 - Unit suffixes attach directly to numbers: `440Hz`, `50ms`, `-12dB`. No space.
+
+### Sample-Based Instruments
+
+If the user wants a drum machine, sampler, or sample-based instrument:
+
+1. **Prepare WAV files.** Place them in a `samples/` directory next to the `.muse` file. Only WAV format is supported.
+2. **Declare samples.** Add `sample <name> "<path>"` lines before the `midi` block. Use `external` keyword if samples should be loaded at runtime instead of embedded in the binary.
+3. **Use `note.number` for dispatch.** In the process block, use `if note.number == 36.0 { play(kick) } else if ...` to map MIDI notes to samples. Standard GM drum map: 36=kick, 38=snare, 42=hihat.
+4. **Choose `play()` or `loop()`:**
+   - `play(sample)` — one-shot playback, stops at end. Use for drums, SFX.
+   - `loop(sample)` — continuous playback, wraps at end. Use for pads, textures, sustained sounds.
+   - `loop(sample, start, end)` — loop within a region.
+5. **Add `voices N`** for polyphonic sample overlap (e.g., multiple drum hits ringing simultaneously).
+
+See Recipe 19 (Drum Machine), Recipe 20 (Wavetable Synth), and Recipe 21 (Looping Sampler) for complete examples.
+
+### Wavetable Instruments
+
+If the user wants a wavetable synth:
+
+1. **Prepare a wavetable WAV.** The file contains concatenated single-cycle frames. Default frame size: 2048 samples. A 4-frame wavetable is 8192 samples.
+2. **Declare the wavetable:** `wavetable wt "samples/saw_stack.wav"`
+3. **Use `wavetable_osc(wt, note.pitch, param.position)`** in the process block. `note.pitch` for frequency tracking, a float param (0.0–1.0) for position morphing.
+4. **Combine with other DSP** — add `adsr()` for envelopes, `lowpass()` for filtering, `gain()` for velocity sensitivity.
 
 ## Step 3.5: Add GUI Block (Optional)
 

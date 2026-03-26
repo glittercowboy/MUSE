@@ -190,6 +190,7 @@ Feedback creates a loop with implicit one-sample delay. Body must be a `Signal �
 | `note.pressure` | Number | `midi > note` block (MPE per-note pressure, 0.0–1.0) |
 | `note.bend` | Number | `midi > note` block (MPE per-note pitch bend, semitones) |
 | `note.slide` | Number | `midi > note` block (MPE per-note slide/brightness, 0.0–1.0) |
+| `note.number` | Number | `midi > note` block (MIDI note number as float, 0–127) |
 | `cc.value` | Number | `midi > cc N` block |
 
 ## MIDI Block (Instruments)
@@ -247,6 +248,52 @@ unison {
 ## GUI Block
 
 Add a `gui { }` block to declare a custom web-view editor for your plugin. Without a gui block, the host's generic parameter UI is used.
+
+## Sample Declarations
+
+Declare audio samples for playback with `play()` and `loop()`:
+
+```muse
+sample kick "samples/kick.wav"
+sample pad "samples/pad.wav"
+sample hihat "samples/hihat.wav" external
+```
+
+### Syntax
+
+- **Embedded (default):** `sample <name> "<path>"` — The WAV file is read at compile time and embedded into the plugin binary via `include_bytes!`. The path is resolved relative to the `.muse` file's directory and must exist at compile time.
+- **External:** `sample <name> "<path>" external` — The WAV file is loaded at runtime when the plugin initializes. The path is stored as-is and resolved relative to the host's current working directory. The file does not need to exist at compile time.
+
+### Rules
+
+- Names must be unique within the plugin. E015 if a duplicate sample name is declared.
+- Only WAV format is supported. No MP3, OGG, or FLAC.
+- No sample rate conversion — if the WAV sample rate differs from the host, playback speed will vary.
+- Sample names are used as arguments to `play()` and `loop()`. E003 if an unknown name is used.
+
+## Wavetable Declarations
+
+Declare wavetables for pitched oscillator playback with `wavetable_osc()`:
+
+```muse
+wavetable wt "samples/saw_stack.wav"
+wavetable morphing "samples/morph_table.wav" external
+```
+
+### Syntax
+
+- **Embedded (default):** `wavetable <name> "<path>"` — The WAV file is read at compile time and embedded into the plugin binary. Path resolved relative to `.muse` file.
+- **External:** `wavetable <name> "<path>" external` — Loaded at runtime from the host's CWD.
+
+### Wavetable Format
+
+The WAV file contains concatenated single-cycle waveform frames. Default frame size: 2048 samples. For example, a WAV with 8192 samples contains 4 frames (8192 / 2048). The `wavetable_osc()` position parameter (0.0–1.0) morphs between these frames.
+
+### Rules
+
+- Names must be unique within the plugin. E015 if a duplicate wavetable name is declared.
+- Only WAV format is supported.
+- Wavetable names are used as the first argument to `wavetable_osc()`. E003 if unknown.
 
 ### Tier Detection
 

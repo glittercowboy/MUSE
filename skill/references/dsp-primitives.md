@@ -307,3 +307,70 @@ let osc = saw(bent_freq)
 | Utilities (7) | `gain`, `pan`, `mix`, `crossfade`, `dc_block`, `sample_and_hold`, `semitones_to_ratio` |
 
 **Total: 37 functions**
+
+## Sample Playback
+
+Play back declared audio samples. These are **audio primitives** — they operate on named `sample` declarations, not on the DSP registry. Requires a `sample <name> "<path>"` declaration in the plugin.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `play(sample)` | `SampleName → Signal` | One-shot playback. Plays the named sample once from start to end, then outputs silence. Resets on each NoteOn. |
+| `loop(sample)` | `SampleName → Signal` | Looped playback. Wraps position back to the beginning when end is reached, producing continuous output while the note is held. |
+| `loop(sample, start, end)` | `SampleName, Number, Number → Signal` | Looped playback with start/end range. Position wraps within [start, end) as float sample positions. |
+
+### Usage
+
+```muse
+// One-shot drum hit — plays the sample once per note
+sample kick "samples/kick.wav"
+// ... in process:
+play(kick) -> gain(note.velocity) -> output
+
+// Continuous loop — wraps when end is reached
+sample pad "samples/pad.wav"
+// ... in process:
+loop(pad) -> gain(note.velocity) -> output
+
+// Looped with specific region
+loop(pad, 1000.0, 5000.0) -> output
+```
+
+- `play()` outputs silence after the sample ends — use for drums, one-shot SFX.
+- `loop()` wraps position to 0.0 at end — use for sustained pads, textures, loops.
+- `loop(sample, start, end)` wraps position to `start` at `end` — use for loop regions within a sample.
+- All three reset their position to 0.0 on each MIDI NoteOn event.
+- The sample name must match a declared `sample` in the plugin. E003 if unknown.
+
+## Wavetable
+
+Pitched wavetable oscillator with position morphing. This is an **audio primitive** — it operates on a named `wavetable` declaration, not on the DSP registry. Requires a `wavetable <name> "<path>"` declaration in the plugin.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `wavetable_osc(table, pitch, position)` | `WavetableName, Frequency, Number → Signal` | Wavetable oscillator with dual-axis interpolation. `pitch` tracks MIDI frequency, `position` (0.0–1.0) morphs between wavetable frames. |
+
+### Usage
+
+```muse
+// Declare a wavetable (WAV file with concatenated frames, default frame_size 2048)
+wavetable wt "samples/saw_stack.wav"
+
+// ... in process:
+let snd = wavetable_osc(wt, note.pitch, param.position)
+snd -> gain(note.velocity) -> output
+```
+
+- The WAV file contains concatenated single-cycle waveform frames. Default frame size: 2048 samples.
+- `pitch` controls playback frequency — typically `note.pitch` for MIDI tracking.
+- `position` (0.0–1.0) selects/interpolates between frames — use a param for timbral morphing.
+- Dual-axis interpolation: linear between adjacent frames (position axis) and between adjacent samples within a frame (pitch axis).
+- The wavetable name must match a declared `wavetable` in the plugin. E003 if unknown.
+
+## Audio Primitives Quick Reference
+
+| Category | Functions |
+|----------|-----------|
+| Sample Playback (3) | `play`, `loop` (1-arg), `loop` (3-arg) |
+| Wavetable (1) | `wavetable_osc` |
+
+**Total: 37 DSP functions + 4 audio primitive call forms (3 sample playback + 1 wavetable)**

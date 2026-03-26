@@ -18,6 +18,8 @@ plugin "Name" {
   // I/O: input stereo, output stereo
   // voices N                                (polyphony, instruments only)
   // unison { count N detune X }             (voice stacking, requires voices)
+  // sample name "path" [external]           (WAV sample declaration)
+  // wavetable name "path" [external]        (WAV wavetable declaration)
   // midi { note { ... } cc N { ... } }      (instruments only)
   // param name: type = default in min..max { smoothing/unit/display }
   // gui { theme/accent/size/layout/panel/widgets/css }  (custom editor)
@@ -31,7 +33,7 @@ Signal chains use `->` to pipe audio left-to-right:
 input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 ```
 
-24 built-in DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`, `semitones_to_ratio`.
+24 built-in DSP functions + 3 audio primitives: `play`, `loop`, `wavetable_osc`. DSP functions: `sine`, `saw`, `square`, `triangle`, `noise`, `pulse`, `lfo`, `lowpass`, `highpass`, `bandpass`, `notch`, `adsr`, `ar`, `gain`, `pan`, `delay`, `mix`, `clip`, `tanh`, `fold`, `bitcrush`, `chorus`, `compressor`, `semitones_to_ratio`. Audio primitives operate on declared samples/wavetables (not in the DSP registry).
 
 ## Key Constraints
 
@@ -42,7 +44,7 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 - **Unit suffixes on numbers:** `440Hz`, `50ms`, `0.5s`, `-12dB`, `50%`, `2st`. No space between number and suffix.
 - **`->` is lowest precedence.** Arithmetic binds tighter than signal chains.
 - **`split`/`merge` must pair.** Every `split { ... }` needs a `-> merge` in the same chain.
-- **Instruments need a `midi` block** with `note { ... }` to receive MIDI. Implicit bindings: `note.pitch`, `note.velocity`, `note.gate`, `note.pressure`, `note.bend`, `note.slide`.
+- **Instruments need a `midi` block** with `note { ... }` to receive MIDI. Implicit bindings: `note.pitch`, `note.velocity`, `note.gate`, `note.pressure`, `note.bend`, `note.slide`, `note.number`.
 - **`voices N` enables polyphony.** Process block runs per-voice. All DSP state is automatically per-voice. Requires `midi` block.
 - **`unison { count N detune X }` stacks voices.** Each note spawns N detuned voices. Requires `voices`.
 - **Process block implicit bindings:** `input`, `output`, `sample_rate`.
@@ -56,6 +58,9 @@ input -> lowpass(param.cutoff) -> gain(param.volume) -> output
 - **GUI editor crashes in VST3 hosts.** The web view editor (`gui { }` block) works in `muse preview` standalone mode but crashes when opened inside Ableton Live's VST3 host. Use `muse preview` to verify GUI appearance. Headless plugins (without `gui` block) work fine in all DAWs.
 - **`muse preview` audio input is macOS-only.** The `--input mic` option requires microphone permission (macOS will prompt on first use). The `--input file:<path>` option accepts WAV files only — mono or stereo, any sample rate (resampling not applied; a rate mismatch warning is printed).
 - **`muse preview` instruments ignore `--input`.** Only effect plugins use audio input routing. Instruments generate audio from MIDI — the `--input` flag is silently ignored for instrument plugins.
+- **WAV only for samples and wavetables.** No MP3, OGG, FLAC support.
+- **No sample rate conversion.** If WAV sample rate differs from host, playback speed varies.
+- **External mode loads samples relative to current working directory at plugin load time.** The host's CWD determines where external samples are found.
 
 ## CLI Quick Reference
 
@@ -145,9 +150,9 @@ If the user's intent is clear from their message, skip the question and route di
 |---|---|
 | `references/language-reference.md` | Complete syntax guide: plugin structure, params, process blocks, signal chains, routing, MIDI, GUI blocks, metadata, type system |
 | `references/test-syntax.md` | Test block grammar, signal types, assertion properties, operators, JSON output format |
-| `references/dsp-primitives.md` | All 24 DSP functions by category with signatures and descriptions |
-| `references/error-codes.md` | E001–E014 with causes and fix patterns |
+| `references/dsp-primitives.md` | All 37 DSP functions + 3 audio primitives (play, loop, wavetable_osc) by category with signatures and descriptions |
+| `references/error-codes.md` | E001–E015 with causes and fix patterns (E015: duplicate sample/wavetable names; E003: unknown sample/wavetable in play/loop/wavetable_osc) |
 | `references/cli-commands.md` | All 5 CLI commands with flags, exit codes, JSON output schemas |
-| `references/plugin-recipes.md` | 14 annotated example patterns: gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth, poly, MPE, unison, GUI (Tier 1), GUI (Tier 2) |
+| `references/plugin-recipes.md` | 21 annotated example patterns: gain, filter, synth, multiband, tremolo, distortion, chorus, dynamics, pulse synth, poly, MPE, unison, GUI (Tier 1), GUI (Tier 2), echo, EQ, gate, phaser, drum machine, wavetable synth, looping sampler |
 
 </routing>

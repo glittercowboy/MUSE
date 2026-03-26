@@ -1,6 +1,6 @@
 # Plugin Recipes
 
-18 annotated examples from the Muse codebase, showing common plugin patterns.
+21 annotated examples from the Muse codebase, showing common plugin patterns.
 
 ---
 
@@ -1326,6 +1326,250 @@ plugin "Phase Shift" {
 
 ---
 
+## Recipe 19: Drum Machine (Sample Playback)
+
+A sample-based drum machine — demonstrates `sample` declarations, `play()` one-shot playback, and `note.number` dispatch for mapping MIDI notes to different samples.
+
+**Pattern:** `sample` declarations + `note.number` conditionals + `play(sample)` → `gain(velocity)` → `output`
+
+**Source:** `examples/drum_machine.muse`
+
+```muse
+plugin "Drum Machine" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.drum-machine"
+    description "A sample-based drum machine"
+    features    [instrument, stereo]
+  }
+
+  vst3 {
+    id              "MuseDrumMach01"
+    subcategories   [Instrument]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  sample kick "samples/kick.wav"
+  sample snare "samples/snare.wav"
+  sample hihat "samples/hihat.wav"
+
+  midi {
+    note {
+      let num = note.number
+    }
+  }
+
+  process {
+    let snd = if note.number == 36.0 {
+      play(kick)
+    } else if note.number == 38.0 {
+      play(snare)
+    } else if note.number == 42.0 {
+      play(hihat)
+    } else {
+      0.0
+    }
+    snd -> gain(note.velocity) -> output
+  }
+
+  test "silence before any notes" {
+    input silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "kick on note 36" {
+    note on 36 0.8 at 0
+    note off 36 at 4096
+    input silence 8192 samples
+    assert output.rms > -40dB
+    assert no_nan
+  }
+
+  test "snare on note 38" {
+    note on 38 0.8 at 0
+    note off 38 at 4096
+    input silence 8192 samples
+    assert output.rms > -40dB
+  }
+}
+```
+
+**Key points:**
+- `sample kick "samples/kick.wav"` declares a named sample with an embedded WAV file path
+- Multiple samples can be declared — each gets a unique name (E015 if duplicated)
+- `note.number` is the raw MIDI note number as a float (0–127). Use it to dispatch different samples per key.
+- `play(kick)` plays the named sample once (one-shot) — it outputs silence after the sample ends
+- Standard drum mapping: 36 = kick, 38 = snare, 42 = hihat (General MIDI)
+- `voices 8` allows overlapping hits (e.g., hihat while kick is still ringing)
+- The `else { 0.0 }` fallback silences unmapped notes
+- `play()` resets position on every NoteOn — re-triggering a note restarts playback from the beginning
+
+---
+
+## Recipe 20: Wavetable Synth (Wavetable Oscillator)
+
+A pitched wavetable synthesizer — demonstrates `wavetable` declarations and `wavetable_osc()` with position morphing between frames.
+
+**Pattern:** `wavetable` declaration + `wavetable_osc(table, pitch, position)` → `gain(velocity)` → `output`
+
+**Source:** `examples/wavetable_synth.muse`
+
+```muse
+plugin "Wavetable Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.wavetable-synth"
+    description "A wavetable synthesizer with position morphing"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseWtSynth001"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  wavetable wt "samples/saw_stack.wav"
+
+  param position: float = 0.0 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel  = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  process {
+    let snd = wavetable_osc(wt, note.pitch, param.position)
+    snd -> gain(note.velocity) -> output
+  }
+
+  test "silence before notes" {
+    input silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "440Hz at position 0" {
+    note on 69 0.8 at 0
+    note off 69 at 4096
+    input silence 8192 samples
+    assert frequency 440Hz > -20dB
+    assert output.rms > -20dB
+    assert no_nan
+  }
+
+  test "position morphing produces output" {
+    set param.position = 0.75
+    note on 69 0.8 at 0
+    note off 69 at 4096
+    input silence 8192 samples
+    assert output.rms > -20dB
+    assert no_nan
+  }
+}
+```
+
+**Key points:**
+- `wavetable wt "samples/saw_stack.wav"` declares a named wavetable with a WAV file
+- The WAV contains concatenated single-cycle frames (default frame size: 2048 samples)
+- `wavetable_osc(wt, note.pitch, param.position)` — three arguments: table name, pitch (Frequency), position (0.0–1.0)
+- `note.pitch` tracks MIDI frequency — the oscillator plays at the correct pitch for each note
+- `param.position` morphs between wavetable frames — 0.0 is the first frame, 1.0 is the last
+- Dual-axis interpolation: linear between adjacent frames (position) and between samples within a frame (pitch)
+- Combine with `adsr()` envelope and `lowpass()` for a full subtractive wavetable synth
+- Wavetable name must match a declared `wavetable` — E003 if unknown
+
+---
+
+## Recipe 21: Looping Sampler (Continuous Loop Playback)
+
+A looping sample playback instrument — demonstrates `loop()` for continuous playback that wraps at the sample end, unlike `play()` which stops.
+
+**Pattern:** `sample` declaration + `loop(sample)` → `gain(velocity)` → `output`
+
+**Source:** `examples/looping_sampler.muse`
+
+```muse
+plugin "Looping Sampler" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.looping-sampler"
+    description "A looping sample playback instrument"
+    features    [instrument, stereo]
+  }
+
+  vst3 {
+    id              "MuseLoopSamp01"
+    subcategories   [Instrument]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  sample pad "samples/kick.wav"
+
+  midi {
+    note {}
+  }
+
+  process {
+    loop(pad) -> gain(note.velocity) -> output
+  }
+
+  test "silence before notes" {
+    input silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "loop produces continuous output" {
+    note on 60 0.8 at 0
+    note off 60 at 44100
+    input silence 44100 samples
+    assert output.rms > -40dB
+  }
+
+  test "no NaN" {
+    note on 60 0.8 at 0
+    note off 60 at 4096
+    input silence 8192 samples
+    assert no_nan
+  }
+}
+```
+
+**Key points:**
+- `loop(pad)` wraps playback position to 0.0 when the sample end is reached — continuous output while note is held
+- **`loop()` vs `play()`:** `play()` outputs silence after the sample ends (one-shot). `loop()` wraps back to the start and keeps playing (sustaining).
+- Use `loop()` for pads, textures, ambient loops, or any sound that should sustain while a key is held
+- Use `play()` for drums, one-shot SFX, or sounds that should play once and stop
+- `loop(sample, start, end)` — the 3-arg variant loops within a specific region (start/end as float sample positions)
+- `midi { note {} }` — even an empty note block is required when using `voices` (E010 otherwise)
+- `loop()` resets position to 0.0 on each NoteOn — retriggering a note restarts from the beginning
+
+---
+
 ## Choosing a Pattern
 
 | I want to... | Use recipe |
@@ -1348,3 +1592,6 @@ plugin "Phase Shift" {
 | Build a parametric equalizer | Recipe 16 (Parametric EQ) |
 | Gate noise or silence quiet signals | Recipe 17 (Noise Gate) |
 | Add phaser/phase-shifting effects | Recipe 18 (Phaser) |
+| Build a sample-based drum machine | Recipe 19 (Drum Machine) |
+| Build a wavetable synthesizer with timbral morphing | Recipe 20 (Wavetable Synth) |
+| Build a looping sample playback instrument | Recipe 21 (Looping Sampler) |
