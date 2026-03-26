@@ -2103,3 +2103,149 @@ fn sample_codegen_no_hound_when_no_samples() {
     );
     assert!(!cargo_toml.contains("hound"), "Cargo.toml should NOT contain hound when no samples");
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Wavetable codegen unit tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn wavetable_codegen_contains_include_bytes_and_decode() {
+    use muse_lang::codegen::WavetableInfo;
+
+    let source = r#"
+        plugin "WT Synth" {
+            vendor "Test"
+            version "0.1.0"
+            category instrument
+
+            clap {
+                id "dev.test.wtsynth"
+                description "test"
+                features [instrument, stereo, synthesizer]
+            }
+            vst3 {
+                id "TestWtSynth0001"
+                subcategories [Instrument, Synth]
+            }
+
+            input mono
+            output stereo
+            voices 8
+
+            wavetable wt "samples/saw_stack.wav"
+
+            param position: float = 0.0 in 0.0..1.0 {
+                display "percentage"
+            }
+
+            midi {
+                note {
+                    let freq = note.pitch
+                    let vel = note.velocity
+                    let gate = note.gate
+                }
+            }
+
+            process {
+                let snd = wavetable_osc(wt, note.pitch, param.position)
+                snd -> gain(note.velocity) -> output
+            }
+        }
+    "#;
+
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "parse errors: {:?}", errors);
+    let plugin = ast.expect("parse returned None");
+    let registry = builtin_registry();
+    let resolved = resolve_plugin(&plugin, &registry).expect("resolve failed");
+
+    // Create fake WavetableInfo with a dummy absolute path
+    let wavetable_infos = vec![WavetableInfo {
+        name: "wt".to_string(),
+        path: "samples/saw_stack.wav".to_string(),
+        absolute_path: "/fake/path/samples/saw_stack.wav".to_string(),
+        frame_size: 2048,
+    }];
+
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-wavetable-codegen-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    // generate_plugin will fail because the WAV doesn't exist at the fake path —
+    // test via lower-level APIs directly (same pattern as sample_codegen test).
+    let result = generate_plugin(&resolved, &registry, &tmp, None);
+    drop(result);
+
+    // Test the process codegen directly
+    let voice_count = Some(8u32);
+    let (process_body, process_info) = muse_lang::codegen::process::generate_process(
+        &plugin, voice_count, None, &[], &wavetable_infos,
+    );
+
+    // Verify wavetable_osc codegen was generated
+    assert!(process_info.wt_osc_call_count > 0, "Expected wt_osc_call_count > 0");
+    assert!(process_body.contains("process_wavetable_osc"), "Process body should contain process_wavetable_osc call");
+    assert!(process_body.contains("wt_osc_state_0"), "Process body should contain wt_osc_state_0");
+    assert!(process_body.contains("self.wavetable_wt"), "Process body should reference wavetable_wt buffer");
+
+    // Test the plugin struct codegen
+    let plugin_code = muse_lang::codegen::plugin::generate_plugin_struct(&plugin, &process_info, &[], &wavetable_infos);
+    assert!(plugin_code.contains("wavetable_wt: Vec<f32>"), "Plugin struct should have wavetable_wt: Vec<f32>");
+    assert!(plugin_code.contains("wavetable_wt_frame_size: usize"), "Plugin struct should have wavetable_wt_frame_size: usize");
+    assert!(plugin_code.contains("wavetable_wt_frame_count: usize"), "Plugin struct should have wavetable_wt_frame_count: usize");
+    assert!(plugin_code.contains("wt_osc_state_0: WtOscState"), "Voice struct should have wt_osc_state_0: WtOscState");
+
+    // Test initialize() contains hound decode
+    assert!(plugin_code.contains("hound::WavReader::new"), "initialize() should decode WAV with hound");
+    assert!(plugin_code.contains("WAVETABLE_WT_DATA"), "initialize() should reference WAVETABLE_WT_DATA const");
+
+    // Test Cargo.toml generation (has_samples = true triggers hound dep)
+    let cargo_toml = muse_lang::codegen::cargo::generate_cargo_toml(&plugin, false, false, true);
+    assert!(cargo_toml.contains("hound"), "Cargo.toml should contain hound dependency when wavetables present");
+
+    // Cleanup
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn wavetable_codegen_no_extra_deps_when_no_wavetables() {
+    // A simple effect plugin with no wavetables should not contain any wavetable-related code.
+    let source = r#"
+        plugin "Clean FX" {
+            vendor "Test"
+            version "0.1.0"
+            category effect
+
+            clap {
+                id "dev.test.cleanfx"
+                description "test"
+                features [audio_effect, stereo]
+            }
+            vst3 {
+                id "TestCleanFX0001"
+                subcategories [Fx]
+            }
+
+            input stereo
+            output stereo
+
+            param gain: float = 0.0 in -60.0..12.0 { unit "dB" }
+
+            process {
+                input -> gain(param.gain) -> output
+            }
+        }
+    "#;
+
+    let (_, lib_rs) = generate_code_strings(source);
+
+    assert!(!lib_rs.contains("WAVETABLE_"), "No WAVETABLE_ consts when no wavetables declared");
+    assert!(!lib_rs.contains("wavetable_"), "No wavetable_ fields when no wavetables declared");
+    assert!(!lib_rs.contains("WtOscState"), "No WtOscState when no wavetables declared");
+    assert!(!lib_rs.contains("process_wavetable_osc"), "No process_wavetable_osc when no wavetables declared");
+}

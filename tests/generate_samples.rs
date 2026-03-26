@@ -79,6 +79,92 @@ fn generate_sample_wavs() {
     }
 }
 
+/// Regenerate wavetable WAV files. Run explicitly with:
+/// `cargo test generate_wavetable_wavs -- --ignored`
+#[test]
+#[ignore]
+fn generate_wavetable_wavs() {
+    let samples_dir = samples_dir();
+    std::fs::create_dir_all(&samples_dir).unwrap();
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 44100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    // saw_stack.wav — 4 frames × 2048 samples = 8192 total
+    // Frame 0: sine, Frame 1: triangle, Frame 2: saw, Frame 3: square
+    {
+        let path = samples_dir.join("saw_stack.wav");
+        let mut writer = hound::WavWriter::create(&path, spec).unwrap();
+        let frame_size = 2048usize;
+
+        // Frame 0: pure sine cycle
+        for i in 0..frame_size {
+            let t = i as f64 / frame_size as f64;
+            let sample = (2.0 * std::f64::consts::PI * t).sin();
+            writer.write_sample((sample * 32767.0) as i16).unwrap();
+        }
+
+        // Frame 1: triangle wave
+        for i in 0..frame_size {
+            let t = i as f64 / frame_size as f64;
+            let sample = if t < 0.25 {
+                4.0 * t
+            } else if t < 0.75 {
+                2.0 - 4.0 * t
+            } else {
+                -4.0 + 4.0 * t
+            };
+            writer.write_sample((sample * 32767.0) as i16).unwrap();
+        }
+
+        // Frame 2: saw wave
+        for i in 0..frame_size {
+            let sample = 2.0 * (i as f64 / frame_size as f64) - 1.0;
+            writer.write_sample((sample * 32767.0) as i16).unwrap();
+        }
+
+        // Frame 3: square wave
+        for i in 0..frame_size {
+            let sample: f64 = if i < frame_size / 2 { 1.0 } else { -1.0 };
+            writer.write_sample((sample * 32767.0) as i16).unwrap();
+        }
+
+        writer.finalize().unwrap();
+        assert!(path.exists());
+        assert!(std::fs::metadata(&path).unwrap().len() > 100);
+    }
+}
+
+#[test]
+fn verify_wavetable_wav_exists() {
+    let path = samples_dir().join("saw_stack.wav");
+    assert!(path.exists(), "Missing wavetable file: {}", path.display());
+    let reader = hound::WavReader::open(&path)
+        .unwrap_or_else(|e| panic!("Cannot decode saw_stack.wav: {}", e));
+    let spec = reader.spec();
+    assert_eq!(spec.channels, 1, "saw_stack.wav should be mono");
+    assert_eq!(spec.sample_rate, 44100, "saw_stack.wav should be 44100Hz");
+    assert!(reader.len() > 0, "saw_stack.wav should have samples");
+}
+
+#[test]
+fn verify_wavetable_wav_frame_divisibility() {
+    let path = samples_dir().join("saw_stack.wav");
+    let reader = hound::WavReader::open(&path)
+        .unwrap_or_else(|e| panic!("Cannot decode saw_stack.wav: {}", e));
+    let total_samples = reader.len() as usize;
+    assert_eq!(
+        total_samples,
+        4 * 2048,
+        "saw_stack.wav should have exactly 4 frames × 2048 samples = 8192, got {}",
+        total_samples
+    );
+}
+
 #[test]
 fn verify_sample_wavs_exist() {
     let samples_dir = samples_dir();

@@ -1,0 +1,68 @@
+// Wavetable Synth — pitched wavetable oscillator with position morphing.
+// Demonstrates wavetable declaration, wavetable_osc() with pitch tracking
+// and frame morphing via the position parameter.
+
+plugin "Wavetable Synth" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://museaudio.dev"
+  email    "hello@museaudio.dev"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.wavetable-synth"
+    description "A wavetable synthesizer with position morphing"
+    features    [instrument, stereo, synthesizer]
+  }
+
+  vst3 {
+    id              "MuseWtSynth001"
+    subcategories   [Instrument, Synth]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  wavetable wt "samples/saw_stack.wav"
+
+  param position: float = 0.0 in 0.0..1.0 {
+    display "percentage"
+  }
+
+  midi {
+    note {
+      let freq = note.pitch
+      let vel  = note.velocity
+      let gate = note.gate
+    }
+  }
+
+  process {
+    let snd = wavetable_osc(wt, note.pitch, param.position)
+    snd -> gain(note.velocity) -> output
+  }
+
+  test "silence before notes" {
+    input silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "440Hz at position 0" {
+    note on 69 0.8 at 0
+    note off 69 at 4096
+    input silence 8192 samples
+    assert frequency 440Hz > -20dB
+    assert output.rms > -20dB
+    assert no_nan
+  }
+
+  test "position morphing produces output" {
+    set param.position = 0.75
+    note on 69 0.8 at 0
+    note off 69 at 4096
+    input silence 8192 samples
+    assert output.rms > -20dB
+    assert no_nan
+  }
+}
