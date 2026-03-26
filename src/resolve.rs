@@ -856,23 +856,37 @@ impl<'a> Resolver<'a> {
         self.resolve_expr(base_expr)
     }
 
-    fn resolve_param_field(&self, field: &str, _span: Span) -> Option<DspType> {
+    fn resolve_param_field(&mut self, field: &str, span: Span) -> Option<DspType> {
         match self.params.get(field) {
             Some(param_type) => Some(param_type_to_dsp_type(param_type)),
             None => {
-                // Unknown param — we could emit an error, but for now just return Number
-                // (param errors are parser-level; resolve assumes params are declared)
-                self.diagnostics
-                    .len(); // no-op to avoid unused warning
-                Some(DspType::Number)
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "E005",
+                        span,
+                        format!("unknown parameter '{}'", field),
+                    )
+                    .with_suggestion(format!(
+                        "Declare the parameter first: `param {}: float = 0.5 in 0.0..1.0`",
+                        field
+                    )),
+                );
+                None
             }
         }
     }
 
-    fn resolve_note_field(&self, field: &str, _span: Span) -> Option<DspType> {
+    fn resolve_note_field(&mut self, field: &str, span: Span) -> Option<DspType> {
         if !self.has_midi_note {
-            // note.X used in a plugin without MIDI note handler
-            return Some(DspType::Number);
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E005",
+                    span,
+                    format!("'note.{}' used without a MIDI note handler", field),
+                )
+                .with_suggestion("Add a `midi { note { ... } }` block to use note fields"),
+            );
+            return None;
         }
         match field {
             "pitch" => Some(DspType::Frequency),
@@ -908,7 +922,18 @@ impl<'a> Resolver<'a> {
         };
 
         // Special handling for wavetable_osc() — takes a wavetable name, pitch, and position
-        if callee_name == "wavetable_osc" && args.len() == 3 {
+        if callee_name == "wavetable_osc" {
+            if args.len() != 3 {
+                self.diagnostics.push(Diagnostic::error(
+                    "E004",
+                    span,
+                    format!(
+                        "function 'wavetable_osc' expects 3 arguments (wavetable, pitch, position), got {}",
+                        args.len()
+                    ),
+                ));
+                return None;
+            }
             if let Expr::Ident(ref wt_name) = args[0].0 {
                 if self.wavetables.contains_key(wt_name) {
                     self.record(args[0].1, DspType::Signal);
@@ -933,7 +958,18 @@ impl<'a> Resolver<'a> {
         }
 
         // Special handling for play() — takes a sample name, not standard DSP types
-        if callee_name == "play" && args.len() == 1 {
+        if callee_name == "play" {
+            if args.len() != 1 {
+                self.diagnostics.push(Diagnostic::error(
+                    "E004",
+                    span,
+                    format!(
+                        "function 'play' expects 1 argument (sample name), got {}",
+                        args.len()
+                    ),
+                ));
+                return None;
+            }
             if let Expr::Ident(ref sample_name) = args[0].0 {
                 if self.samples.contains_key(sample_name) {
                     // Resolve the arg (for type_map completeness)
@@ -946,7 +982,7 @@ impl<'a> Resolver<'a> {
                             span,
                             format!("unknown sample '{}' in play() call", sample_name),
                         )
-                        .with_suggestion("Declare the sample first: `sample {} \"path/to/file.wav\"`"),
+                        .with_suggestion(format!("Declare the sample first: `sample {} \"path/to/file.wav\"`", sample_name)),
                     );
                     return None;
                 }
@@ -954,6 +990,17 @@ impl<'a> Resolver<'a> {
         }
 
         // Special handling for loop() — like play() but with wraparound playback
+        if callee_name == "loop" && args.len() != 1 && args.len() != 3 {
+            self.diagnostics.push(Diagnostic::error(
+                "E004",
+                span,
+                format!(
+                    "function 'loop' expects 1 or 3 arguments (sample [, start, end]), got {}",
+                    args.len()
+                ),
+            ));
+            return None;
+        }
         if callee_name == "loop" && (args.len() == 1 || args.len() == 3) {
             if let Expr::Ident(ref sample_name) = args[0].0 {
                 if self.samples.contains_key(sample_name) {
@@ -971,7 +1018,7 @@ impl<'a> Resolver<'a> {
                             span,
                             format!("unknown sample '{}' in loop() call", sample_name),
                         )
-                        .with_suggestion("Declare the sample first: `sample {} \"path/to/file.wav\"`"),
+                        .with_suggestion(format!("Declare the sample first: `sample {} \"path/to/file.wav\"`", sample_name)),
                     );
                     return None;
                 }

@@ -556,24 +556,41 @@ where
                     )
                 });
 
-        // ── Logical: `&&`, `||` ──────────────────────────
-        let log_op = choice((
-            just(Token::AmpAmp).to(BinOp::And),
-            just(Token::PipePipe).to(BinOp::Or),
-        ));
-        let logical =
+        // ── Logical AND: `&&` (higher precedence) ────────
+        let logical_and =
             comparison
                 .clone()
-                .foldl_with(log_op.then(comparison).repeated(), |a, (op, b), e| {
-                    (
-                        Expr::Binary {
-                            left: Box::new(a),
-                            op,
-                            right: Box::new(b),
-                        },
-                        e.span(),
-                    )
-                });
+                .foldl_with(
+                    just(Token::AmpAmp).to(BinOp::And).then(comparison).repeated(),
+                    |a, (op, b), e| {
+                        (
+                            Expr::Binary {
+                                left: Box::new(a),
+                                op,
+                                right: Box::new(b),
+                            },
+                            e.span(),
+                        )
+                    },
+                );
+
+        // ── Logical OR: `||` (lower precedence) ────────
+        let logical =
+            logical_and
+                .clone()
+                .foldl_with(
+                    just(Token::PipePipe).to(BinOp::Or).then(logical_and).repeated(),
+                    |a, (op, b), e| {
+                        (
+                            Expr::Binary {
+                                left: Box::new(a),
+                                op,
+                                right: Box::new(b),
+                            },
+                            e.span(),
+                        )
+                    },
+                );
 
         // ── Signal chain: `->` (lowest precedence) ───────
         logical.clone().foldl_with(

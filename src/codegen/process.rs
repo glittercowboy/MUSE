@@ -1461,11 +1461,8 @@ fn generate_delay_call_with_input(
         "0.5_f32".to_string()
     };
 
-    let state_target = if ctx.is_polyphonic {
-        format!("voice.delay_state_{}", delay_idx)
-    } else {
-        format!("self.delay_state_{}", delay_idx)
-    };
+    // Delay state is always on self (not per-voice) — see plugin.rs delay_state generation
+    let state_target = format!("self.delay_state_{}", delay_idx);
 
     format!(
         "process_delay(&mut {}, {}, {}, self.sample_rate)",
@@ -1501,11 +1498,8 @@ fn generate_mod_delay_call_with_input(
         "1.0_f32".to_string()
     };
 
-    let state_target = if ctx.is_polyphonic {
-        format!("voice.delay_state_{}", delay_idx)
-    } else {
-        format!("self.delay_state_{}", delay_idx)
-    };
+    // Delay state is always on self (not per-voice) — see plugin.rs delay_state generation
+    let state_target = format!("self.delay_state_{}", delay_idx);
 
     format!(
         "process_mod_delay(&mut {}, {}, {}, {}, {}, self.sample_rate)",
@@ -1535,11 +1529,8 @@ fn generate_allpass_call_with_input(
         "0.7_f32".to_string()
     };
 
-    let state_target = if ctx.is_polyphonic {
-        format!("voice.delay_state_{}", delay_idx)
-    } else {
-        format!("self.delay_state_{}", delay_idx)
-    };
+    // Delay state is always on self (not per-voice) — see plugin.rs delay_state generation
+    let state_target = format!("self.delay_state_{}", delay_idx);
 
     format!(
         "process_allpass(&mut {}, {}, {}, {}, self.sample_rate)",
@@ -1569,11 +1560,8 @@ fn generate_comb_call_with_input(
         "0.7_f32".to_string()
     };
 
-    let state_target = if ctx.is_polyphonic {
-        format!("voice.delay_state_{}", delay_idx)
-    } else {
-        format!("self.delay_state_{}", delay_idx)
-    };
+    // Delay state is always on self (not per-voice) — see plugin.rs delay_state generation
+    let state_target = format!("self.delay_state_{}", delay_idx);
 
     format!(
         "process_comb(&mut {}, {}, {}, {}, self.sample_rate)",
