@@ -167,6 +167,42 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         out.push('\n');
     }
 
+    // ── RMS ──────────────────────────────────────────────────
+    let needs_rms = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Rms)
+    });
+
+    if needs_rms {
+        out.push_str(&generate_rms_state());
+        out.push('\n');
+        out.push_str(&generate_process_rms());
+        out.push('\n');
+    }
+
+    // ── Peak Follow ──────────────────────────────────────────
+    let needs_peak_follow = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::PeakFollow)
+    });
+
+    if needs_peak_follow {
+        out.push_str(&generate_peak_follow_state());
+        out.push('\n');
+        out.push_str(&generate_process_peak_follow());
+        out.push('\n');
+    }
+
+    // ── Gate ─────────────────────────────────────────────────
+    let needs_gate = used_primitives.iter().any(|p| {
+        matches!(p, DspPrimitive::Gate)
+    });
+
+    if needs_gate {
+        out.push_str(&generate_gate_state());
+        out.push('\n');
+        out.push_str(&generate_process_gate());
+        out.push('\n');
+    }
+
     // ── Delay ────────────────────────────────────────────────
     let needs_delay = used_primitives.iter().any(|p| {
         matches!(p, DspPrimitive::Delay | DspPrimitive::ModDelay | DspPrimitive::Allpass | DspPrimitive::Comb)
@@ -974,6 +1010,175 @@ fn process_biquad_high_shelf(state: &mut BiquadState, input: f32, freq: f32, gai
     state.y1 = output;
 
     output
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// RMS level detector helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the RmsState struct.
+fn generate_rms_state() -> String {
+    r#"/// Per-call-site RMS level detector state (sliding window).
+#[derive(Clone, Copy)]
+struct RmsState {
+    buffer: [f32; 4096],
+    write_pos: usize,
+    sum: f32,
+    count: usize,
+}
+
+impl Default for RmsState {
+    fn default() -> Self {
+        Self {
+            buffer: [0.0; 4096],
+            write_pos: 0,
+            sum: 0.0,
+            count: 0,
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_rms function.
+fn generate_process_rms() -> String {
+    r#"/// Process one sample through a sliding-window RMS level detector.
+///
+/// `window_ms` is the analysis window in milliseconds. Returns the RMS level.
+fn process_rms(state: &mut RmsState, input: f32, window_ms: f32, sample_rate: f32) -> f32 {
+    let window_samples = ((window_ms / 1000.0 * sample_rate) as usize).clamp(1, 4096);
+
+    // Remove oldest sample's contribution
+    let oldest_idx = if state.write_pos >= window_samples {
+        state.write_pos - window_samples
+    } else {
+        4096 + state.write_pos - window_samples
+    };
+    let oldest = state.buffer[oldest_idx];
+    state.sum -= oldest * oldest;
+
+    // Add new sample's contribution
+    let sq = input * input;
+    state.sum += sq;
+    state.buffer[state.write_pos] = input;
+    state.write_pos = (state.write_pos + 1) % 4096;
+
+    if state.count < window_samples {
+        state.count += 1;
+    }
+
+    (state.sum / state.count as f32).max(0.0).sqrt()
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Peak follow (envelope follower) helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the PeakFollowState struct.
+fn generate_peak_follow_state() -> String {
+    r#"/// Per-call-site envelope follower state.
+#[derive(Clone, Copy)]
+struct PeakFollowState {
+    envelope: f32,
+}
+
+impl Default for PeakFollowState {
+    fn default() -> Self {
+        Self { envelope: 0.0 }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_peak_follow function.
+fn generate_process_peak_follow() -> String {
+    r#"/// Process one sample through an envelope follower.
+///
+/// `attack_ms` and `release_ms` control the envelope timing.
+/// Returns the current envelope level.
+fn process_peak_follow(state: &mut PeakFollowState, input: f32, attack_ms: f32, release_ms: f32, sample_rate: f32) -> f32 {
+    let attack_coeff = (-1.0_f32 / (attack_ms * 0.001 * sample_rate)).exp();
+    let release_coeff = (-1.0_f32 / (release_ms * 0.001 * sample_rate)).exp();
+
+    let abs_input = input.abs();
+    if abs_input > state.envelope {
+        state.envelope = attack_coeff * state.envelope + (1.0 - attack_coeff) * abs_input;
+    } else {
+        state.envelope = release_coeff * state.envelope + (1.0 - release_coeff) * abs_input;
+    }
+
+    state.envelope
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Gate (noise gate) helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the GateState struct.
+fn generate_gate_state() -> String {
+    r#"/// Per-call-site noise gate state (envelope + gain + hold counter).
+#[derive(Clone, Copy)]
+struct GateState {
+    envelope: f32,
+    gain: f32,
+    hold_counter: u32,
+}
+
+impl Default for GateState {
+    fn default() -> Self {
+        Self {
+            envelope: 0.0,
+            gain: 1.0,
+            hold_counter: 0,
+        }
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_gate function.
+fn generate_process_gate() -> String {
+    r#"/// Process one sample through a noise gate.
+///
+/// `threshold_db` is the gate threshold in dB. `attack_ms` and `release_ms` control
+/// the envelope follower. `hold_ms` keeps the gate open after signal drops below threshold.
+fn process_gate(state: &mut GateState, input: f32, threshold_db: f32, attack_ms: f32, release_ms: f32, hold_ms: f32, sample_rate: f32) -> f32 {
+    let attack_coeff = (-1.0_f32 / (attack_ms * 0.001 * sample_rate)).exp();
+    let release_coeff = (-1.0_f32 / (release_ms * 0.001 * sample_rate)).exp();
+    let threshold = 10.0_f32.powf(threshold_db / 20.0);
+    let hold_samples = (hold_ms * 0.001 * sample_rate) as u32;
+
+    // Envelope follower
+    let abs_input = input.abs();
+    if abs_input > state.envelope {
+        state.envelope = attack_coeff * state.envelope + (1.0 - attack_coeff) * abs_input;
+    } else {
+        state.envelope = release_coeff * state.envelope + (1.0 - release_coeff) * abs_input;
+    }
+
+    // Gate logic
+    if state.envelope > threshold {
+        state.hold_counter = hold_samples;
+        state.gain = 1.0;
+    } else if state.hold_counter > 0 {
+        state.hold_counter -= 1;
+    } else {
+        state.gain *= release_coeff;
+    }
+
+    input * state.gain
 }
 "#
     .to_string()

@@ -30,6 +30,9 @@ pub struct ProcessInfo {
     pub compressor_count: usize,
     pub delay_count: usize,
     pub eq_biquad_count: usize,
+    pub rms_count: usize,
+    pub peak_follow_count: usize,
+    pub gate_count: usize,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> (String, ProcessInfo) {
@@ -53,6 +56,9 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     compressor_count: 0,
                     delay_count: 0,
                     eq_biquad_count: 0,
+                    rms_count: 0,
+                    peak_follow_count: 0,
+                    gate_count: 0,
                 },
             )
         }
@@ -78,6 +84,9 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let compressor_count = ctx.compressor_counter;
     let delay_count = ctx.delay_counter;
     let eq_biquad_count = ctx.eq_biquad_counter;
+    let rms_count = ctx.rms_counter;
+    let peak_follow_count = ctx.peak_follow_counter;
+    let gate_count = ctx.gate_counter;
 
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
@@ -108,6 +117,9 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         compressor_count,
         delay_count,
         eq_biquad_count,
+        rms_count,
+        peak_follow_count,
+        gate_count,
     };
 
     (process_body, info)
@@ -272,6 +284,9 @@ struct ProcessContext {
     compressor_counter: usize,
     delay_counter: usize,
     eq_biquad_counter: usize,
+    rms_counter: usize,
+    peak_follow_counter: usize,
+    gate_counter: usize,
     is_instrument: bool,
     is_polyphonic: bool,
 }
@@ -292,6 +307,9 @@ impl ProcessContext {
             compressor_counter: 0,
             delay_counter: 0,
             eq_biquad_counter: 0,
+            rms_counter: 0,
+            peak_follow_counter: 0,
+            gate_counter: 0,
             is_instrument: false,
             is_polyphonic: false,
         }
@@ -456,6 +474,9 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "peak_eq" => generate_eq_call_with_input(input_code, "peak_eq", args, ctx),
                 "low_shelf" => generate_eq_call_with_input(input_code, "low_shelf", args, ctx),
                 "high_shelf" => generate_eq_call_with_input(input_code, "high_shelf", args, ctx),
+                "rms" => generate_rms_call_with_input(input_code, args, ctx),
+                "peak_follow" => generate_peak_follow_call_with_input(input_code, args, ctx),
+                "gate" => generate_gate_call_with_input(input_code, args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -798,6 +819,9 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "peak_eq" => return generate_eq_call_with_input("*sample", "peak_eq", args, ctx),
                     "low_shelf" => return generate_eq_call_with_input("*sample", "low_shelf", args, ctx),
                     "high_shelf" => return generate_eq_call_with_input("*sample", "high_shelf", args, ctx),
+                    "rms" => return generate_rms_call_with_input("*sample", args, ctx),
+                    "peak_follow" => return generate_peak_follow_call_with_input("*sample", args, ctx),
+                    "gate" => return generate_gate_call_with_input("*sample", args, ctx),
                     "adsr" => return generate_adsr_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
@@ -1340,5 +1364,113 @@ fn generate_eq_call_with_input(
     format!(
         "{}(&mut {}, {}, {}, {}, {}, self.sample_rate)",
         fn_name, state_field, input_code, freq, gain_db, q
+    )
+}
+
+fn generate_rms_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Rms);
+
+    let rms_idx = ctx.rms_counter;
+    ctx.rms_counter += 1;
+
+    let window_ms = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "10.0_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.rms_state_{}", rms_idx)
+    } else {
+        format!("self.rms_state_{}", rms_idx)
+    };
+
+    format!(
+        "process_rms(&mut {}, {}, {}, self.sample_rate)",
+        state_target, input_code, window_ms
+    )
+}
+
+fn generate_peak_follow_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::PeakFollow);
+
+    let pf_idx = ctx.peak_follow_counter;
+    ctx.peak_follow_counter += 1;
+
+    let attack_ms = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "1.0_f32".to_string()
+    };
+
+    let release_ms = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "100.0_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.peak_follow_state_{}", pf_idx)
+    } else {
+        format!("self.peak_follow_state_{}", pf_idx)
+    };
+
+    format!(
+        "process_peak_follow(&mut {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, attack_ms, release_ms
+    )
+}
+
+fn generate_gate_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Gate);
+
+    let gate_idx = ctx.gate_counter;
+    ctx.gate_counter += 1;
+
+    let threshold_db = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "-40.0_f32".to_string()
+    };
+
+    let attack_ms = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "1.0_f32".to_string()
+    };
+
+    let release_ms = if args.len() > 2 {
+        generate_expr_as_param(&args[2].0, ctx)
+    } else {
+        "50.0_f32".to_string()
+    };
+
+    let hold_ms = if args.len() > 3 {
+        generate_expr_as_param(&args[3].0, ctx)
+    } else {
+        "10.0_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.gate_state_{}", gate_idx)
+    } else {
+        format!("self.gate_state_{}", gate_idx)
+    };
+
+    format!(
+        "process_gate(&mut {}, {}, {}, {}, {}, {}, self.sample_rate)",
+        state_target, input_code, threshold_db, attack_ms, release_ms, hold_ms
     )
 }

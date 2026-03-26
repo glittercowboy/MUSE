@@ -66,6 +66,9 @@ pub enum DspPrimitive {
     SemitonesToRatio,
     Compressor,
     EqFilter(EqKind),
+    Rms,
+    PeakFollow,
+    Gate,
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -319,6 +322,36 @@ pub fn builtin_registry() -> DspRegistry {
             ],
             return_type: DspType::Processor,
             primitive: DspPrimitive::EqFilter(EqKind::HighShelf),
+        },
+        // ── Dynamics analysis / gating ──
+        // rms(window_ms: Time) → Processor — sliding-window RMS level detector
+        DspFunction {
+            name: "rms".into(),
+            params: vec![optional_param("window_ms", DspType::Time)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Rms,
+        },
+        // peak_follow(attack_ms: Time, release_ms: Time) → Processor — envelope follower
+        DspFunction {
+            name: "peak_follow".into(),
+            params: vec![
+                optional_param("attack_ms", DspType::Time),
+                optional_param("release_ms", DspType::Time),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::PeakFollow,
+        },
+        // gate(threshold_db: Gain, attack_ms: Time, release_ms: Time, hold_ms: Time) → Processor — noise gate
+        DspFunction {
+            name: "gate".into(),
+            params: vec![
+                optional_param("threshold_db", DspType::Gain),
+                optional_param("attack_ms", DspType::Time),
+                optional_param("release_ms", DspType::Time),
+                optional_param("hold_ms", DspType::Time),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Gate,
         },
     ];
 
