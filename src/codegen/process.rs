@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use crate::ast::{
     BinOp, ElseBody, Expr, PluginDef, PluginItem, ProcessBlock, Spanned, Statement, UnaryOp,
 };
+use crate::codegen::SampleInfo;
 use crate::dsp::primitives::{DspPrimitive, EnvKind, EqKind, OscKind};
 
 pub const MAX_BLOCK_SIZE: usize = 64;
@@ -35,9 +36,10 @@ pub struct ProcessInfo {
     pub gate_count: usize,
     pub dc_block_count: usize,
     pub sample_hold_count: usize,
+    pub play_call_count: usize,
 }
 
-pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>) -> (String, ProcessInfo) {
+pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo]) -> (String, ProcessInfo) {
     let is_instrument = find_midi_decl(plugin);
 
     let process_block = match find_process_block(plugin) {
@@ -63,12 +65,13 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     gate_count: 0,
                     dc_block_count: 0,
                     sample_hold_count: 0,
+                    play_call_count: 0,
                 },
             )
         }
     };
 
-    let mut ctx = ProcessContext::new();
+    let mut ctx = ProcessContext::new(sample_infos);
     ctx.is_instrument = is_instrument;
     ctx.is_polyphonic = is_instrument && voice_count.is_some();
 
@@ -97,7 +100,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
     } else if is_instrument {
-        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines)
+        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines, ctx.play_counter)
     } else {
         generate_effect_process(&ctx, &stmt_lines)
     };
@@ -128,6 +131,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         gate_count,
         dc_block_count,
         sample_hold_count,
+        play_call_count: ctx.play_counter,
     };
 
     (process_body, info)
@@ -136,6 +140,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
 fn generate_monophonic_instrument_process(
     smoothed_params: &[String],
     stmt_lines: &[String],
+    play_call_count: usize,
 ) -> String {
     let mut out = String::new();
     out.push_str("        let mut next_event = context.next_event();\n");
@@ -147,7 +152,7 @@ fn generate_monophonic_instrument_process(
         ));
     }
 
-    let midi_loop = crate::codegen::midi::generate_midi_event_loop();
+    let midi_loop = crate::codegen::midi::generate_midi_event_loop(play_call_count);
     for line in midi_loop.lines() {
         out.push_str("            ");
         out.push_str(line);
@@ -278,7 +283,7 @@ fn find_midi_decl(plugin: &PluginDef) -> bool {
         .any(|(item, _)| matches!(item, PluginItem::MidiDecl(_)))
 }
 
-struct ProcessContext {
+struct ProcessContext<'a> {
     smoothed_params: Vec<String>,
     used_primitives: HashSet<DspPrimitive>,
     pending_lines: Vec<String>,
@@ -297,12 +302,14 @@ struct ProcessContext {
     gate_counter: usize,
     dc_block_counter: usize,
     sample_hold_counter: usize,
+    play_counter: usize,
+    _sample_infos: &'a [SampleInfo],
     is_instrument: bool,
     is_polyphonic: bool,
 }
 
-impl ProcessContext {
-    fn new() -> Self {
+impl<'a> ProcessContext<'a> {
+    fn new(sample_infos: &'a [SampleInfo]) -> Self {
         Self {
             smoothed_params: Vec::new(),
             used_primitives: HashSet::new(),
@@ -322,6 +329,8 @@ impl ProcessContext {
             gate_counter: 0,
             dc_block_counter: 0,
             sample_hold_counter: 0,
+            play_counter: 0,
+            _sample_infos: sample_infos,
             is_instrument: false,
             is_polyphonic: false,
         }
@@ -496,6 +505,7 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 }
                 "dc_block" => generate_dc_block_call_with_input(input_code, args, ctx),
                 "sample_and_hold" => generate_sample_hold_call_with_input(input_code, args, ctx),
+                "play" => generate_play_call(args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
         }
@@ -863,6 +873,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                         return format!("{{ let __a = {}; let __b = {}; let __m = {}; __a * (1.0 - __m).sqrt() + __b * __m.sqrt() }}", a, b, mix);
                     }
                     "adsr" => return generate_adsr_call(args, ctx),
+                    "play" => return generate_play_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
                         let semitones = generate_expr(&args[0].0, ctx);
@@ -1128,6 +1139,53 @@ fn generate_adsr_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> Strin
     format!(
         "process_adsr(&mut {}, {}, {}, {}, {}, {}, self.sample_rate)",
         state_target, gate, attack, decay, sustain, release
+    )
+}
+
+/// Generate code for a play() call with a sample name argument.
+///
+/// Each play() call-site gets its own playback state (play_pos_N, play_active_N).
+/// On each sample tick:
+/// 1. If play_active_N is true, read from sample buffer at play_pos_N
+/// 2. Advance position by 1.0
+/// 3. If position >= buffer length, set play_active_N = false
+/// 4. Return 0.0 when not playing
+///
+/// NoteOn handling (setting play_active = true, play_pos = 0.0) is done
+/// in the MIDI event loop, which sets ALL play call-sites to active.
+/// The note.number dispatch (if/else) ensures only the matching play() executes.
+fn generate_play_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    let play_idx = ctx.play_counter;
+    ctx.play_counter += 1;
+    ctx.used_primitives.insert(DspPrimitive::Play);
+
+    // Extract sample name from the first argument
+    let sample_name = if let Expr::Ident(name) = &args[0].0 {
+        name.clone()
+    } else {
+        "unknown".to_string()
+    };
+
+    let pos_field = if ctx.is_polyphonic {
+        format!("voice.play_pos_{}", play_idx)
+    } else {
+        format!("self.play_pos_{}", play_idx)
+    };
+    let active_field = if ctx.is_polyphonic {
+        format!("voice.play_active_{}", play_idx)
+    } else {
+        format!("self.play_active_{}", play_idx)
+    };
+    let buffer_field = if ctx.is_polyphonic {
+        // In polyphonic mode, sample buffers are on self (shared), not per-voice
+        format!("self.sample_{}", sample_name)
+    } else {
+        format!("self.sample_{}", sample_name)
+    };
+
+    format!(
+        "if {} {{ let __pos = {} as usize; if __pos < {}.len() {{ let __s = {}[__pos]; {} += 1.0; __s }} else {{ {} = false; 0.0_f32 }} }} else {{ 0.0_f32 }}",
+        active_field, pos_field, buffer_field, buffer_field, pos_field, active_field
     )
 }
 

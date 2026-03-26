@@ -23,6 +23,14 @@ use crate::diagnostic::Diagnostic;
 use crate::resolve::ResolvedPlugin;
 use crate::span::Span;
 
+/// Sample info resolved for codegen: name, original path, and absolute path for embedding.
+#[derive(Debug, Clone)]
+pub struct SampleInfo {
+    pub name: String,
+    pub path: String,
+    pub absolute_path: String,
+}
+
 /// Codegen-side unison configuration extracted from the AST.
 #[derive(Debug, Clone)]
 pub struct CodegenUnisonConfig {
@@ -34,6 +42,7 @@ pub fn generate_plugin(
     resolved: &ResolvedPlugin,
     _registry: &crate::dsp::primitives::DspRegistry,
     output_dir: &Path,
+    source_dir: Option<&Path>,
 ) -> Result<PathBuf, Vec<Diagnostic>> {
     let plugin = resolved.plugin;
     let mut diagnostics = Vec::new();
@@ -43,24 +52,31 @@ pub fn generate_plugin(
         return Err(diagnostics);
     }
 
+    // Extract sample declarations and resolve absolute paths
+    let sample_infos = find_sample_decls(plugin, source_dir, &mut diagnostics);
+    if !diagnostics.is_empty() {
+        return Err(diagnostics);
+    }
+
     let needs_fft = has_frequency_assertions(plugin);
     let has_gui = gui::find_gui_block(plugin).is_some();
-    let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft, has_gui);
+    let has_samples = !sample_infos.is_empty();
+    let cargo_toml = cargo::generate_cargo_toml(plugin, needs_fft, has_gui, has_samples);
     let params_code = params::generate_params(plugin);
     let preset_code = presets::generate_presets(plugin);
     let voice_count = find_voice_count(plugin);
     let unison_config = find_unison_config(plugin);
-    let (process_body, process_info) = process::generate_process(plugin, voice_count, unison_config.as_ref());
+    let (process_body, process_info) = process::generate_process(plugin, voice_count, unison_config.as_ref(), &sample_infos);
 
     if !process_info.diagnostics.is_empty() {
         return Err(process_info.diagnostics);
     }
 
     let dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
-    let plugin_code = plugin::generate_plugin_struct(plugin, &process_info);
+    let plugin_code = plugin::generate_plugin_struct(plugin, &process_info, &sample_infos);
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 
-    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref());
+    let mut lib_rs = assemble_lib_rs(&params_code, &preset_code, &dsp_helpers, &plugin_code, voice_count.is_some(), unison_config.as_ref(), &sample_infos);
 
     let test_module = test::generate_test_module(plugin, &process_info);
     if !test_module.is_empty() {
@@ -153,6 +169,46 @@ fn find_unison_config(plugin: &PluginDef) -> Option<CodegenUnisonConfig> {
     })
 }
 
+/// Extract sample declarations from the AST and resolve their absolute paths.
+fn find_sample_decls(
+    plugin: &PluginDef,
+    source_dir: Option<&Path>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<SampleInfo> {
+    let base_dir = source_dir.unwrap_or(Path::new("."));
+    let mut samples = Vec::new();
+    for (item, _) in &plugin.items {
+        if let PluginItem::SampleDecl(decl) = item {
+            let abs_path = if Path::new(&decl.path).is_absolute() {
+                decl.path.clone()
+            } else {
+                let resolved = base_dir.join(&decl.path);
+                match resolved.canonicalize() {
+                    Ok(p) => p.to_string_lossy().to_string(),
+                    Err(_) => {
+                        diagnostics.push(Diagnostic::error(
+                            "E015",
+                            decl.span,
+                            format!(
+                                "sample file not found: '{}' (resolved to '{}')",
+                                decl.path,
+                                resolved.display()
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+            };
+            samples.push(SampleInfo {
+                name: decl.name.clone(),
+                path: decl.path.clone(),
+                absolute_path: abs_path,
+            });
+        }
+    }
+    samples
+}
+
 fn validate_codegen_requirements(plugin: &PluginDef, diagnostics: &mut Vec<Diagnostic>) {
     use crate::ast::{FormatBlock, MetadataKey, PluginItem};
 
@@ -236,6 +292,7 @@ fn assemble_lib_rs(
     plugin_code: &str,
     include_poly_helpers: bool,
     unison_config: Option<&CodegenUnisonConfig>,
+    sample_infos: &[SampleInfo],
 ) -> String {
     let mut out = String::new();
 
@@ -254,6 +311,20 @@ fn assemble_lib_rs(
 
     if unison_config.is_some() {
         out.push_str("const UNISON_MAX: i32 = 16;\n\n");
+    }
+
+    // Emit include_bytes!() consts for embedded samples
+    for sample in sample_infos {
+        let const_name = format!("SAMPLE_{}_DATA", sample.name.to_uppercase());
+        // Use forward slashes for cross-platform compatibility in include_bytes!()
+        let path_escaped = sample.absolute_path.replace('\\', "/");
+        out.push_str(&format!(
+            "const {}: &[u8] = include_bytes!(\"{}\");\n",
+            const_name, path_escaped
+        ));
+    }
+    if !sample_infos.is_empty() {
+        out.push('\n');
     }
 
     if !dsp_helpers.is_empty() {

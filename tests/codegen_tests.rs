@@ -15,7 +15,7 @@ fn generate_from_source(source: &str, output_dir: &std::path::Path) -> PathBuf {
     let ast = ast.expect("parse returned None");
     let registry = builtin_registry();
     let resolved = resolve_plugin(&ast, &registry).expect("resolve failed");
-    generate_plugin(&resolved, &registry, output_dir).expect("codegen failed")
+    generate_plugin(&resolved, &registry, output_dir, None).expect("codegen failed")
 }
 
 fn generate_code_strings(source: &str) -> (String, String) {
@@ -366,7 +366,7 @@ fn codegen_missing_clap_id_produces_e010() {
     let resolved = resolve_plugin(&ast, &registry).expect("resolve failed");
 
     let tmp = std::env::temp_dir().join("muse-codegen-test-e010");
-    let result = generate_plugin(&resolved, &registry, &tmp);
+    let result = generate_plugin(&resolved, &registry, &tmp, None);
 
     assert!(result.is_err(), "expected codegen to fail for bare plugin");
     let diags = result.unwrap_err();
@@ -407,7 +407,7 @@ fn codegen_diagnostic_json_format() {
     let resolved = resolve_plugin(&ast, &registry).expect("resolve failed");
 
     let tmp = std::env::temp_dir().join("muse-codegen-test-json-format");
-    let result = generate_plugin(&resolved, &registry, &tmp);
+    let result = generate_plugin(&resolved, &registry, &tmp, None);
     let diags = result.unwrap_err();
 
     let json = diagnostics_to_json(&diags);
@@ -1988,4 +1988,118 @@ fn soft_clip_dc_block_codegen_contains_structs() {
         lib_rs.contains("__x / (1.0 + __x.abs())"),
         "Generated code should contain soft clip formula"
     );
+}
+#[test]
+fn sample_codegen_contains_include_bytes_and_hound_decode() {
+    // Test that codegen for a sample-based plugin contains the expected code patterns.
+    // We use the lower-level codegen API directly to avoid needing actual WAV files.
+    use muse_lang::codegen::SampleInfo;
+
+    let source = r#"
+        plugin "Drum Kit" {
+            vendor "Test"
+            version "0.1.0"
+            category instrument
+
+            clap {
+                id "dev.test.drumkit"
+                description "test"
+                features [instrument, stereo]
+            }
+            vst3 {
+                id "TestDrumKit0001"
+                subcategories [Instrument]
+            }
+
+            input mono
+            output stereo
+            voices 4
+
+            sample kick "samples/kick.wav"
+
+            midi {
+                note {
+                    let num = note.number
+                }
+            }
+
+            process {
+                play(kick) -> output
+            }
+        }
+    "#;
+
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "parse errors: {:?}", errors);
+    let plugin = ast.expect("parse returned None");
+    let registry = builtin_registry();
+    let resolved = resolve_plugin(&plugin, &registry).expect("resolve failed");
+
+    // Create fake SampleInfo with a dummy absolute path
+    let sample_infos = vec![SampleInfo {
+        name: "kick".to_string(),
+        path: "samples/kick.wav".to_string(),
+        absolute_path: "/fake/path/samples/kick.wav".to_string(),
+    }];
+
+    let tmp = std::env::temp_dir().join(format!(
+        "muse-sample-codegen-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+
+    let result = generate_plugin(&resolved, &registry, &tmp, None);
+    // This will fail because samples/kick.wav doesn't exist — expected.
+    // Instead, test via the lower-level APIs directly.
+    drop(result);
+
+    // Test the process codegen directly
+    let voice_count = Some(4u32);
+    let (process_body, process_info) = muse_lang::codegen::process::generate_process(
+        &plugin, voice_count, None, &sample_infos,
+    );
+
+    // Verify play codegen was generated
+    assert!(process_info.play_call_count > 0, "Expected play_call_count > 0");
+    assert!(process_body.contains("play_active_"), "Process body should contain play_active state");
+    assert!(process_body.contains("play_pos_"), "Process body should contain play_pos state");
+    assert!(process_body.contains("self.sample_kick"), "Process body should reference sample_kick buffer");
+
+    // Test the plugin struct codegen
+    let plugin_code = muse_lang::codegen::plugin::generate_plugin_struct(&plugin, &process_info, &sample_infos);
+    assert!(plugin_code.contains("sample_kick: Vec<f32>"), "Plugin struct should have sample_kick: Vec<f32>");
+    assert!(plugin_code.contains("sample_kick_rate: u32"), "Plugin struct should have sample_kick_rate: u32");
+    assert!(plugin_code.contains("play_pos_0: f32"), "Voice struct should have play_pos_0: f32");
+    assert!(plugin_code.contains("play_active_0: bool"), "Voice struct should have play_active_0: bool");
+
+    // Test initialize() contains hound decode
+    assert!(plugin_code.contains("hound::WavReader::new"), "initialize() should decode WAV with hound");
+    assert!(plugin_code.contains("SAMPLE_KICK_DATA"), "initialize() should reference SAMPLE_KICK_DATA const");
+    assert!(plugin_code.contains("hound::SampleFormat::Float"), "initialize() should handle float WAV format");
+    assert!(plugin_code.contains("hound::SampleFormat::Int"), "initialize() should handle int WAV format");
+
+    // Test Cargo.toml generation
+    let cargo_toml = muse_lang::codegen::cargo::generate_cargo_toml(&plugin, false, false, true);
+    assert!(cargo_toml.contains("hound = \"3.5\""), "Cargo.toml should contain hound dependency");
+
+    // Cleanup
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+#[test]
+fn sample_codegen_no_hound_when_no_samples() {
+    let cargo_toml = muse_lang::codegen::cargo::generate_cargo_toml(
+        &muse_lang::ast::PluginDef {
+            name: "Test".to_string(),
+            items: vec![],
+            span: muse_lang::span::Span::new(0, 0),
+        },
+        false,
+        false,
+        false,
+    );
+    assert!(!cargo_toml.contains("hound"), "Cargo.toml should NOT contain hound when no samples");
 }

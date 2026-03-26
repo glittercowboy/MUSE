@@ -9,7 +9,7 @@ use crate::ast::PluginDef;
 /// When `needs_fft` is true, adds rustfft as a dev-dependency for spectral assertions.
 /// When `has_gui` is true, adds objc2, objc2-foundation, objc2-app-kit, objc2-web-kit,
 /// block2, and serde_json dependencies for WebKit-based editor embedding.
-pub fn generate_cargo_toml(plugin: &PluginDef, needs_fft: bool, has_gui: bool) -> String {
+pub fn generate_cargo_toml(plugin: &PluginDef, needs_fft: bool, has_gui: bool, has_samples: bool) -> String {
     let pkg_name = plugin_name_to_package(&plugin.name);
     let version = extract_metadata(plugin, "version").unwrap_or_else(|| "0.1.0".to_string());
 
@@ -34,6 +34,10 @@ nih_plug = {{ git = "https://github.com/robbert-vdh/nih-plug.git", rev = "28b149
         toml.push_str("objc2-web-kit = { version = \"0.3\", features = [\"WKWebView\", \"WKWebViewConfiguration\", \"WKUserContentController\", \"WKScriptMessageHandler\", \"WKScriptMessage\"] }\n");
         toml.push_str("block2 = \"0.6\"\n");
         toml.push_str("serde_json = \"1\"\n");
+    }
+
+    if has_samples {
+        toml.push_str("hound = \"3.5\"\n");
     }
 
     if needs_fft {
@@ -105,7 +109,7 @@ mod tests {
             items: vec![],
             span: Span::new(0, 0),
         };
-        let toml = generate_cargo_toml(&plugin, false, true);
+        let toml = generate_cargo_toml(&plugin, false, true, false);
         assert!(toml.contains("objc2 = \"0.6\""));
         assert!(toml.contains("objc2-foundation"));
         assert!(toml.contains("objc2-app-kit"));
@@ -126,7 +130,7 @@ mod tests {
             items: vec![],
             span: Span::new(0, 0),
         };
-        let toml = generate_cargo_toml(&plugin, false, false);
+        let toml = generate_cargo_toml(&plugin, false, false, false);
         assert!(!toml.contains("objc2"));
         assert!(!toml.contains("serde_json"));
     }

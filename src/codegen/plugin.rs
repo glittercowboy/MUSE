@@ -5,6 +5,7 @@ use crate::ast::{
     PluginItem, Vst3Item,
 };
 use crate::codegen::process::ProcessInfo;
+use crate::codegen::SampleInfo;
 use crate::dsp::primitives::DspPrimitive;
 
 struct PluginInfo {
@@ -29,7 +30,7 @@ struct Vst3Info {
     subcategories: Vec<String>,
 }
 
-pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) -> String {
+pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sample_infos: &[SampleInfo]) -> String {
     let info = extract_plugin_info(plugin);
     let clap = extract_clap_info(plugin);
     let vst3 = extract_vst3_info(plugin);
@@ -138,6 +139,18 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     if needs_sample_rate {
         out.push_str("    sample_rate: f32,\n");
     }
+    // Sample buffer fields (Vec<f32> for decoded audio, u32 for sample rate)
+    for sample in sample_infos {
+        out.push_str(&format!("    sample_{}: Vec<f32>,\n", sample.name));
+        out.push_str(&format!("    sample_{}_rate: u32,\n", sample.name));
+    }
+    // Per-call-site playback state for play() calls (monophonic only — polyphonic is on Voice)
+    if !is_polyphonic {
+        for i in 0..process_info.play_call_count {
+            out.push_str(&format!("    play_pos_{}: f32,\n", i));
+            out.push_str(&format!("    play_active_{}: bool,\n", i));
+        }
+    }
     out.push_str("}\n\n");
 
     out.push_str(&format!(
@@ -208,9 +221,21 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo) ->
     if needs_sample_rate {
         out.push_str("            sample_rate: 44100.0,\n");
     }
+    // Sample buffer defaults
+    for sample in sample_infos {
+        out.push_str(&format!("            sample_{}: Vec::new(),\n", sample.name));
+        out.push_str(&format!("            sample_{}_rate: 0,\n", sample.name));
+    }
+    // Play call-site state defaults (monophonic only)
+    if !is_polyphonic {
+        for i in 0..process_info.play_call_count {
+            out.push_str(&format!("            play_pos_{}: 0.0,\n", i));
+            out.push_str(&format!("            play_active_{}: false,\n", i));
+        }
+    }
     out.push_str("        }\n    }\n}\n\n");
 
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, sample_infos));
 
     if is_polyphonic {
         let helper_defaults = generate_voice_field_defaults(process_info);
@@ -286,6 +311,11 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.eq_biquad_count {
         out.push_str(&format!("    eq_biquad_state_{}: BiquadState,\n", i));
     }
+    // Per-voice playback state for play() calls
+    for i in 0..process_info.play_call_count {
+        out.push_str(&format!("    play_pos_{}: f32,\n", i));
+        out.push_str(&format!("    play_active_{}: bool,\n", i));
+    }
     out.push_str("}\n");
     out
 }
@@ -325,6 +355,10 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     }
     for i in 0..process_info.eq_biquad_count {
         fields.push(format!("eq_biquad_state_{}: BiquadState::default()", i));
+    }
+    for i in 0..process_info.play_call_count {
+        fields.push(format!("play_pos_{}: 0.0", i));
+        fields.push(format!("play_active_{}: true", i));
     }
     if fields.is_empty() {
         String::new()
@@ -428,18 +462,32 @@ fn generate_plugin_trait(
     is_polyphonic: bool,
     has_gui: bool,
     delay_count: usize,
+    sample_infos: &[SampleInfo],
 ) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
     let out_ch = info.output_channels;
 
     let mut lifecycle_fns = String::new();
-    if needs_sample_rate {
-        let mut init_body = String::from("self.sample_rate = buffer_config.sample_rate;\n");
+    let needs_initialize = needs_sample_rate || !sample_infos.is_empty();
+    if needs_initialize {
+        let mut init_body = String::new();
+        if needs_sample_rate {
+            init_body.push_str("self.sample_rate = buffer_config.sample_rate;\n");
+        }
         for i in 0..delay_count {
             init_body.push_str(&format!(
                 "        self.delay_state_{}.allocate(buffer_config.sample_rate);\n",
                 i
+            ));
+        }
+        // Sample decode: hound-based WAV decode from embedded bytes
+        for sample in sample_infos {
+            let upper_name = sample.name.to_uppercase();
+            let field_name = &sample.name;
+            init_body.push_str(&format!(
+                "        {{\n            let cursor = std::io::Cursor::new(SAMPLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            self.sample_{}_rate = spec.sample_rate;\n            self.sample_{} = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n        }}\n",
+                upper_name, field_name, field_name, field_name
             ));
         }
         init_body.push_str("        true");

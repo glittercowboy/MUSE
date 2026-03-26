@@ -77,8 +77,14 @@ pub fn compile(
     let registry = dsp::builtin_registry();
     let resolved = resolve::resolve_plugin(&plugin, &registry)?;
 
+    // Compute source directory for resolving relative sample paths
+    let source_dir = std::path::Path::new(_filename)
+        .parent()
+        .map(|p| if p.as_os_str().is_empty() { std::path::Path::new(".") } else { p })
+        .unwrap_or(std::path::Path::new("."));
+
     let crate_dir = output_dir.join(&package_name);
-    codegen::generate_plugin(&resolved, &registry, &crate_dir)?;
+    codegen::generate_plugin(&resolved, &registry, &crate_dir, Some(source_dir))?;
 
     Ok(CompileResult {
         crate_dir,
