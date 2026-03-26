@@ -343,16 +343,23 @@ pub type LexResult = Result<(Token, std::ops::Range<usize>), std::ops::Range<usi
 pub fn lex(source: &str) -> Vec<LexResult> {
     // Strip comments before lexing. We do this in a pre-pass to keep the
     // logos grammar simple (logos doesn't support nested block comments well).
-    let cleaned = strip_comments(source);
+    let (cleaned, unterminated_comment) = strip_comments(source);
 
     let lexer = Token::lexer(&cleaned);
-    lexer
+    let mut results: Vec<LexResult> = lexer
         .spanned()
         .map(|(tok, span)| match tok {
             Ok(t) => Ok((t, span)),
             Err(()) => Err(span),
         })
-        .collect()
+        .collect();
+
+    // Report unterminated block comments as lex errors
+    if let Some(start) = unterminated_comment {
+        results.push(Err(start..source.len()));
+    }
+
+    results
 }
 
 /// Strip line comments (`// ...`) and block comments (`/* ... */`, nested).
@@ -360,13 +367,17 @@ pub fn lex(source: &str) -> Vec<LexResult> {
 /// Replaces comment content with spaces to preserve byte offsets for spans.
 /// String literals are tracked so that `//` and `/*` inside strings are not
 /// treated as comment starts.
-fn strip_comments(source: &str) -> String {
+/// Returns `(stripped_source, unterminated_comment_offset)`.
+/// If a block comment is never closed, the second element is `Some(offset)`
+/// where `offset` is the byte position of the opening `/*`.
+fn strip_comments(source: &str) -> (String, Option<usize>) {
     let bytes = source.as_bytes();
     let len = bytes.len();
     let mut result = vec![b' '; len];
     let mut i = 0;
     let mut depth = 0u32; // block comment nesting depth
     let mut in_string = false;
+    let mut block_comment_start: Option<usize> = None;
 
     while i < len {
         if in_string {
@@ -389,6 +400,9 @@ fn strip_comments(source: &str) -> String {
                 i += 2;
             } else if i + 1 < len && bytes[i] == b'*' && bytes[i + 1] == b'/' {
                 depth -= 1;
+                if depth == 0 {
+                    block_comment_start = None;
+                }
                 i += 2;
             } else {
                 // Preserve newlines inside comments for line counting
@@ -410,6 +424,9 @@ fn strip_comments(source: &str) -> String {
             }
         } else if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
             // Start block comment
+            if depth == 0 {
+                block_comment_start = Some(i);
+            }
             depth += 1;
             i += 2;
         } else if bytes[i] == b'"' {
@@ -424,8 +441,13 @@ fn strip_comments(source: &str) -> String {
         }
     }
 
+    let unterminated = if depth > 0 { block_comment_start } else { None };
+
     // SAFETY: we only replaced ASCII bytes with ASCII bytes
-    String::from_utf8(result).expect("comment stripping produced invalid UTF-8")
+    (
+        String::from_utf8(result).expect("comment stripping produced invalid UTF-8"),
+        unterminated,
+    )
 }
 
 #[cfg(test)]

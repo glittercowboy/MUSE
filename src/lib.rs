@@ -170,12 +170,19 @@ pub fn build_plugin(crate_dir: &std::path::Path, package_name: &str) -> Result<B
         ));
     }
 
-    // macOS cdylib naming: lib<name>.dylib where <name> has hyphens → underscores
+    // cdylib naming is platform-specific:
+    //   macOS:  lib<name>.dylib
+    //   Linux:  lib<name>.so
+    //   Windows: <name>.dll
     let lib_name = package_name.replace('-', "_");
     let dylib = crate_dir
         .join("target")
         .join("release")
-        .join(format!("lib{lib_name}.dylib"));
+        .join(format!(
+            "{}{lib_name}.{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_EXTENSION
+        ));
 
     if !dylib.exists() {
         return Err(format!("expected dylib not found at {}", dylib.display()));

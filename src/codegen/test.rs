@@ -684,7 +684,7 @@ fn collect_param_defaults(plugin: &PluginDef) -> Vec<ParamInfo> {
     let mut params = Vec::new();
     for (item, _) in &plugin.items {
         if let PluginItem::ParamDecl(param) = item {
-            if param.param_type == ParamType::Float {
+            if param.param_type == ParamType::Float || param.param_type == ParamType::Int {
                 let default_value = param.default.as_ref().and_then(|(expr, _)| {
                     if let Expr::Number(v, _) = expr { Some(*v) } else { None }
                 }).unwrap_or(0.0);

@@ -635,6 +635,7 @@ fn process_adsr(
 /// Generate the ChorusState struct.
 fn generate_chorus_state() -> String {
     r#"/// Per-call-site chorus effect state (delay line + internal LFO).
+#[derive(Clone, Copy)]
 struct ChorusState {
     buffer: [f32; 1323], // ~30ms at 44100 Hz
     write_pos: usize,
@@ -699,6 +700,7 @@ fn process_chorus(state: &mut ChorusState, input: f32, rate: f32, depth: f32, sa
 /// Generate the CompressorState struct.
 fn generate_compressor_state() -> String {
     r#"/// Per-call-site compressor state (envelope follower).
+#[derive(Clone, Copy)]
 struct CompressorState {
     envelope: f32,
 }

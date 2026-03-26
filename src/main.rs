@@ -857,8 +857,11 @@ fn parse_cargo_test_output(stdout: &str, stderr: &str) -> TestRunResults {
                 actual: None,
             });
         } else {
-            // Look up structured failure details
-            let details = fail_details.get(&human_name);
+            // Look up structured failure details — try human name first, then raw name
+            // (the MUSE_TEST_FAIL JSON uses the original test block name, which may differ
+            // from the sanitized function name when special characters are involved)
+            let details = fail_details.get(&human_name)
+                .or_else(|| fail_details.get(raw_name));
             tests.push(TestResult {
                 name: human_name,
                 passed: false,
