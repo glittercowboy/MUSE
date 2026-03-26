@@ -105,7 +105,24 @@ gui {
 }
 ```
 
-Three tiers: auto-generated knobs from just `theme` and `accent`, explicit layout with panels and widgets, or full CSS escape hatch for unlimited visual control. Preview with `muse preview` before building.
+Three tiers: auto-generated knobs from just `theme` and `accent`, explicit layout with panels and widgets, or full CSS escape hatch for unlimited visual control.
+
+## Live Preview
+
+Edit a `.muse` file and hear the changes instantly — no DAW required:
+
+```bash
+# Preview an effect with live audio
+muse preview examples/gui_gain.muse --input mic
+
+# Preview a synth with a MIDI keyboard
+muse preview examples/poly_synth.muse --midi-port "MIDI Keyboard"
+
+# Preview an effect with a WAV file
+muse preview examples/filter.muse --input file:drums.wav
+```
+
+Hot-reload on save — edit the `.muse` file, save, hear the difference in under 2 seconds. Parameter state survives reloads. Connect any CoreMIDI device and play polyphonic instruments in real time.
 
 ## Plugins That Test Themselves
 
@@ -138,8 +155,11 @@ cargo build --release
 # Compile, run audio tests
 ./target/release/muse test examples/gain.muse --format json
 
-# Preview GUI in a standalone window
+# Live preview with hot-reload (edit file, save, hear changes)
 ./target/release/muse preview examples/gui_gain.muse
+
+# Preview a synth with a MIDI keyboard
+./target/release/muse preview examples/poly_synth.muse --midi-port "MIDI Keyboard"
 
 # Build VST3 + CLAP binaries
 ./target/release/muse build examples/gain.muse --output-dir ./build
@@ -211,7 +231,7 @@ Every example compiles to a real plugin binary. Every example has test blocks th
 
 The generated audio code is allocation-free and lock-free. No interpreter, no runtime overhead. The output binary is indistinguishable from a hand-written nih-plug plugin.
 
-383 tests. Zero clippy warnings.
+390 tests. Zero clippy warnings.
 
 ## AI Skill File
 
@@ -219,7 +239,7 @@ Muse ships with a [skill file](skill/SKILL.md) that teaches AI agents to write p
 
 ## What's Next
 
-Cross-platform builds (Windows/Linux), expanded DSP primitives (delay lines, EQ shelves, reverb), hot reload, package system.
+Cross-platform builds (Windows/Linux), expanded DSP primitives (delay lines, EQ shelves, reverb), package system, sample loading.
 
 ## Requirements
 
