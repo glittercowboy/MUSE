@@ -902,6 +902,31 @@ impl<'a> Resolver<'a> {
             }
         }
 
+        // Special handling for loop() — like play() but with wraparound playback
+        if callee_name == "loop" && (args.len() == 1 || args.len() == 3) {
+            if let Expr::Ident(ref sample_name) = args[0].0 {
+                if self.samples.contains_key(sample_name) {
+                    self.record(args[0].1, DspType::Signal);
+                    // For 3-arg variant, resolve start and end arguments
+                    if args.len() == 3 {
+                        self.resolve_expr(&args[1]);
+                        self.resolve_expr(&args[2]);
+                    }
+                    return Some(DspType::Signal);
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E003",
+                            span,
+                            format!("unknown sample '{}' in loop() call", sample_name),
+                        )
+                        .with_suggestion("Declare the sample first: `sample {} \"path/to/file.wav\"`"),
+                    );
+                    return None;
+                }
+            }
+        }
+
         // Look up in DSP registry first (takes priority over local scope)
         let func = match self.registry.lookup(&callee_name) {
             Some(f) => f.clone(), // clone to release the borrow on self

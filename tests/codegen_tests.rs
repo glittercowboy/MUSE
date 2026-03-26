@@ -2249,3 +2249,61 @@ fn wavetable_codegen_no_extra_deps_when_no_wavetables() {
     assert!(!lib_rs.contains("WtOscState"), "No WtOscState when no wavetables declared");
     assert!(!lib_rs.contains("process_wavetable_osc"), "No process_wavetable_osc when no wavetables declared");
 }
+
+#[test]
+fn loop_codegen_contains_wraparound() {
+    use muse_lang::codegen::SampleInfo;
+
+    let source = r#"
+        plugin "LoopTest" {
+            input mono
+            output stereo
+
+            midi {
+                note {
+                    let num = note.number
+                }
+            }
+
+            sample pad "samples/kick.wav"
+
+            process {
+                loop(pad) -> output
+            }
+        }
+    "#;
+
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "parse errors: {:?}", errors);
+    let plugin = ast.expect("parse returned None");
+    let registry = builtin_registry();
+    let _resolved = resolve_plugin(&plugin, &registry).expect("resolve failed");
+
+    let sample_infos = vec![SampleInfo {
+        name: "pad".to_string(),
+        path: "samples/kick.wav".to_string(),
+        absolute_path: "/fake/path/samples/kick.wav".to_string(),
+    }];
+
+    let voice_count = Some(4u32);
+    let (process_body, process_info) = muse_lang::codegen::process::generate_process(
+        &plugin, voice_count, None, &sample_infos, &[],
+    );
+
+    // Verify loop codegen was generated
+    assert!(process_info.loop_call_count > 0, "Expected loop_call_count > 0");
+    assert!(process_body.contains("loop_active_"), "Process body should contain loop_active state");
+    assert!(process_body.contains("loop_pos_"), "Process body should contain loop_pos state");
+
+    // Key assertion: loop uses wraparound (pos = 0.0) NOT deactivation (active = false)
+    // The play() pattern sets `play_active_N = false` on buffer end — loop must NOT do that.
+    // Instead, loop wraps position back to 0.0.
+    assert!(process_body.contains("loop_pos_0 = 0.0"), "Loop should wrap position to 0.0 (not deactivate)");
+    // The loop body should NOT contain `loop_active_0 = false`
+    assert!(!process_body.contains("loop_active_0 = false"), "Loop should NOT deactivate on buffer end — should wrap instead");
+
+    // Test the plugin struct codegen
+    let plugin_code = muse_lang::codegen::plugin::generate_plugin_struct(&plugin, &process_info, &sample_infos, &[]);
+    assert!(plugin_code.contains("loop_pos_0: f32"), "Voice struct should have loop_pos_0: f32");
+    assert!(plugin_code.contains("loop_active_0: bool"), "Voice struct should have loop_active_0: bool");
+}

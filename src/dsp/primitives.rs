@@ -75,6 +75,7 @@ pub enum DspPrimitive {
     SampleAndHold,
     Play,
     WavetableOsc,
+    Loop,
 }
 
 // ── Function signature types ─────────────────────────────────

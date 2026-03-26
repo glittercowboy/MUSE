@@ -153,6 +153,13 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
             out.push_str(&format!("    play_active_{}: bool,\n", i));
         }
     }
+    // Per-call-site loop state for loop() calls (monophonic only — polyphonic is on Voice)
+    if !is_polyphonic {
+        for i in 0..process_info.loop_call_count {
+            out.push_str(&format!("    loop_pos_{}: f32,\n", i));
+            out.push_str(&format!("    loop_active_{}: bool,\n", i));
+        }
+    }
     // Wavetable buffer fields (shared data, not per-voice)
     for wt in wavetable_infos {
         out.push_str(&format!("    wavetable_{}: Vec<f32>,\n", wt.name));
@@ -245,6 +252,13 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         for i in 0..process_info.play_call_count {
             out.push_str(&format!("            play_pos_{}: 0.0,\n", i));
             out.push_str(&format!("            play_active_{}: false,\n", i));
+        }
+    }
+    // Loop call-site state defaults (monophonic only)
+    if !is_polyphonic {
+        for i in 0..process_info.loop_call_count {
+            out.push_str(&format!("            loop_pos_{}: 0.0,\n", i));
+            out.push_str(&format!("            loop_active_{}: false,\n", i));
         }
     }
     // Wavetable buffer defaults
@@ -342,6 +356,11 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
         out.push_str(&format!("    play_pos_{}: f32,\n", i));
         out.push_str(&format!("    play_active_{}: bool,\n", i));
     }
+    // Per-voice loop state for loop() calls
+    for i in 0..process_info.loop_call_count {
+        out.push_str(&format!("    loop_pos_{}: f32,\n", i));
+        out.push_str(&format!("    loop_active_{}: bool,\n", i));
+    }
     // Per-voice wavetable oscillator state
     for i in 0..process_info.wt_osc_call_count {
         out.push_str(&format!("    wt_osc_state_{}: WtOscState,\n", i));
@@ -389,6 +408,10 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.play_call_count {
         fields.push(format!("play_pos_{}: 0.0", i));
         fields.push(format!("play_active_{}: true", i));
+    }
+    for i in 0..process_info.loop_call_count {
+        fields.push(format!("loop_pos_{}: 0.0", i));
+        fields.push(format!("loop_active_{}: true", i));
     }
     for i in 0..process_info.wt_osc_call_count {
         fields.push(format!("wt_osc_state_{}: WtOscState::default()", i));

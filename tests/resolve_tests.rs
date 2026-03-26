@@ -1608,3 +1608,51 @@ plugin "Test" {
     let e003 = find_error(&diags, "E003");
     assert!(e003.message.contains("unknown wavetable 'wt'"));
 }
+
+// ── Loop resolver tests ──────────────────────────────────────
+
+#[test]
+fn loop_with_declared_sample_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    sample kick "samples/kick.wav"
+    process {
+        loop(kick) -> output
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn loop_with_unknown_sample_produces_e003() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    process {
+        loop(kick) -> output
+    }
+}
+"##;
+    let diags = resolve_expect_errors(source);
+    let e003 = find_error(&diags, "E003");
+    assert!(e003.message.contains("unknown sample 'kick'"));
+}
+
+#[test]
+fn loop_three_arg_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    sample pad "samples/kick.wav"
+    process {
+        loop(pad, 0.0, 1.0) -> output
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}

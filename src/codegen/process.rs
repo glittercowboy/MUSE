@@ -39,6 +39,7 @@ pub struct ProcessInfo {
     pub sample_hold_count: usize,
     pub play_call_count: usize,
     pub wt_osc_call_count: usize,
+    pub loop_call_count: usize,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> (String, ProcessInfo) {
@@ -69,6 +70,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     sample_hold_count: 0,
                     play_call_count: 0,
                     wt_osc_call_count: 0,
+                    loop_call_count: 0,
                 },
             )
         }
@@ -103,7 +105,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
     } else if is_instrument {
-        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines, ctx.play_counter, ctx.wt_osc_counter)
+        generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines, ctx.play_counter, ctx.wt_osc_counter, ctx.loop_counter)
     } else {
         generate_effect_process(&ctx, &stmt_lines)
     };
@@ -136,6 +138,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         sample_hold_count,
         play_call_count: ctx.play_counter,
         wt_osc_call_count: ctx.wt_osc_counter,
+        loop_call_count: ctx.loop_counter,
     };
 
     (process_body, info)
@@ -146,6 +149,7 @@ fn generate_monophonic_instrument_process(
     stmt_lines: &[String],
     play_call_count: usize,
     wt_osc_call_count: usize,
+    loop_call_count: usize,
 ) -> String {
     let mut out = String::new();
     out.push_str("        let mut next_event = context.next_event();\n");
@@ -157,7 +161,7 @@ fn generate_monophonic_instrument_process(
         ));
     }
 
-    let midi_loop = crate::codegen::midi::generate_midi_event_loop(play_call_count, wt_osc_call_count);
+    let midi_loop = crate::codegen::midi::generate_midi_event_loop(play_call_count, wt_osc_call_count, loop_call_count);
     for line in midi_loop.lines() {
         out.push_str("            ");
         out.push_str(line);
@@ -309,6 +313,7 @@ struct ProcessContext<'a> {
     sample_hold_counter: usize,
     play_counter: usize,
     wt_osc_counter: usize,
+    loop_counter: usize,
     _sample_infos: &'a [SampleInfo],
     _wavetable_infos: &'a [WavetableInfo],
     is_instrument: bool,
@@ -338,6 +343,7 @@ impl<'a> ProcessContext<'a> {
             sample_hold_counter: 0,
             play_counter: 0,
             wt_osc_counter: 0,
+            loop_counter: 0,
             _sample_infos: sample_infos,
             _wavetable_infos: wavetable_infos,
             is_instrument: false,
@@ -515,6 +521,7 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "dc_block" => generate_dc_block_call_with_input(input_code, args, ctx),
                 "sample_and_hold" => generate_sample_hold_call_with_input(input_code, args, ctx),
                 "play" => generate_play_call(args, ctx),
+                "loop" => generate_loop_call(args, ctx),
                 "wavetable_osc" => generate_wavetable_osc_call(args, ctx),
                 _ => format!("{}({})", fn_name, input_code),
             };
@@ -884,6 +891,7 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     }
                     "adsr" => return generate_adsr_call(args, ctx),
                     "play" => return generate_play_call(args, ctx),
+                    "loop" => return generate_loop_call(args, ctx),
                     "wavetable_osc" => return generate_wavetable_osc_call(args, ctx),
                     "semitones_to_ratio" => {
                         ctx.used_primitives.insert(DspPrimitive::SemitonesToRatio);
@@ -1229,6 +1237,60 @@ fn generate_play_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> Strin
         "if {} {{ let __pos = {} as usize; if __pos < {}.len() {{ let __s = {}[__pos]; {} += 1.0; __s }} else {{ {} = false; 0.0_f32 }} }} else {{ 0.0_f32 }}",
         active_field, pos_field, buffer_field, buffer_field, pos_field, active_field
     )
+}
+
+/// Generate code for loop() DSP primitive — continuous wraparound playback.
+///
+/// On each sample tick:
+/// 1. If loop_active_N is true, read from sample buffer at loop_pos_N
+/// 2. Advance position by 1.0
+/// 3. If position >= buffer length, wrap position to 0.0 (or start for ranged)
+/// 4. Return 0.0 when not active
+///
+/// 3-arg variant loop(sample, start, end) wraps within [start, end) range.
+fn generate_loop_call(args: &[Spanned<Expr>], ctx: &mut ProcessContext) -> String {
+    let loop_idx = ctx.loop_counter;
+    ctx.loop_counter += 1;
+    ctx.used_primitives.insert(DspPrimitive::Loop);
+
+    // Extract sample name from the first argument
+    let sample_name = if let Expr::Ident(name) = &args[0].0 {
+        name.clone()
+    } else {
+        "unknown".to_string()
+    };
+
+    let pos_field = if ctx.is_polyphonic {
+        format!("voice.loop_pos_{}", loop_idx)
+    } else {
+        format!("self.loop_pos_{}", loop_idx)
+    };
+    let active_field = if ctx.is_polyphonic {
+        format!("voice.loop_active_{}", loop_idx)
+    } else {
+        format!("self.loop_active_{}", loop_idx)
+    };
+    let buffer_field = if ctx.is_polyphonic {
+        format!("self.sample_{}", sample_name)
+    } else {
+        format!("self.sample_{}", sample_name)
+    };
+
+    if args.len() == 3 {
+        // 3-arg: loop(sample, start, end) — wrap within [start, end) range
+        let start_expr = generate_expr(&args[1].0, ctx);
+        let end_expr = generate_expr(&args[2].0, ctx);
+        format!(
+            "if {} {{ let __pos = {} as usize; let __start = ({}) as usize; let __end = ({}) as usize; if __pos < {}.len() && __pos < __end {{ let __s = {}[__pos]; {} += 1.0; if {} as usize >= __end {{ {} = __start as f32; }} __s }} else {{ {} = __start as f32; 0.0_f32 }} }} else {{ 0.0_f32 }}",
+            active_field, pos_field, start_expr, end_expr, buffer_field, buffer_field, pos_field, pos_field, pos_field, pos_field
+        )
+    } else {
+        // 1-arg: loop(sample) — wrap to beginning
+        format!(
+            "if {} {{ let __pos = {} as usize; if __pos < {}.len() {{ let __s = {}[__pos]; {} += 1.0; if {} as usize >= {}.len() {{ {} = 0.0; }} __s }} else {{ {} = 0.0; 0.0_f32 }} }} else {{ 0.0_f32 }}",
+            active_field, pos_field, buffer_field, buffer_field, pos_field, pos_field, buffer_field, pos_field, pos_field
+        )
+    }
 }
 
 fn generate_expr_as_param(expr: &Expr, ctx: &mut ProcessContext) -> String {
