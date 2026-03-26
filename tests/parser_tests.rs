@@ -2347,3 +2347,76 @@ fn parse_multiple_wavetable_declarations() {
     assert_eq!(wt_items[0].name, "saw");
     assert_eq!(wt_items[1].name, "square");
 }
+
+// ── External mode parser tests ───────────────────────────────
+
+#[test]
+fn parse_sample_external_mode() {
+    let source = r#"
+        plugin "Test" {
+            sample kick "samples/kick.wav" external
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let sample_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::SampleDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(sample_items.len(), 1);
+    assert_eq!(sample_items[0].name, "kick");
+    assert_eq!(sample_items[0].path, "samples/kick.wav");
+    assert!(!sample_items[0].embed, "Expected embed=false for external mode");
+}
+
+#[test]
+fn parse_sample_default_embed() {
+    let source = r#"
+        plugin "Test" {
+            sample kick "samples/kick.wav"
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let sample_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::SampleDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(sample_items.len(), 1);
+    assert!(sample_items[0].embed, "Expected embed=true by default (no external keyword)");
+}
+
+#[test]
+fn parse_wavetable_external_mode() {
+    let source = r#"
+        plugin "Test" {
+            wavetable wt "samples/saw_stack.wav" external
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let wt_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::WavetableDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(wt_items.len(), 1);
+    assert_eq!(wt_items[0].name, "wt");
+    assert_eq!(wt_items[0].path, "samples/saw_stack.wav");
+    assert!(!wt_items[0].embed, "Expected embed=false for external mode");
+    assert_eq!(wt_items[0].frame_size, 2048);
+}

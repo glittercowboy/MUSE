@@ -538,24 +538,40 @@ fn generate_plugin_trait(
                 i
             ));
         }
-        // Sample decode: hound-based WAV decode from embedded bytes
+        // Sample decode: hound-based WAV decode from embedded bytes or runtime file
         for sample in sample_infos {
             let upper_name = sample.name.to_uppercase();
             let field_name = &sample.name;
-            init_body.push_str(&format!(
-                "        {{\n            let cursor = std::io::Cursor::new(SAMPLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            self.sample_{}_rate = spec.sample_rate;\n            self.sample_{} = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n        }}\n",
-                upper_name, field_name, field_name, field_name
-            ));
+            if sample.embed {
+                init_body.push_str(&format!(
+                    "        {{\n            let cursor = std::io::Cursor::new(SAMPLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            self.sample_{}_rate = spec.sample_rate;\n            self.sample_{} = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n        }}\n",
+                    upper_name, field_name, field_name, field_name
+                ));
+            } else {
+                let path_escaped = sample.path.replace('\\', "/");
+                init_body.push_str(&format!(
+                    "        {{\n            let data = std::fs::read(\"{}\").expect(\"failed to read external sample: {}\");\n            let cursor = std::io::Cursor::new(data);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            self.sample_{}_rate = spec.sample_rate;\n            self.sample_{} = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n        }}\n",
+                    path_escaped, field_name, field_name, field_name, field_name
+                ));
+            }
         }
-        // Wavetable decode: hound-based WAV decode from embedded bytes
+        // Wavetable decode: hound-based WAV decode from embedded bytes or runtime file
         for wt in wavetable_infos {
             let upper_name = wt.name.to_uppercase();
             let field_name = &wt.name;
             let frame_size = wt.frame_size;
-            init_body.push_str(&format!(
-                "        {{\n            let cursor = std::io::Cursor::new(WAVETABLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            let data: Vec<f32> = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n            self.wavetable_{}_frame_size = {};\n            self.wavetable_{}_frame_count = data.len() / {};\n            self.wavetable_{} = data;\n        }}\n",
-                upper_name, field_name, field_name, frame_size, field_name, frame_size, field_name
-            ));
+            if wt.embed {
+                init_body.push_str(&format!(
+                    "        {{\n            let cursor = std::io::Cursor::new(WAVETABLE_{}_DATA);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            let data: Vec<f32> = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n            self.wavetable_{}_frame_size = {};\n            self.wavetable_{}_frame_count = data.len() / {};\n            self.wavetable_{} = data;\n        }}\n",
+                    upper_name, field_name, field_name, frame_size, field_name, frame_size, field_name
+                ));
+            } else {
+                let path_escaped = wt.path.replace('\\', "/");
+                init_body.push_str(&format!(
+                    "        {{\n            let data = std::fs::read(\"{}\").expect(\"failed to read external wavetable: {}\");\n            let cursor = std::io::Cursor::new(data);\n            let reader = hound::WavReader::new(cursor).expect(\"invalid WAV: {}\");\n            let spec = reader.spec();\n            let samples: Vec<f32> = match spec.sample_format {{\n                hound::SampleFormat::Float => reader.into_samples::<f32>().filter_map(Result::ok).collect(),\n                hound::SampleFormat::Int => {{\n                    let bits = spec.bits_per_sample;\n                    let max_val = (1u64 << (bits - 1)) as f32;\n                    reader.into_samples::<i32>().filter_map(Result::ok).map(|s| s as f32 / max_val).collect()\n                }}\n            }};\n            self.wavetable_{}_frame_size = {};\n            self.wavetable_{}_frame_count = samples.len() / {};\n            self.wavetable_{} = samples;\n        }}\n",
+                    path_escaped, field_name, field_name, field_name, frame_size, field_name, frame_size, field_name
+                ));
+            }
         }
         init_body.push_str("        true");
         lifecycle_fns.push_str(&format!(

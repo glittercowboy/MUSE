@@ -29,6 +29,8 @@ pub struct SampleInfo {
     pub name: String,
     pub path: String,
     pub absolute_path: String,
+    /// If true, embed via include_bytes!(). If false, load from disk at runtime.
+    pub embed: bool,
 }
 
 /// Wavetable info resolved for codegen: name, paths, and frame geometry.
@@ -38,6 +40,8 @@ pub struct WavetableInfo {
     pub path: String,
     pub absolute_path: String,
     pub frame_size: u32,
+    /// If true, embed via include_bytes!(). If false, load from disk at runtime.
+    pub embed: bool,
 }
 
 /// Codegen-side unison configuration extracted from the AST.
@@ -194,6 +198,17 @@ fn find_sample_decls(
     let mut samples = Vec::new();
     for (item, _) in &plugin.items {
         if let PluginItem::SampleDecl(decl) = item {
+            if !decl.embed {
+                // External mode: skip canonicalize, file may not exist at compile time.
+                // Store the relative path as-is.
+                samples.push(SampleInfo {
+                    name: decl.name.clone(),
+                    path: decl.path.clone(),
+                    absolute_path: decl.path.clone(),
+                    embed: false,
+                });
+                continue;
+            }
             let abs_path = if Path::new(&decl.path).is_absolute() {
                 decl.path.clone()
             } else {
@@ -218,6 +233,7 @@ fn find_sample_decls(
                 name: decl.name.clone(),
                 path: decl.path.clone(),
                 absolute_path: abs_path,
+                embed: true,
             });
         }
     }
@@ -235,6 +251,18 @@ fn find_wavetable_decls(
     let mut wavetables = Vec::new();
     for (item, _) in &plugin.items {
         if let PluginItem::WavetableDecl(decl) = item {
+            if !decl.embed {
+                // External mode: skip canonicalize and frame validation.
+                // File may not exist at compile time.
+                wavetables.push(WavetableInfo {
+                    name: decl.name.clone(),
+                    path: decl.path.clone(),
+                    absolute_path: decl.path.clone(),
+                    frame_size: decl.frame_size,
+                    embed: false,
+                });
+                continue;
+            }
             let abs_path = if Path::new(&decl.path).is_absolute() {
                 decl.path.clone()
             } else {
@@ -278,6 +306,7 @@ fn find_wavetable_decls(
                 path: decl.path.clone(),
                 absolute_path: abs_path,
                 frame_size: decl.frame_size,
+                embed: true,
             });
         }
     }
@@ -390,8 +419,11 @@ fn assemble_lib_rs(
         out.push_str("const UNISON_MAX: i32 = 16;\n\n");
     }
 
-    // Emit include_bytes!() consts for embedded samples
+    // Emit include_bytes!() consts for embedded samples (embed mode only)
     for sample in sample_infos {
+        if !sample.embed {
+            continue;
+        }
         let const_name = format!("SAMPLE_{}_DATA", sample.name.to_uppercase());
         // Use forward slashes for cross-platform compatibility in include_bytes!()
         let path_escaped = sample.absolute_path.replace('\\', "/");
@@ -404,8 +436,11 @@ fn assemble_lib_rs(
         out.push('\n');
     }
 
-    // Emit include_bytes!() consts for embedded wavetables
+    // Emit include_bytes!() consts for embedded wavetables (embed mode only)
     for wt in wavetable_infos {
+        if !wt.embed {
+            continue;
+        }
         let const_name = format!("WAVETABLE_{}_DATA", wt.name.to_uppercase());
         let path_escaped = wt.absolute_path.replace('\\', "/");
         out.push_str(&format!(

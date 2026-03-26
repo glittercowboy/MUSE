@@ -441,19 +441,27 @@ pub enum PresetValue {
 // ── GUI blocks ───────────────────────────────────────────────
 
 /// `sample kick "samples/kick.wav"` — a sample declaration for playback.
+/// `sample kick "samples/kick.wav" external` — external mode: loaded at runtime, not embedded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SampleDecl {
     pub name: String,
     pub path: String,
+    /// If true (default), the sample is embedded via include_bytes!().
+    /// If false (`external` keyword), loaded from disk at runtime.
+    pub embed: bool,
     pub span: Span,
 }
 
 /// `wavetable wt "samples/saw_stack.wav"` — a wavetable declaration for oscillator playback.
+/// `wavetable wt "samples/saw_stack.wav" external` — external mode: loaded at runtime, not embedded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WavetableDecl {
     pub name: String,
     pub path: String,
     pub frame_size: u32,
+    /// If true (default), the wavetable is embedded via include_bytes!().
+    /// If false (`external` keyword), loaded from disk at runtime.
+    pub embed: bool,
     pub span: Span,
 }
 

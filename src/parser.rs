@@ -1614,17 +1614,24 @@ fn sample_decl_parser<'src, I>(
 where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
-    // Parse: sample <name> "<path>"
+    // Parse: sample <name> "<path>" [external]
     // Token::Sample is a keyword. The name is an Ident token.
     // The path is a StringLiteral token.
+    // Optionally followed by ident "external" for runtime loading mode.
     just(Token::Sample)
         .ignore_then(ident_name())
         .then(select! { Token::StringLiteral(s) => s })
-        .map_with(|(name, path), e| {
+        .then(
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "external")
+                .or_not(),
+        )
+        .map_with(|((name, path), external), e| {
             (
                 PluginItem::SampleDecl(SampleDecl {
                     name,
                     path,
+                    embed: external.is_none(),
                     span: e.span(),
                 }),
                 e.span(),
@@ -1632,7 +1639,7 @@ where
         })
 }
 
-/// Parse: wavetable <name> "<path>"
+/// Parse: wavetable <name> "<path>" [external]
 fn wavetable_decl_parser<'src, I>(
 ) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
 where
@@ -1641,12 +1648,18 @@ where
     just(Token::Wavetable)
         .ignore_then(ident_name())
         .then(select! { Token::StringLiteral(s) => s })
-        .map_with(|(name, path), e| {
+        .then(
+            select! { Token::Ident(s) => s }
+                .filter(|s: &String| s == "external")
+                .or_not(),
+        )
+        .map_with(|((name, path), external), e| {
             (
                 PluginItem::WavetableDecl(WavetableDecl {
                     name,
                     path,
                     frame_size: 2048,
+                    embed: external.is_none(),
                     span: e.span(),
                 }),
                 e.span(),

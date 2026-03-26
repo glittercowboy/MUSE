@@ -1,0 +1,53 @@
+// Looping Sampler — demonstrates loop() for continuous sample playback.
+// Uses loop() instead of play() so the sample wraps back to the start
+// when it reaches the end, producing continuous output while a note is held.
+
+plugin "Looping Sampler" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category instrument
+
+  clap {
+    id          "dev.museaudio.looping-sampler"
+    description "A looping sample playback instrument"
+    features    [instrument, stereo]
+  }
+
+  vst3 {
+    id              "MuseLoopSamp01"
+    subcategories   [Instrument]
+  }
+
+  input  mono
+  output stereo
+  voices 8
+
+  sample pad "samples/kick.wav"
+
+  midi {
+    note {}
+  }
+
+  process {
+    loop(pad) -> gain(note.velocity) -> output
+  }
+
+  test "silence before notes" {
+    input silence 512 samples
+    assert output.rms < -120dB
+  }
+
+  test "loop produces continuous output" {
+    note on 60 0.8 at 0
+    note off 60 at 44100
+    input silence 44100 samples
+    assert output.rms > -40dB
+  }
+
+  test "no NaN" {
+    note on 60 0.8 at 0
+    note off 60 at 4096
+    input silence 8192 samples
+    assert no_nan
+  }
+}

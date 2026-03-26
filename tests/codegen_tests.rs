@@ -2040,6 +2040,7 @@ fn sample_codegen_contains_include_bytes_and_hound_decode() {
         name: "kick".to_string(),
         path: "samples/kick.wav".to_string(),
         absolute_path: "/fake/path/samples/kick.wav".to_string(),
+        embed: true,
     }];
 
     let tmp = std::env::temp_dir().join(format!(
@@ -2165,6 +2166,7 @@ fn wavetable_codegen_contains_include_bytes_and_decode() {
         path: "samples/saw_stack.wav".to_string(),
         absolute_path: "/fake/path/samples/saw_stack.wav".to_string(),
         frame_size: 2048,
+        embed: true,
     }];
 
     let tmp = std::env::temp_dir().join(format!(
@@ -2283,6 +2285,7 @@ fn loop_codegen_contains_wraparound() {
         name: "pad".to_string(),
         path: "samples/kick.wav".to_string(),
         absolute_path: "/fake/path/samples/kick.wav".to_string(),
+        embed: true,
     }];
 
     let voice_count = Some(4u32);
