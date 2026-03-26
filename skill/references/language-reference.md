@@ -75,6 +75,42 @@ output 4         // explicit channel count
 
 Both `input` and `output` are required. `mono` = 1 channel, `stereo` = 2 channels.
 
+### Named Buses (Multi-Bus I/O)
+
+Use named buses to declare auxiliary inputs and outputs:
+
+```muse
+input main stereo         // main stereo input
+input sidechain stereo    // auxiliary sidechain input
+output stereo             // main stereo output
+```
+
+**Rules:**
+
+- The first `input`/`output` without a name, or with the name `main`, is the main bus.
+- Any other named `input`/`output` creates an auxiliary bus.
+- Named buses are accessible by name in the `process` block (e.g. `sidechain -> rms(10ms)`).
+- Bus names must be unique per direction (you can't declare two inputs with the same name).
+- Hosts present auxiliary buses as sidechain inputs or additional outputs.
+
+**Example — sidechain compressor pattern:**
+
+```muse
+input main stereo
+input sidechain stereo
+output stereo
+
+process {
+  let sc_level = sidechain -> rms(10ms)
+  let duck = if sc_level > param.threshold {
+    1.0 - param.amount * (1.0 - param.threshold / sc_level)
+  } else {
+    1.0
+  }
+  input -> gain(duck) -> output
+}
+```
+
 ## Parameter Declarations
 
 ### Basic syntax

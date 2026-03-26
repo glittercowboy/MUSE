@@ -291,19 +291,23 @@ fn generate_test_fn(tb: &TestBlock, struct_name: &str, _is_instrument: bool, db_
     ));
 
     // Initialize the plugin (sets sample_rate etc.)
-    out.push_str("        let layout = AudioIOLayout {\n");
-    out.push_str("            main_input_channels: NonZeroU32::new(TEST_CHANNELS as u32),\n");
-    out.push_str("            main_output_channels: NonZeroU32::new(TEST_CHANNELS as u32),\n");
     if !aux_inputs.is_empty() {
-        // Emit explicit aux_input_ports for plugins with aux buses
+        // Emit a const array for aux ports so the slice has 'static lifetime
         let aux_ports: Vec<String> = aux_inputs
             .iter()
             .map(|(_, ch)| format!("new_nonzero_u32({})", ch))
             .collect();
         out.push_str(&format!(
-            "            aux_input_ports: &[{}],\n",
+            "        const AUX_PORTS: [NonZeroU32; {}] = [{}];\n",
+            aux_ports.len(),
             aux_ports.join(", ")
         ));
+    }
+    out.push_str("        let layout = AudioIOLayout {\n");
+    out.push_str("            main_input_channels: NonZeroU32::new(TEST_CHANNELS as u32),\n");
+    out.push_str("            main_output_channels: NonZeroU32::new(TEST_CHANNELS as u32),\n");
+    if !aux_inputs.is_empty() {
+        out.push_str("            aux_input_ports: &AUX_PORTS,\n");
     }
     out.push_str("            ..AudioIOLayout::const_default()\n");
     out.push_str("        };\n");

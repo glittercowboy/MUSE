@@ -1,0 +1,65 @@
+// Sidechain Compressor — ducks the main signal when the sidechain is loud.
+// Demonstrates named auxiliary bus inputs and conditional gain reduction.
+
+plugin "Sidechain Comp" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.sidechain-comp"
+    description "A sidechain compressor — ducks the main signal when the sidechain is loud"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseSidechainCmp"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input main stereo
+  input sidechain stereo
+  output stereo
+
+  param threshold: float = 0.1 in 0.001..1.0 {
+    smoothing logarithmic 10ms
+  }
+
+  param amount: float = 1.0 in 0.0..1.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    let sc_level = sidechain -> rms(10ms)
+    let duck = if sc_level > param.threshold {
+      1.0 - param.amount * (1.0 - param.threshold / sc_level)
+    } else {
+      1.0
+    }
+    input -> gain(duck) -> output
+  }
+
+  test "silence sidechain no ducking" {
+    input main sine 440Hz 4096 samples
+    input sidechain silence 4096 samples
+    set param.threshold = 0.1
+    set param.amount = 1.0
+    assert output.rms > -10
+  }
+
+  test "loud sidechain causes ducking" {
+    input main sine 440Hz 4096 samples
+    input sidechain sine 100Hz 4096 samples
+    set param.threshold = 0.1
+    set param.amount = 1.0
+    assert output.rms < -6
+  }
+
+  test "safety checks" {
+    input main sine 440Hz 1024 samples
+    input sidechain sine 100Hz 1024 samples
+    assert no_nan
+    assert no_inf
+    assert no_denormal
+  }
+}

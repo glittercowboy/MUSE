@@ -1,6 +1,6 @@
 # Plugin Recipes
 
-21 annotated examples from the Muse codebase, showing common plugin patterns.
+22 annotated examples from the Muse codebase, showing common plugin patterns.
 
 ---
 
@@ -1595,3 +1595,88 @@ plugin "Looping Sampler" {
 | Build a sample-based drum machine | Recipe 19 (Drum Machine) |
 | Build a wavetable synthesizer with timbral morphing | Recipe 20 (Wavetable Synth) |
 | Build a looping sample playback instrument | Recipe 21 (Looping Sampler) |
+| Duck audio using a sidechain input | Recipe 22 (Sidechain Compressor) |
+
+---
+
+## Recipe 22: Sidechain Compressor (Multi-Bus / Aux Input)
+
+A sidechain compressor that ducks the main signal when the sidechain bus is loud — demonstrates named auxiliary buses, aux buffer reads in the process block, and named bus test inputs.
+
+**Pattern:** `input sidechain stereo` + `sidechain -> rms(10ms)` → conditional gain reduction → `output`
+
+**Source:** `examples/sidechain_compressor.muse`
+
+```muse
+plugin "Sidechain Comp" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.sidechain-comp"
+    description "A sidechain compressor — ducks the main signal when the sidechain is loud"
+    features    [audio_effect, stereo, utility]
+  }
+
+  vst3 {
+    id              "MuseSidechainCmp"
+    subcategories   [Fx, Dynamics]
+  }
+
+  input main stereo
+  input sidechain stereo
+  output stereo
+
+  param threshold: float = 0.1 in 0.001..1.0 {
+    smoothing logarithmic 10ms
+  }
+
+  param amount: float = 1.0 in 0.0..1.0 {
+    smoothing linear 5ms
+  }
+
+  process {
+    let sc_level = sidechain -> rms(10ms)
+    let duck = if sc_level > param.threshold {
+      1.0 - param.amount * (1.0 - param.threshold / sc_level)
+    } else {
+      1.0
+    }
+    input -> gain(duck) -> output
+  }
+
+  test "silence sidechain no ducking" {
+    input main sine 440Hz 4096 samples
+    input sidechain silence 4096 samples
+    set param.threshold = 0.1
+    set param.amount = 1.0
+    assert output.rms > -10
+  }
+
+  test "loud sidechain causes ducking" {
+    input main sine 440Hz 4096 samples
+    input sidechain sine 100Hz 4096 samples
+    set param.threshold = 0.1
+    set param.amount = 1.0
+    assert output.rms < -6
+  }
+
+  test "safety checks" {
+    input main sine 440Hz 1024 samples
+    input sidechain sine 100Hz 1024 samples
+    assert no_nan
+    assert no_inf
+    assert no_denormal
+  }
+}
+```
+
+**Key points:**
+- `input main stereo` declares the main bus; `input sidechain stereo` declares an auxiliary bus
+- The first unnamed `input` or `input main` is the main bus — all other named inputs are aux
+- `sidechain -> rms(10ms)` reads the aux buffer per-sample and computes a running RMS level
+- Named buses are accessible by name in the `process` block as signal sources
+- The `if/else` expression computes a gain duck factor: 1.0 = no ducking, <1.0 = reduced gain
+- Test blocks use `input <bus_name> <signal> <count> samples` to populate specific buses
+- Hosts present aux buses as sidechain inputs — route the ducking source to the sidechain bus

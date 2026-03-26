@@ -62,6 +62,24 @@ input impulse 256 samples
 
 The sample count determines how many samples the test runner processes.
 
+### Named Bus Inputs
+
+For plugins with multiple buses (e.g., sidechain compressors), prefix the signal with the bus name:
+
+```muse
+input main sine 440Hz 4096 samples       // main bus gets a sine wave
+input sidechain silence 4096 samples      // sidechain bus gets silence
+input sidechain sine 100Hz 4096 samples   // sidechain bus gets a 100Hz sine
+```
+
+**Rules:**
+- `input <bus_name> <signal> <count> samples` — routes the signal to the named bus
+- Omitting the bus name targets the main bus (backward compatible with existing tests)
+- `input main ...` is equivalent to `input ...` — both target the main bus
+- Bus names must match a declared `input` in the plugin (e.g., `input sidechain stereo`)
+- Each bus can have its own signal type and sample count
+- Unnamed aux buses receive silence by default if not explicitly set in the test
+
 ## Set Statements
 
 Set a plugin parameter before processing:
@@ -204,6 +222,17 @@ test "envelope shape" {
 test "no note produces silence" {
   input  silence 512 samples
   assert output.rms < -120dB
+}
+```
+
+### Sidechain: ducking verification
+```muse
+test "loud sidechain causes ducking" {
+  input main sine 440Hz 4096 samples
+  input sidechain sine 100Hz 4096 samples
+  set param.threshold = 0.1
+  set param.amount = 1.0
+  assert output.rms < -6
 }
 ```
 
