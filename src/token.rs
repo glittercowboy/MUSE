@@ -102,6 +102,8 @@ pub enum Token {
     Unison,
     #[token("sample")]
     Sample,
+    #[token("wavetable")]
+    Wavetable,
     #[token("import")]
     Import,
     #[token("test")]
@@ -275,6 +277,7 @@ impl fmt::Display for Token {
             Token::Poly => write!(f, "poly"),
             Token::Unison => write!(f, "unison"),
             Token::Sample => write!(f, "sample"),
+            Token::Wavetable => write!(f, "wavetable"),
             Token::Import => write!(f, "import"),
             Token::Test => write!(f, "test"),
             Token::Feedback => write!(f, "feedback"),

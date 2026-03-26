@@ -11,7 +11,10 @@ fn samples_dir() -> std::path::PathBuf {
     project_root().join("examples").join("samples")
 }
 
+/// Regenerate sample WAV files. Run explicitly with:
+/// `cargo test generate_sample_wavs -- --ignored`
 #[test]
+#[ignore]
 fn generate_sample_wavs() {
     let samples_dir = samples_dir();
     std::fs::create_dir_all(&samples_dir).unwrap();

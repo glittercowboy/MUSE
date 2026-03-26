@@ -2297,3 +2297,53 @@ fn parse_sample_with_process_block() {
     assert!(has_sample, "Expected sample declaration");
     assert!(has_process, "Expected process block");
 }
+
+// ── Wavetable parser tests ───────────────────────────────────
+
+#[test]
+fn parse_wavetable_declaration() {
+    let source = r#"
+        plugin "Test" {
+            wavetable wt "samples/test.wav"
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let wt_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::WavetableDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(wt_items.len(), 1);
+    assert_eq!(wt_items[0].name, "wt");
+    assert_eq!(wt_items[0].path, "samples/test.wav");
+    assert_eq!(wt_items[0].frame_size, 2048);
+}
+
+#[test]
+fn parse_multiple_wavetable_declarations() {
+    let source = r#"
+        plugin "Test" {
+            wavetable saw "samples/saw.wav"
+            wavetable square "samples/square.wav"
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let wt_items: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| match item {
+            PluginItem::WavetableDecl(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(wt_items.len(), 2);
+    assert_eq!(wt_items[0].name, "saw");
+    assert_eq!(wt_items[1].name, "square");
+}

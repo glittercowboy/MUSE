@@ -90,6 +90,10 @@ struct Resolver<'a> {
     samples: HashMap<String, String>,
     /// Duplicate sample detection
     seen_samples: HashSet<String>,
+    /// Wavetable declarations: name → path
+    wavetables: HashMap<String, String>,
+    /// Duplicate wavetable detection
+    seen_wavetables: HashSet<String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -108,6 +112,8 @@ impl<'a> Resolver<'a> {
             split_depth: 0,
             samples: HashMap::new(),
             seen_samples: HashSet::new(),
+            wavetables: HashMap::new(),
+            seen_wavetables: HashSet::new(),
         }
     }
 
@@ -146,6 +152,21 @@ impl<'a> Resolver<'a> {
                     } else {
                         self.seen_samples.insert(decl.name.clone());
                         self.samples.insert(decl.name.clone(), decl.path.clone());
+                    }
+                }
+                PluginItem::WavetableDecl(decl) => {
+                    if self.seen_wavetables.contains(&decl.name) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E015",
+                                decl.span,
+                                format!("duplicate wavetable name '{}'", decl.name),
+                            )
+                            .with_suggestion("Each wavetable must have a unique name."),
+                        );
+                    } else {
+                        self.seen_wavetables.insert(decl.name.clone());
+                        self.wavetables.insert(decl.name.clone(), decl.path.clone());
                     }
                 }
                 _ => {}
@@ -834,6 +855,31 @@ impl<'a> Resolver<'a> {
                 return None;
             }
         };
+
+        // Special handling for wavetable_osc() — takes a wavetable name, pitch, and position
+        if callee_name == "wavetable_osc" && args.len() == 3 {
+            if let Expr::Ident(ref wt_name) = args[0].0 {
+                if self.wavetables.contains_key(wt_name) {
+                    self.record(args[0].1, DspType::Signal);
+                    self.resolve_expr(&args[1]);
+                    self.resolve_expr(&args[2]);
+                    return Some(DspType::Signal);
+                } else {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E003",
+                            span,
+                            format!("unknown wavetable '{}' in wavetable_osc() call", wt_name),
+                        )
+                        .with_suggestion(format!(
+                            "Declare the wavetable first: `wavetable {} \"path/to/file.wav\"`",
+                            wt_name
+                        )),
+                    );
+                    return None;
+                }
+            }
+        }
 
         // Special handling for play() — takes a sample name, not standard DSP types
         if callee_name == "play" && args.len() == 1 {

@@ -33,6 +33,7 @@ pub enum PluginItem {
     PresetDecl(PresetBlock),
     GuiDecl(GuiBlock),
     SampleDecl(SampleDecl),
+    WavetableDecl(WavetableDecl),
 }
 
 // ── Metadata ─────────────────────────────────────────────────
@@ -444,6 +445,15 @@ pub enum PresetValue {
 pub struct SampleDecl {
     pub name: String,
     pub path: String,
+    pub span: Span,
+}
+
+/// `wavetable wt "samples/saw_stack.wav"` — a wavetable declaration for oscillator playback.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WavetableDecl {
+    pub name: String,
+    pub path: String,
+    pub frame_size: u32,
     pub span: Span,
 }
 

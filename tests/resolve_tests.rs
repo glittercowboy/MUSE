@@ -1542,3 +1542,69 @@ plugin "Test" {
     let has_number = resolved.type_map.values().any(|t| *t == DspType::Number);
     assert!(has_number, "Expected note.number to resolve to Number type");
 }
+
+// ── Wavetable resolver tests ─────────────────────────────────
+
+#[test]
+fn wavetable_declaration_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    wavetable wt "samples/test.wav"
+    process { input -> output }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn duplicate_wavetable_name_produces_e015() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    wavetable wt "samples/a.wav"
+    wavetable wt "samples/b.wav"
+    process { input -> output }
+}
+"##;
+    let diags = resolve_expect_errors(source);
+    let e015 = find_error(&diags, "E015");
+    assert!(e015.message.contains("duplicate wavetable name 'wt'"));
+}
+
+#[test]
+fn wavetable_osc_with_declared_wavetable_resolves_ok() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    midi { note {} }
+    voices 8
+    wavetable wt "samples/test.wav"
+    process {
+        wavetable_osc(wt, note.pitch, 0.5) -> output
+    }
+}
+"##;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn wavetable_osc_with_unknown_wavetable_produces_e003() {
+    let source = r##"
+plugin "Test" {
+    input mono
+    output stereo
+    midi { note {} }
+    voices 8
+    process {
+        wavetable_osc(wt, note.pitch, 0.5) -> output
+    }
+}
+"##;
+    let diags = resolve_expect_errors(source);
+    let e003 = find_error(&diags, "E003");
+    assert!(e003.message.contains("unknown wavetable 'wt'"));
+}

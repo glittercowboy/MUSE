@@ -74,6 +74,7 @@ pub enum DspPrimitive {
     Crossfade,
     SampleAndHold,
     Play,
+    WavetableOsc,
 }
 
 // ── Function signature types ─────────────────────────────────

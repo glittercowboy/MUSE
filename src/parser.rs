@@ -228,6 +228,7 @@ where
         Token::Note => "note".to_string(),
         Token::Cc => "cc".to_string(),
         Token::Sample => "sample".to_string(),
+        Token::Wavetable => "wavetable".to_string(),
         // Built-in function names that are also keywords
         Token::Midi => "midi".to_string(),
     }
@@ -261,6 +262,7 @@ where
         Token::Unit => "unit".to_string(),
         Token::Display => "display".to_string(),
         Token::Sample => "sample".to_string(),
+        Token::Wavetable => "wavetable".to_string(),
         Token::Test => "test".to_string(),
         Token::Split => "split".to_string(),
         Token::Merge => "merge".to_string(),
@@ -1630,6 +1632,28 @@ where
         })
 }
 
+/// Parse: wavetable <name> "<path>"
+fn wavetable_decl_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    just(Token::Wavetable)
+        .ignore_then(ident_name())
+        .then(select! { Token::StringLiteral(s) => s })
+        .map_with(|(name, path), e| {
+            (
+                PluginItem::WavetableDecl(WavetableDecl {
+                    name,
+                    path,
+                    frame_size: 2048,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1648,6 +1672,7 @@ where
         preset_block_parser(),
         gui_block_parser(),
         sample_decl_parser(),
+        wavetable_decl_parser(),
         process_block_parser(),
         test_block_parser(),
     ))
