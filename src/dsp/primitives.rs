@@ -78,6 +78,9 @@ pub enum DspPrimitive {
     Loop,
     Reverb,
     Oversample,
+    MidSideEncode,
+    MidSideDecode,
+    StereoWidth,
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -406,6 +409,25 @@ pub fn builtin_registry() -> DspRegistry {
             ],
             return_type: DspType::Processor,
             primitive: DspPrimitive::Reverb,
+        },
+        // ── Stereo / Mid-Side processing ──
+        DspFunction {
+            name: "mid_side_encode".into(),
+            params: vec![],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::MidSideEncode,
+        },
+        DspFunction {
+            name: "mid_side_decode".into(),
+            params: vec![],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::MidSideDecode,
+        },
+        DspFunction {
+            name: "stereo_width".into(),
+            params: vec![param("width", DspType::Number)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::StereoWidth,
         },
     ];
 

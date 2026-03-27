@@ -137,6 +137,10 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     for wt in wavetable_infos {
         out.push_str(&format!("    wavetable_{}: Vec<f32>,\n    wavetable_{}_frame_size: usize,\n    wavetable_{}_frame_count: usize,\n", wt.name, wt.name, wt.name));
     }
+    // Stereo width parameter storage — per-call-site f32 to hold the current width value
+    for i in 0..process_info.stereo_width_count {
+        out.push_str(&format!("    stereo_width_param_{}: f32,\n", i));
+    }
     out.push_str("}\n\n");
 
     out.push_str(&format!(
@@ -205,6 +209,10 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
     for wt in wavetable_infos {
         out.push_str(&format!("            wavetable_{}: Vec::new(),\n            wavetable_{}_frame_size: 0,\n            wavetable_{}_frame_count: 0,\n", wt.name, wt.name, wt.name));
+    }
+    // Stereo width parameter defaults (1.0 = unity/normal width)
+    for i in 0..process_info.stereo_width_count {
+        out.push_str(&format!("            stereo_width_param_{}: 1.0,\n", i));
     }
     out.push_str("        }\n    }\n}\n\n");
 

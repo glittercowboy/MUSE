@@ -7,7 +7,7 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_38_functions() {
+fn registry_contains_all_41_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
@@ -18,6 +18,7 @@ fn registry_contains_all_38_functions() {
         "rms", "peak_follow", "gate",
         "soft_clip", "dc_block", "crossfade", "sample_and_hold",
         "reverb",
+        "mid_side_encode", "mid_side_decode", "stereo_width",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
     for name in &expected {
@@ -413,6 +414,33 @@ fn reverb_signature() {
     assert_param(&f.params[3], "mix", DspType::Number, true);
     assert_eq!(f.return_type, DspType::Processor);
     assert_eq!(f.primitive, DspPrimitive::Reverb);
+}
+
+// ── Stereo / Mid-Side processing ─────────────────────────────
+
+#[test]
+fn mid_side_encode_signature() {
+    let f = lookup("mid_side_encode");
+    assert_eq!(f.params.len(), 0);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::MidSideEncode);
+}
+
+#[test]
+fn mid_side_decode_signature() {
+    let f = lookup("mid_side_decode");
+    assert_eq!(f.params.len(), 0);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::MidSideDecode);
+}
+
+#[test]
+fn stereo_width_signature() {
+    let f = lookup("stereo_width");
+    assert_eq!(f.params.len(), 1);
+    assert_param(&f.params[0], "width", DspType::Number, false);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::StereoWidth);
 }
 
 // ── Type compatibility ───────────────────────────────────────
