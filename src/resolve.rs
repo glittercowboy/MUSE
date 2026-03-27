@@ -1114,9 +1114,42 @@ impl<'a> Resolver<'a> {
             BinOp::Chain => {
                 self.resolve_chain(left_ty, right_ty, left, right, span)
             }
-            // Arithmetic ops: result is Number (or propagate domain types)
+            // Arithmetic ops: result depends on operand types
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                Some(DspType::Number)
+                match (left_ty, right_ty) {
+                    // Signal * Signal -> Signal (ring modulation, AM synthesis)
+                    // Signal +/- Signal -> Signal (mixing, subtraction)
+                    (Some(DspType::Signal), Some(DspType::Signal))
+                        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) =>
+                    {
+                        Some(DspType::Signal)
+                    }
+                    // Signal * Number -> Signal (amplitude scaling)
+                    // Number * Signal -> Signal (commutative)
+                    (Some(DspType::Signal), Some(rhs))
+                        if op == BinOp::Mul && rhs.is_numeric_domain() =>
+                    {
+                        Some(DspType::Signal)
+                    }
+                    (Some(lhs), Some(DspType::Signal))
+                        if op == BinOp::Mul && lhs.is_numeric_domain() =>
+                    {
+                        Some(DspType::Signal)
+                    }
+                    // Signal +/- Number -> Signal (DC offset, level adjustment)
+                    (Some(DspType::Signal), Some(rhs))
+                        if matches!(op, BinOp::Add | BinOp::Sub) && rhs.is_numeric_domain() =>
+                    {
+                        Some(DspType::Signal)
+                    }
+                    (Some(lhs), Some(DspType::Signal))
+                        if matches!(op, BinOp::Add | BinOp::Sub) && lhs.is_numeric_domain() =>
+                    {
+                        Some(DspType::Signal)
+                    }
+                    // Default: pure numeric arithmetic
+                    _ => Some(DspType::Number),
+                }
             }
             // Comparison ops: result is Bool
             BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq

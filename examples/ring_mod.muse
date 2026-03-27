@@ -1,0 +1,54 @@
+// Ring Modulator — multiplies two signals together for metallic tones.
+// Demonstrates signal math: Signal * Signal -> Signal
+
+plugin "Ring Mod" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.ring-mod"
+    description "A ring modulator effect"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseRingMod001"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param freq: float = 200.0 in 20.0..2000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  param depth: float = 1.0 in 0.0..1.0 {
+    smoothing linear 20ms
+  }
+
+  process {
+    let carrier = input
+    let mod_signal = sine(param.freq)
+    let modulated = carrier * (1.0 - param.depth + param.depth * mod_signal)
+    modulated -> output
+  }
+
+  test "dry when depth is zero" {
+    set param.depth = 0.0
+    set param.freq = 200.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+
+  test "modulated output" {
+    set param.depth = 1.0
+    set param.freq = 200.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -20dB
+    assert no_nan
+  }
+}

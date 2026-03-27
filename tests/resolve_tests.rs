@@ -1816,3 +1816,145 @@ plugin "Test" {
         e016.message
     );
 }
+
+// ── Signal math tests ───────────────────────────────────────
+
+#[test]
+fn signal_mul_signal_resolves() {
+    // Signal * Signal -> Signal (ring modulation)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    process {
+        let a = sine(440.0)
+        let b = sine(200.0)
+        let c = a * b
+        c -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn signal_mul_number_resolves() {
+    // Signal * Number -> Signal (amplitude scaling)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    param gain: float = 0.5 in 0.0..1.0 {}
+    process {
+        let sig = sine(440.0)
+        let scaled = sig * param.gain
+        scaled -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn number_mul_signal_resolves() {
+    // Number * Signal -> Signal (commutative)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    process {
+        let sig = sine(440.0)
+        let scaled = 0.5 * sig
+        scaled -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn signal_add_signal_resolves() {
+    // Signal + Signal -> Signal (mixing)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    process {
+        let a = sine(440.0)
+        let b = sine(200.0)
+        let mixed = a + b
+        mixed -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn signal_sub_signal_resolves() {
+    // Signal - Signal -> Signal (subtraction)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    process {
+        let a = sine(440.0)
+        let b = sine(200.0)
+        let diff = a - b
+        diff -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn signal_add_number_resolves() {
+    // Signal + Number -> Signal (DC offset)
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    process {
+        let sig = sine(440.0)
+        let offset = sig + 0.5
+        offset -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn ring_mod_example_resolves() {
+    let source = include_str!("../examples/ring_mod.muse");
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
+}
+
+#[test]
+fn complex_signal_math_expression_resolves() {
+    // carrier * (1.0 - depth + depth * mod_signal) — the ring mod pattern
+    let source = r#"
+plugin "Test" {
+    input stereo
+    output stereo
+    param depth: float = 1.0 in 0.0..1.0 {}
+    param freq: float = 200.0 in 20.0..2000.0 {}
+    process {
+        let carrier = input
+        let mod_signal = sine(param.freq)
+        let modulated = carrier * (1.0 - param.depth + param.depth * mod_signal)
+        modulated -> output
+    }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
