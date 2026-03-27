@@ -43,6 +43,85 @@ pub struct ProcessInfo {
     pub loop_call_count: usize,
 }
 
+/// A (field_prefix, rust_type, count) descriptor for generating DSP state fields.
+pub struct StateSlot<'a> {
+    pub prefix: &'a str,
+    pub type_name: &'a str,
+    pub count: usize,
+}
+
+impl ProcessInfo {
+    /// Returns descriptors for the "simple" indexed DSP state fields —
+    /// those that follow the `{prefix}_{i}: {Type}` pattern.
+    /// Special cases (delay, eq_biquad, play, loop) are handled separately.
+    pub fn simple_state_slots(&self) -> Vec<StateSlot<'_>> {
+        [
+            ("osc_state",          "OscState",           self.oscillator_count),
+            ("chorus_state",       "ChorusState",        self.chorus_count),
+            ("compressor_state",   "CompressorState",    self.compressor_count),
+            ("rms_state",          "RmsState",           self.rms_count),
+            ("peak_follow_state",  "PeakFollowState",    self.peak_follow_count),
+            ("gate_state",         "GateState",          self.gate_count),
+            ("dc_block_state",     "DcBlockState",       self.dc_block_count),
+            ("sample_hold_state",  "SampleAndHoldState", self.sample_hold_count),
+            ("wt_osc_state",       "WtOscState",         self.wt_osc_call_count),
+        ].into_iter()
+         .filter(|(_, _, count)| *count > 0)
+         .map(|(prefix, type_name, count)| StateSlot { prefix, type_name, count })
+         .collect()
+    }
+
+    /// Returns true if any DSP primitive requires knowing sample_rate at runtime.
+    pub fn needs_sample_rate(&self, needs_any_biquad: bool) -> bool {
+        needs_any_biquad || self.is_instrument || self.oscillator_count > 0
+            || self.chorus_count > 0 || self.compressor_count > 0 || self.delay_count > 0
+            || self.eq_biquad_count > 0 || self.rms_count > 0 || self.peak_follow_count > 0
+            || self.gate_count > 0 || self.wt_osc_call_count > 0
+    }
+}
+
+/// Emit struct field declarations for each slot: `    {prefix}_{i}: {Type},\n`
+pub fn emit_state_fields(slots: &[StateSlot<'_>], indent: &str) -> String {
+    let mut out = String::new();
+    for slot in slots {
+        for i in 0..slot.count {
+            out.push_str(&format!("{indent}{}_{}: {},\n", slot.prefix, i, slot.type_name));
+        }
+    }
+    out
+}
+
+/// Emit default initializers for each slot: `    {prefix}_{i}: {Type}::default(),\n`
+pub fn emit_state_defaults(slots: &[StateSlot<'_>], indent: &str) -> String {
+    let mut out = String::new();
+    for slot in slots {
+        for i in 0..slot.count {
+            out.push_str(&format!("{indent}{}_{}: {}::default(),\n", slot.prefix, i, slot.type_name));
+        }
+    }
+    out
+}
+
+/// Emit play/loop position+active fields: `    {kind}_pos_{i}: f32,\n    {kind}_active_{i}: bool,\n`
+pub fn emit_playback_fields(kind: &str, count: usize, indent: &str) -> String {
+    let mut out = String::new();
+    for i in 0..count {
+        out.push_str(&format!("{indent}{kind}_pos_{i}: f32,\n"));
+        out.push_str(&format!("{indent}{kind}_active_{i}: bool,\n"));
+    }
+    out
+}
+
+/// Emit play/loop default initializers.
+pub fn emit_playback_defaults(kind: &str, count: usize, indent: &str, active_default: &str) -> String {
+    let mut out = String::new();
+    for i in 0..count {
+        out.push_str(&format!("{indent}{kind}_pos_{i}: 0.0,\n"));
+        out.push_str(&format!("{indent}{kind}_active_{i}: {active_default},\n"));
+    }
+    out
+}
+
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> (String, ProcessInfo) {
     let is_instrument = find_midi_decl(plugin);
 

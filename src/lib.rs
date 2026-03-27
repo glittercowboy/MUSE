@@ -72,7 +72,7 @@ pub fn compile(
     let package_name = codegen::cargo::plugin_name_to_package(&plugin_name);
     let clap_id = extract_clap_id(&plugin).unwrap_or_default();
     let vst3_id = extract_vst3_id(&plugin).unwrap_or_default();
-    let version = extract_version(&plugin).unwrap_or_else(|| "0.1.0".to_string());
+    let version = extract_metadata(&plugin, ast::MetadataKey::Version).unwrap_or_else(|| "0.1.0".to_string());
 
     let registry = dsp::builtin_registry();
     let resolved = resolve::resolve_plugin(&plugin, &registry)?;
@@ -96,47 +96,37 @@ pub fn compile(
     })
 }
 
+/// Find the first plugin item matching a predicate and extract a value from it.
+fn find_in_plugin<T>(plugin: &ast::PluginDef, f: impl Fn(&ast::PluginItem) -> Option<T>) -> Option<T> {
+    plugin.items.iter().find_map(|(item, _)| f(item))
+}
+
 /// Extract the CLAP ID from a plugin's AST.
 fn extract_clap_id(plugin: &ast::PluginDef) -> Option<String> {
-    for (item, _) in &plugin.items {
-        if let ast::PluginItem::FormatBlock(ast::FormatBlock::Clap(clap)) = item {
-            for (clap_item, _) in &clap.items {
-                if let ast::ClapItem::Id(id) = clap_item {
-                    return Some(id.clone());
-                }
-            }
-        }
-    }
-    None
+    find_in_plugin(plugin, |item| match item {
+        ast::PluginItem::FormatBlock(ast::FormatBlock::Clap(clap)) =>
+            clap.items.iter().find_map(|(ci, _)| match ci { ast::ClapItem::Id(id) => Some(id.clone()), _ => None }),
+        _ => None,
+    })
 }
 
 /// Extract the VST3 ID from a plugin's AST.
 pub fn extract_vst3_id(plugin: &ast::PluginDef) -> Option<String> {
-    for (item, _) in &plugin.items {
-        if let ast::PluginItem::FormatBlock(ast::FormatBlock::Vst3(vst3)) = item {
-            for (vst3_item, _) in &vst3.items {
-                if let ast::Vst3Item::Id(id) = vst3_item {
-                    return Some(id.clone());
-                }
-            }
-        }
-    }
-    None
+    find_in_plugin(plugin, |item| match item {
+        ast::PluginItem::FormatBlock(ast::FormatBlock::Vst3(vst3)) =>
+            vst3.items.iter().find_map(|(vi, _)| match vi { ast::Vst3Item::Id(id) => Some(id.clone()), _ => None }),
+        _ => None,
+    })
 }
 
-/// Extract the version string from a plugin's metadata.
-fn extract_version(plugin: &ast::PluginDef) -> Option<String> {
-    for (item, _) in &plugin.items {
-        if let ast::PluginItem::Metadata(meta) = item {
-            if meta.key == ast::MetadataKey::Version {
-                return match &meta.value {
-                    ast::MetadataValue::StringVal(s) => Some(s.clone()),
-                    ast::MetadataValue::Identifier(s) => Some(s.clone()),
-                };
-            }
-        }
-    }
-    None
+/// Extract a metadata string by key from a plugin's AST.
+fn extract_metadata(plugin: &ast::PluginDef, key: ast::MetadataKey) -> Option<String> {
+    find_in_plugin(plugin, |item| match item {
+        ast::PluginItem::Metadata(meta) if meta.key == key => match &meta.value {
+            ast::MetadataValue::StringVal(s) | ast::MetadataValue::Identifier(s) => Some(s.clone()),
+        },
+        _ => None,
+    })
 }
 
 /// Output from a successful [`build_plugin()`] run.
@@ -194,16 +184,57 @@ pub fn build_plugin(crate_dir: &std::path::Path, package_name: &str) -> Result<B
     })
 }
 
+/// Assemble a macOS plugin bundle (.clap or .vst3) from a built cdylib.
+fn assemble_bundle(
+    output_dir: &std::path::Path,
+    dylib_path: &std::path::Path,
+    plugin_name: &str,
+    bundle_id: &str,
+    version: &str,
+    extension: &str,
+    pkg_info: bool,
+) -> Result<std::path::PathBuf, String> {
+    let bundle_dir = output_dir.join(format!("{plugin_name}.{extension}"));
+    let contents_dir = bundle_dir.join("Contents");
+    let macos_dir = contents_dir.join("MacOS");
+
+    std::fs::create_dir_all(&macos_dir)
+        .map_err(|e| format!("failed to create {extension} bundle directory: {e}"))?;
+
+    std::fs::copy(dylib_path, macos_dir.join(plugin_name))
+        .map_err(|e| format!("failed to copy dylib to {extension} bundle: {e}"))?;
+
+    if pkg_info {
+        std::fs::write(contents_dir.join("PkgInfo"), b"BNDL????")
+            .map_err(|e| format!("failed to write PkgInfo: {e}"))?;
+    }
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>{plugin_name}</string>
+    <key>CFBundleExecutable</key>
+    <string>{plugin_name}</string>
+    <key>CFBundleIdentifier</key>
+    <string>{bundle_id}</string>
+    <key>CFBundleVersion</key>
+    <string>{version}</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+</dict>
+</plist>
+"#
+    );
+    std::fs::write(contents_dir.join("Info.plist"), plist)
+        .map_err(|e| format!("failed to write {extension} Info.plist: {e}"))?;
+
+    Ok(bundle_dir)
+}
+
 /// Assemble a macOS .clap bundle directory from a built cdylib.
-///
-/// Creates:
-/// ```text
-/// <output_dir>/<Plugin Display Name>.clap/
-///   Contents/
-///     Info.plist
-///     MacOS/
-///       <Plugin Display Name>    ← renamed dylib
-/// ```
 pub fn assemble_clap_bundle(
     output_dir: &std::path::Path,
     dylib_path: &std::path::Path,
@@ -211,55 +242,10 @@ pub fn assemble_clap_bundle(
     clap_id: &str,
     version: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let bundle_dir = output_dir.join(format!("{plugin_name}.clap"));
-    let contents_dir = bundle_dir.join("Contents");
-    let macos_dir = contents_dir.join("MacOS");
-
-    std::fs::create_dir_all(&macos_dir)
-        .map_err(|e| format!("failed to create bundle directory: {e}"))?;
-
-    // Copy dylib → Contents/MacOS/<Plugin Display Name>
-    let binary_dest = macos_dir.join(plugin_name);
-    std::fs::copy(dylib_path, &binary_dest)
-        .map_err(|e| format!("failed to copy dylib to bundle: {e}"))?;
-
-    // Generate Info.plist
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>{plugin_name}</string>
-    <key>CFBundleExecutable</key>
-    <string>{plugin_name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{clap_id}</string>
-    <key>CFBundleVersion</key>
-    <string>{version}</string>
-    <key>CFBundlePackageType</key>
-    <string>BNDL</string>
-</dict>
-</plist>
-"#
-    );
-    std::fs::write(contents_dir.join("Info.plist"), plist)
-        .map_err(|e| format!("failed to write Info.plist: {e}"))?;
-
-    Ok(bundle_dir)
+    assemble_bundle(output_dir, dylib_path, plugin_name, clap_id, version, "clap", false)
 }
 
 /// Assemble a macOS .vst3 bundle directory from a built cdylib.
-///
-/// Creates:
-/// ```text
-/// <output_dir>/<Plugin Display Name>.vst3/
-///   Contents/
-///     PkgInfo          ← "BNDL????" (8 bytes, nih-plug convention)
-///     Info.plist
-///     MacOS/
-///       <Plugin Display Name>    ← renamed dylib
-/// ```
 pub fn assemble_vst3_bundle(
     output_dir: &std::path::Path,
     dylib_path: &std::path::Path,
@@ -267,46 +253,7 @@ pub fn assemble_vst3_bundle(
     vst3_id: &str,
     version: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let bundle_dir = output_dir.join(format!("{plugin_name}.vst3"));
-    let contents_dir = bundle_dir.join("Contents");
-    let macos_dir = contents_dir.join("MacOS");
-
-    std::fs::create_dir_all(&macos_dir)
-        .map_err(|e| format!("failed to create VST3 bundle directory: {e}"))?;
-
-    // Copy dylib → Contents/MacOS/<Plugin Display Name>
-    let binary_dest = macos_dir.join(plugin_name);
-    std::fs::copy(dylib_path, &binary_dest)
-        .map_err(|e| format!("failed to copy dylib to VST3 bundle: {e}"))?;
-
-    // Write PkgInfo (nih-plug convention)
-    std::fs::write(contents_dir.join("PkgInfo"), b"BNDL????")
-        .map_err(|e| format!("failed to write PkgInfo: {e}"))?;
-
-    // Generate Info.plist
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleName</key>
-    <string>{plugin_name}</string>
-    <key>CFBundleExecutable</key>
-    <string>{plugin_name}</string>
-    <key>CFBundleIdentifier</key>
-    <string>{vst3_id}</string>
-    <key>CFBundleVersion</key>
-    <string>{version}</string>
-    <key>CFBundlePackageType</key>
-    <string>BNDL</string>
-</dict>
-</plist>
-"#
-    );
-    std::fs::write(contents_dir.join("Info.plist"), plist)
-        .map_err(|e| format!("failed to write VST3 Info.plist: {e}"))?;
-
-    Ok(bundle_dir)
+    assemble_bundle(output_dir, dylib_path, plugin_name, vst3_id, version, "vst3", true)
 }
 
 /// Ad-hoc codesign a macOS bundle (CLAP or VST3).

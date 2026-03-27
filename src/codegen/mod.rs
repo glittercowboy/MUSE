@@ -188,6 +188,31 @@ fn find_unison_config(plugin: &PluginDef) -> Option<CodegenUnisonConfig> {
     })
 }
 
+/// Resolve a relative asset path to an absolute path, reporting E015 on failure.
+fn resolve_asset_path(
+    rel_path: &str,
+    base_dir: &Path,
+    kind: &str,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    if Path::new(rel_path).is_absolute() {
+        return Some(rel_path.to_string());
+    }
+    let resolved = base_dir.join(rel_path);
+    match resolved.canonicalize() {
+        Ok(p) => Some(p.to_string_lossy().to_string()),
+        Err(_) => {
+            diagnostics.push(Diagnostic::error(
+                "E015",
+                span,
+                format!("{kind} file not found: '{rel_path}' (resolved to '{}')", resolved.display()),
+            ));
+            None
+        }
+    }
+}
+
 /// Extract sample declarations from the AST and resolve their absolute paths.
 fn find_sample_decls(
     plugin: &PluginDef,
@@ -195,122 +220,46 @@ fn find_sample_decls(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<SampleInfo> {
     let base_dir = source_dir.unwrap_or(Path::new("."));
-    let mut samples = Vec::new();
-    for (item, _) in &plugin.items {
-        if let PluginItem::SampleDecl(decl) = item {
-            if !decl.embed {
-                // External mode: skip canonicalize, file may not exist at compile time.
-                // Store the relative path as-is.
-                samples.push(SampleInfo {
-                    name: decl.name.clone(),
-                    path: decl.path.clone(),
-                    absolute_path: decl.path.clone(),
-                    embed: false,
-                });
-                continue;
-            }
-            let abs_path = if Path::new(&decl.path).is_absolute() {
-                decl.path.clone()
-            } else {
-                let resolved = base_dir.join(&decl.path);
-                match resolved.canonicalize() {
-                    Ok(p) => p.to_string_lossy().to_string(),
-                    Err(_) => {
-                        diagnostics.push(Diagnostic::error(
-                            "E015",
-                            decl.span,
-                            format!(
-                                "sample file not found: '{}' (resolved to '{}')",
-                                decl.path,
-                                resolved.display()
-                            ),
-                        ));
-                        continue;
-                    }
-                }
-            };
-            samples.push(SampleInfo {
-                name: decl.name.clone(),
-                path: decl.path.clone(),
-                absolute_path: abs_path,
-                embed: true,
-            });
+    plugin.items.iter().filter_map(|(item, _)| {
+        let PluginItem::SampleDecl(decl) = item else { return None };
+        if !decl.embed {
+            return Some(SampleInfo { name: decl.name.clone(), path: decl.path.clone(), absolute_path: decl.path.clone(), embed: false });
         }
-    }
-    samples
+        let abs_path = resolve_asset_path(&decl.path, base_dir, "sample", decl.span, diagnostics)?;
+        Some(SampleInfo { name: decl.name.clone(), path: decl.path.clone(), absolute_path: abs_path, embed: true })
+    }).collect()
 }
 
 /// Extract wavetable declarations from the AST and resolve their absolute paths.
-/// Validates that the WAV file exists and that total sample count is divisible by frame_size.
 fn find_wavetable_decls(
     plugin: &PluginDef,
     source_dir: Option<&Path>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<WavetableInfo> {
     let base_dir = source_dir.unwrap_or(Path::new("."));
-    let mut wavetables = Vec::new();
-    for (item, _) in &plugin.items {
-        if let PluginItem::WavetableDecl(decl) = item {
-            if !decl.embed {
-                // External mode: skip canonicalize and frame validation.
-                // File may not exist at compile time.
-                wavetables.push(WavetableInfo {
-                    name: decl.name.clone(),
-                    path: decl.path.clone(),
-                    absolute_path: decl.path.clone(),
-                    frame_size: decl.frame_size,
-                    embed: false,
-                });
-                continue;
-            }
-            let abs_path = if Path::new(&decl.path).is_absolute() {
-                decl.path.clone()
-            } else {
-                let resolved = base_dir.join(&decl.path);
-                match resolved.canonicalize() {
-                    Ok(p) => p.to_string_lossy().to_string(),
-                    Err(_) => {
-                        diagnostics.push(Diagnostic::error(
-                            "E015",
-                            decl.span,
-                            format!(
-                                "wavetable file not found: '{}' (resolved to '{}')",
-                                decl.path,
-                                resolved.display()
-                            ),
-                        ));
-                        continue;
-                    }
-                }
-            };
-
-            // Validate frame divisibility (hound available on macOS and in tests)
-            #[cfg(any(target_os = "macos", test))]
-            if let Ok(reader) = hound::WavReader::open(&abs_path) {
-                let sample_count = reader.len() as u32;
-                if sample_count % decl.frame_size != 0 {
-                    diagnostics.push(Diagnostic::error(
-                        "E015",
-                        decl.span,
-                        format!(
-                            "wavetable '{}' has {} samples which is not divisible by frame_size {} — each frame must be exactly {} samples",
-                            decl.name, sample_count, decl.frame_size, decl.frame_size
-                        ),
-                    ));
-                    continue;
-                }
-            }
-
-            wavetables.push(WavetableInfo {
-                name: decl.name.clone(),
-                path: decl.path.clone(),
-                absolute_path: abs_path,
-                frame_size: decl.frame_size,
-                embed: true,
-            });
+    plugin.items.iter().filter_map(|(item, _)| {
+        let PluginItem::WavetableDecl(decl) = item else { return None };
+        if !decl.embed {
+            return Some(WavetableInfo { name: decl.name.clone(), path: decl.path.clone(), absolute_path: decl.path.clone(), frame_size: decl.frame_size, embed: false });
         }
-    }
-    wavetables
+        let abs_path = resolve_asset_path(&decl.path, base_dir, "wavetable", decl.span, diagnostics)?;
+
+        // Validate frame divisibility (hound available on macOS and in tests)
+        #[cfg(any(target_os = "macos", test))]
+        if let Ok(reader) = hound::WavReader::open(&abs_path) {
+            let sample_count = reader.len() as u32;
+            if sample_count % decl.frame_size != 0 {
+                diagnostics.push(Diagnostic::error(
+                    "E015", decl.span,
+                    format!("wavetable '{}' has {} samples which is not divisible by frame_size {} — each frame must be exactly {} samples",
+                        decl.name, sample_count, decl.frame_size, decl.frame_size),
+                ));
+                return None;
+            }
+        }
+
+        Some(WavetableInfo { name: decl.name.clone(), path: decl.path.clone(), absolute_path: abs_path, frame_size: decl.frame_size, embed: true })
+    }).collect()
 }
 
 fn validate_codegen_requirements(plugin: &PluginDef, diagnostics: &mut Vec<Diagnostic>) {
