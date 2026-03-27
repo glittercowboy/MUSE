@@ -68,8 +68,9 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     let has_gate = process_info.gate_count > 0;
     let _has_dc_block = process_info.dc_block_count > 0;
     let _has_sample_hold = process_info.sample_hold_count > 0;
+    let has_patterns = process_info.pattern_count > 0;
     let has_wt_osc = process_info.wt_osc_call_count > 0;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate || has_wt_osc;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate || has_wt_osc || has_patterns;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
@@ -122,6 +123,9 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         }
         for i in 0..process_info.sample_hold_count {
             out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
+        }
+        for (idx, values) in &process_info.pattern_values {
+            out.push_str(&format!("    pattern_state_{}: PatternState{},\n", idx, values.len()));
         }
     }
 
@@ -225,6 +229,15 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         }
         for i in 0..process_info.sample_hold_count {
             out.push_str(&format!("            sample_hold_state_{}: SampleAndHoldState::default(),\n", i));
+        }
+        for (idx, values) in &process_info.pattern_values {
+            let values_str: Vec<String> = values.iter().map(|v| format!("{:.1}", v)).collect();
+            out.push_str(&format!(
+                "            pattern_state_{}: PatternState{} {{ phase: 0.0, step_index: 0, values: [{}] }},\n",
+                idx,
+                values.len(),
+                values_str.join(", ")
+            ));
         }
     }
 
@@ -352,6 +365,9 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.sample_hold_count {
         out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
     }
+    for (idx, values) in &process_info.pattern_values {
+        out.push_str(&format!("    pattern_state_{}: PatternState{},\n", idx, values.len()));
+    }
     for i in 0..process_info.eq_biquad_count {
         out.push_str(&format!("    eq_biquad_state_{}: BiquadState,\n", i));
     }
@@ -405,6 +421,15 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     }
     for i in 0..process_info.sample_hold_count {
         fields.push(format!("sample_hold_state_{}: SampleAndHoldState::default()", i));
+    }
+    for (idx, values) in &process_info.pattern_values {
+        let values_str: Vec<String> = values.iter().map(|v| format!("{:.1}", v)).collect();
+        fields.push(format!(
+            "pattern_state_{}: PatternState{} {{ phase: 0.0, step_index: 0, values: [{}] }}",
+            idx,
+            values.len(),
+            values_str.join(", ")
+        ));
     }
     for i in 0..process_info.eq_biquad_count {
         fields.push(format!("eq_biquad_state_{}: BiquadState::default()", i));

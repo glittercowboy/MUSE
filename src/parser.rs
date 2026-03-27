@@ -436,6 +436,32 @@ where
             )
             .map_with(|body, e| (Expr::Feedback { body }, e.span()));
 
+        // ── Pattern literal ───────────────────────────────
+        // pattern [value1, value2, ...] rate expr
+        let pattern_value = select! {
+            Token::Number(n) => n.parse::<f64>().unwrap_or(0.0),
+        };
+
+        let pattern_expr = just(Token::Pattern)
+            .ignore_then(
+                pattern_value
+                    .separated_by(just(Token::Comma))
+                    .allow_trailing()
+                    .collect::<Vec<f64>>()
+                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+            )
+            .then_ignore(just(Token::Rate))
+            .then(expr.clone())
+            .map_with(|(values, rate), e| {
+                (
+                    Expr::Pattern {
+                        values,
+                        rate: Box::new(rate),
+                    },
+                    e.span(),
+                )
+            });
+
         // ── Primary expressions (atoms) ──────────────────
         let atom = number_with_unit()
             .or(string_lit())
@@ -443,6 +469,7 @@ where
             .or(merge_expr)
             .or(split_expr)
             .or(feedback_expr)
+            .or(pattern_expr)
             .or(ident_expr())
             .or(if_expr)
             .or(expr

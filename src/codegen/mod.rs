@@ -91,7 +91,8 @@ pub fn generate_plugin(
         return Err(process_info.diagnostics);
     }
 
-    let dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
+    let mut dsp_helpers = dsp::generate_dsp_helpers(&process_info.used_primitives);
+    dsp_helpers.push_str(&dsp::generate_pattern_helpers(&process_info.pattern_values));
     let plugin_code = plugin::generate_plugin_struct(plugin, &process_info, &sample_infos, &wavetable_infos);
     let plugin_code = plugin_code.replace("{PROCESS_BODY}", &process_body);
 

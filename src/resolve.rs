@@ -732,6 +732,7 @@ impl<'a> Resolver<'a> {
             Expr::Split { branches } => self.resolve_split(branches, span),
             Expr::Merge => self.resolve_merge(span),
             Expr::Feedback { body } => self.resolve_feedback(body, span),
+            Expr::Pattern { values, rate } => self.resolve_pattern(values, rate, span),
             Expr::Error => None,
         }
     }
@@ -813,6 +814,52 @@ impl<'a> Resolver<'a> {
         }
 
         Some(DspType::Processor)
+    }
+
+    // ── Pattern literal resolution ─────────────────────────
+
+    /// Resolve a pattern literal: validate values are numeric (they always are
+    /// since the parser only accepts number literals) and resolve the rate expr.
+    /// Pattern produces DspType::Number (a control-rate stepped value).
+    fn resolve_pattern(
+        &mut self,
+        values: &[f64],
+        rate: &Spanned<Expr>,
+        span: Span,
+    ) -> Option<DspType> {
+        if values.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E017",
+                    span,
+                    "pattern must have at least one value",
+                )
+                .with_suggestion("Add numeric values inside the brackets: pattern [1.0, 0.0] rate 4.0"),
+            );
+            return None;
+        }
+
+        // Resolve the rate expression — should be Frequency, Number, or Param
+        let rate_ty = self.resolve_expr(rate);
+        match rate_ty {
+            Some(DspType::Frequency) | Some(DspType::Number) | Some(DspType::Param) | Some(DspType::Rate) => {}
+            Some(other) => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        "E017",
+                        rate.1,
+                        format!(
+                            "pattern rate must be a numeric or frequency value, got {}",
+                            other
+                        ),
+                    )
+                    .with_suggestion("Use a number (e.g. 4.0), Hz value (e.g. 4Hz), or param reference."),
+                );
+            }
+            None => {} // already reported
+        }
+
+        Some(DspType::Number)
     }
 
     // ── Identifier resolution ────────────────────────────────

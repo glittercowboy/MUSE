@@ -2576,3 +2576,95 @@ fn parse_test_input_backward_compat() {
         other => panic!("Expected Input impulse, got {:?}", other),
     }
 }
+
+// ── Pattern literal parsing ──────────────────────────────────
+
+#[test]
+fn parse_pattern_expression() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  param rate_hz: float = 4.0 in 0.5..20.0
+  process {
+    let steps = pattern [1.0, 0.0, 0.7, 0.5] rate param.rate_hz
+    input -> gain(steps) -> output
+  }
+}
+"#;
+    let (ast, errors) = muse_lang::parser::parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    // Find the process block
+    let process = plugin.items.iter().find_map(|(item, _)| {
+        if let muse_lang::ast::PluginItem::ProcessBlock(pb) = item {
+            Some(pb)
+        } else {
+            None
+        }
+    }).expect("No process block found");
+
+    // First statement should be a let binding with a Pattern expression
+    let first_stmt = &process.body[0].0;
+    match first_stmt {
+        muse_lang::ast::Statement::Let { name, value } => {
+            assert_eq!(name, "steps");
+            match &value.0 {
+                muse_lang::ast::Expr::Pattern { values, rate } => {
+                    assert_eq!(values, &[1.0, 0.0, 0.7, 0.5]);
+                    // rate should be a field access (param.rate_hz)
+                    match &rate.0 {
+                        muse_lang::ast::Expr::FieldAccess(base, field) => {
+                            assert_eq!(field, "rate_hz");
+                            match &base.0 {
+                                muse_lang::ast::Expr::Ident(name) => assert_eq!(name, "param"),
+                                other => panic!("Expected Ident('param'), got {:?}", other),
+                            }
+                        }
+                        other => panic!("Expected FieldAccess for rate, got {:?}", other),
+                    }
+                }
+                other => panic!("Expected Pattern expr, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Let statement, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_pattern_with_integer_values() {
+    let source = r#"
+plugin "Test" {
+  input stereo
+  output stereo
+  process {
+    let steps = pattern [1, 0, 1, 0] rate 4.0
+    input -> gain(steps) -> output
+  }
+}
+"#;
+    let (ast, errors) = muse_lang::parser::parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let process = plugin.items.iter().find_map(|(item, _)| {
+        if let muse_lang::ast::PluginItem::ProcessBlock(pb) = item {
+            Some(pb)
+        } else {
+            None
+        }
+    }).expect("No process block found");
+
+    match &process.body[0].0 {
+        muse_lang::ast::Statement::Let { value, .. } => {
+            match &value.0 {
+                muse_lang::ast::Expr::Pattern { values, .. } => {
+                    assert_eq!(values, &[1.0, 0.0, 1.0, 0.0]);
+                }
+                other => panic!("Expected Pattern expr, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Let statement, got {:?}", other),
+    }
+}

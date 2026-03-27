@@ -38,6 +38,9 @@ pub struct ProcessInfo {
     pub gate_count: usize,
     pub dc_block_count: usize,
     pub sample_hold_count: usize,
+    pub pattern_count: usize,
+    /// For each pattern instance: (index, values as Vec<f64>)
+    pub pattern_values: Vec<(usize, Vec<f64>)>,
     pub play_call_count: usize,
     pub wt_osc_call_count: usize,
     pub loop_call_count: usize,
@@ -69,6 +72,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     gate_count: 0,
                     dc_block_count: 0,
                     sample_hold_count: 0,
+                    pattern_count: 0,
+                    pattern_values: Vec::new(),
                     play_call_count: 0,
                     wt_osc_call_count: 0,
                     loop_call_count: 0,
@@ -125,6 +130,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let gate_count = ctx.gate_counter;
     let dc_block_count = ctx.dc_block_counter;
     let sample_hold_count = ctx.sample_hold_counter;
+    let pattern_count = ctx.pattern_counter;
 
     let process_body = if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
@@ -160,6 +166,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         gate_count,
         dc_block_count,
         sample_hold_count,
+        pattern_count,
+        pattern_values: ctx.pattern_values.clone(),
         play_call_count: ctx.play_counter,
         wt_osc_call_count: ctx.wt_osc_counter,
         loop_call_count: ctx.loop_counter,
@@ -366,6 +374,8 @@ struct ProcessContext<'a> {
     gate_counter: usize,
     dc_block_counter: usize,
     sample_hold_counter: usize,
+    pattern_counter: usize,
+    pattern_values: Vec<(usize, Vec<f64>)>,
     play_counter: usize,
     wt_osc_counter: usize,
     loop_counter: usize,
@@ -398,6 +408,8 @@ impl<'a> ProcessContext<'a> {
             gate_counter: 0,
             dc_block_counter: 0,
             sample_hold_counter: 0,
+            pattern_counter: 0,
+            pattern_values: Vec::new(),
             play_counter: 0,
             wt_osc_counter: 0,
             loop_counter: 0,
@@ -1010,6 +1022,9 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
             then_expr,
             else_body,
         } => generate_if_expr(condition, then_body, then_expr, else_body.as_ref(), ctx),
+        Expr::Pattern { values, rate } => {
+            generate_pattern_expr(values, rate, ctx)
+        }
         Expr::Grouped(inner) => {
             let inner_code = generate_expr(&inner.0, ctx);
             format!("({})", inner_code)
@@ -1752,6 +1767,44 @@ fn generate_dc_block_call_with_input(
     format!(
         "process_dc_block(&mut {}, {})",
         state_target, input_code
+    )
+}
+
+fn generate_pattern_expr(
+    values: &[f64],
+    rate: &Spanned<Expr>,
+    ctx: &mut ProcessContext,
+) -> String {
+    let pat_idx = ctx.pattern_counter;
+    ctx.pattern_counter += 1;
+    ctx.pattern_values.push((pat_idx, values.to_vec()));
+
+    let rate_code = generate_expr_as_param(&rate.0, ctx);
+    let num_steps = values.len();
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.pattern_state_{}", pat_idx)
+    } else {
+        format!("self.pattern_state_{}", pat_idx)
+    };
+
+    // Emit phase advance + step index update as pending lines
+    // so they execute before the expression value is used.
+    ctx.pending_lines.push(format!(
+        "{state}.phase += {rate} / self.sample_rate;",
+        state = state_target,
+        rate = rate_code,
+    ));
+    ctx.pending_lines.push(format!(
+        "if {state}.phase >= 1.0 {{ {state}.phase -= 1.0; {state}.step_index = ({state}.step_index + 1) % {n}; }}",
+        state = state_target,
+        n = num_steps,
+    ));
+
+    // The expression value is the current step value
+    format!(
+        "{state}.values[{state}.step_index]",
+        state = state_target,
     )
 }
 

@@ -272,6 +272,42 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
     out
 }
 
+/// Generate PatternState structs for each unique step count used.
+///
+/// Each pattern instance may have a different number of steps, so we generate
+/// `PatternStateN` where N is the step count (e.g. PatternState8 for 8 steps).
+pub fn generate_pattern_helpers(pattern_values: &[(usize, Vec<f64>)]) -> String {
+    if pattern_values.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+
+    // Collect unique step counts to avoid duplicate struct definitions
+    let mut seen_sizes: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for (_idx, values) in pattern_values {
+        let n = values.len();
+        if seen_sizes.insert(n) {
+            out.push_str(&format!(
+                r#"/// Pattern step sequencer state with {} steps.
+#[derive(Clone, Copy)]
+struct PatternState{n} {{
+    phase: f32,
+    step_index: usize,
+    values: [f32; {n}],
+}}
+
+"#,
+                n,
+                n = n,
+            ));
+        }
+    }
+
+    out
+}
+
 /// Generate the BiquadState struct with Default impl.
 fn generate_biquad_state() -> String {
     r#"/// Per-channel biquad filter state for IIR filtering.
