@@ -76,6 +76,7 @@ pub enum DspPrimitive {
     Play,
     WavetableOsc,
     Loop,
+    Reverb,
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -392,6 +393,18 @@ pub fn builtin_registry() -> DspRegistry {
             params: vec![param("trigger", DspType::Number)],
             return_type: DspType::Processor,
             primitive: DspPrimitive::SampleAndHold,
+        },
+        // reverb(size: Number, decay: Time, damping?: Number, mix?: Number) → Processor — algorithmic reverb
+        DspFunction {
+            name: "reverb".into(),
+            params: vec![
+                param("size", DspType::Number),
+                param("decay", DspType::Time),
+                optional_param("damping", DspType::Number),
+                optional_param("mix", DspType::Number),
+            ],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::Reverb,
         },
     ];
 

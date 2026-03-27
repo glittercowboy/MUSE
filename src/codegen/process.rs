@@ -31,6 +31,7 @@ pub struct ProcessInfo {
     pub has_adsr: bool,
     pub chorus_count: usize,
     pub compressor_count: usize,
+    pub reverb_count: usize,
     pub delay_count: usize,
     pub eq_biquad_count: usize,
     pub rms_count: usize,
@@ -65,6 +66,7 @@ impl ProcessInfo {
             ("dc_block_state",     "DcBlockState",       self.dc_block_count),
             ("sample_hold_state",  "SampleAndHoldState", self.sample_hold_count),
             ("wt_osc_state",       "WtOscState",         self.wt_osc_call_count),
+            ("reverb_state",       "ReverbState",        self.reverb_count),
         ].into_iter()
          .filter(|(_, _, count)| *count > 0)
          .map(|(prefix, type_name, count)| StateSlot { prefix, type_name, count })
@@ -76,7 +78,7 @@ impl ProcessInfo {
         needs_any_biquad || self.is_instrument || self.oscillator_count > 0
             || self.chorus_count > 0 || self.compressor_count > 0 || self.delay_count > 0
             || self.eq_biquad_count > 0 || self.rms_count > 0 || self.peak_follow_count > 0
-            || self.gate_count > 0 || self.wt_osc_call_count > 0
+            || self.gate_count > 0 || self.wt_osc_call_count > 0 || self.reverb_count > 0
     }
 }
 
@@ -141,6 +143,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     has_adsr: false,
                     chorus_count: 0,
                     compressor_count: 0,
+                    reverb_count: 0,
                     delay_count: 0,
                     eq_biquad_count: 0,
                     rms_count: 0,
@@ -197,6 +200,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let oscillator_count = ctx.oscillator_counter;
     let chorus_count = ctx.chorus_counter;
     let compressor_count = ctx.compressor_counter;
+    let reverb_count = ctx.reverb_counter;
     let delay_count = ctx.delay_counter;
     let eq_biquad_count = ctx.eq_biquad_counter;
     let rms_count = ctx.rms_counter;
@@ -232,6 +236,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         has_adsr,
         chorus_count,
         compressor_count,
+        reverb_count,
         delay_count,
         eq_biquad_count,
         rms_count,
@@ -438,6 +443,7 @@ struct ProcessContext<'a> {
     oscillator_counter: usize,
     chorus_counter: usize,
     compressor_counter: usize,
+    reverb_counter: usize,
     delay_counter: usize,
     eq_biquad_counter: usize,
     rms_counter: usize,
@@ -470,6 +476,7 @@ impl<'a> ProcessContext<'a> {
             oscillator_counter: 0,
             chorus_counter: 0,
             compressor_counter: 0,
+            reverb_counter: 0,
             delay_counter: 0,
             eq_biquad_counter: 0,
             rms_counter: 0,
@@ -641,6 +648,7 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 }
                 "chorus" => generate_chorus_call_with_input(input_code, args, ctx),
                 "compressor" => generate_compressor_call_with_input(input_code, args, ctx),
+                "reverb" => generate_reverb_call_with_input(input_code, args, ctx),
                 "delay" => generate_delay_call_with_input(input_code, args, ctx),
                 "mod_delay" => generate_mod_delay_call_with_input(input_code, args, ctx),
                 "allpass" => generate_allpass_call_with_input(input_code, args, ctx),
@@ -1011,6 +1019,9 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                     "chorus" => return generate_chorus_call_with_input("*sample", args, ctx),
                     "compressor" => {
                         return generate_compressor_call_with_input("*sample", args, ctx)
+                    }
+                    "reverb" => {
+                        return generate_reverb_call_with_input("*sample", args, ctx)
                     }
                     "delay" => return generate_delay_call_with_input("*sample", args, ctx),
                     "mod_delay" => return generate_mod_delay_call_with_input("*sample", args, ctx),
@@ -1520,6 +1531,52 @@ fn generate_compressor_call_with_input(
     format!(
         "process_compressor(&mut {}, {}, {}, {}, self.sample_rate)",
         state_target, input_code, threshold, ratio
+    )
+}
+
+fn generate_reverb_call_with_input(
+    input_code: &str,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    ctx.used_primitives.insert(DspPrimitive::Reverb);
+
+    let reverb_idx = ctx.reverb_counter;
+    ctx.reverb_counter += 1;
+
+    let size = if !args.is_empty() {
+        generate_expr_as_param(&args[0].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    let decay = if args.len() > 1 {
+        generate_expr_as_param(&args[1].0, ctx)
+    } else {
+        "2.0_f32".to_string()
+    };
+
+    let damping = if args.len() > 2 {
+        generate_expr_as_param(&args[2].0, ctx)
+    } else {
+        "0.5_f32".to_string()
+    };
+
+    let mix = if args.len() > 3 {
+        generate_expr_as_param(&args[3].0, ctx)
+    } else {
+        "0.3_f32".to_string()
+    };
+
+    let state_target = if ctx.is_polyphonic {
+        format!("voice.reverb_state_{}", reverb_idx)
+    } else {
+        format!("self.reverb_state_{}", reverb_idx)
+    };
+
+    format!(
+        "process_reverb(&mut {}, {}, {}, {}, {}, {})",
+        state_target, input_code, size, decay, damping, mix
     )
 }
 

@@ -172,7 +172,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
     out.push_str("        }\n    }\n}\n\n");
 
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, sample_infos, wavetable_infos));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, process_info.reverb_count, sample_infos, wavetable_infos));
 
     if is_polyphonic {
         let helper_defaults = generate_voice_field_defaults(process_info);
@@ -370,6 +370,7 @@ fn generate_plugin_trait(
     is_polyphonic: bool,
     has_gui: bool,
     delay_count: usize,
+    reverb_count: usize,
     sample_infos: &[SampleInfo],
     wavetable_infos: &[WavetableInfo],
 ) -> String {
@@ -378,7 +379,7 @@ fn generate_plugin_trait(
     let out_ch = info.output_channels;
 
     let mut lifecycle_fns = String::new();
-    let needs_initialize = needs_sample_rate || !sample_infos.is_empty() || !wavetable_infos.is_empty();
+    let needs_initialize = needs_sample_rate || reverb_count > 0 || !sample_infos.is_empty() || !wavetable_infos.is_empty();
     if needs_initialize {
         let mut init_body = String::new();
         if needs_sample_rate {
@@ -387,6 +388,12 @@ fn generate_plugin_trait(
         for i in 0..delay_count {
             init_body.push_str(&format!(
                 "        self.delay_state_{}.allocate(buffer_config.sample_rate);\n",
+                i
+            ));
+        }
+        for i in 0..reverb_count {
+            init_body.push_str(&format!(
+                "        init_reverb_state(&mut self.reverb_state_{}, buffer_config.sample_rate as f32);\n",
                 i
             ));
         }
