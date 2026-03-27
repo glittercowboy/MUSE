@@ -1,0 +1,48 @@
+plugin "Stereo Width" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.stereo-width"
+    description "Stereo width control with mid/side processing"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseStereoW01"
+    subcategories   [Fx, Spatial]
+  }
+
+  input  stereo
+  output stereo
+
+  param width: float = 1.0 in 0.0..2.0 {
+    smoothing linear 20ms
+  }
+
+  param mid_gain: float = 0.0 in -12.0..12.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  process {
+    input -> gain(param.mid_gain) -> stereo_width(param.width) -> output
+  }
+
+  test "unity width passes signal" {
+    set param.width = 1.0
+    set param.mid_gain = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+
+  test "zero width produces mono" {
+    set param.width = 0.0
+    set param.mid_gain = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+}

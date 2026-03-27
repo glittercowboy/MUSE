@@ -41,6 +41,9 @@ pub struct ProcessInfo {
     pub play_call_count: usize,
     pub wt_osc_call_count: usize,
     pub loop_call_count: usize,
+    pub stereo_width_count: usize,
+    pub mid_side_encode_count: usize,
+    pub mid_side_decode_count: usize,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> (String, ProcessInfo) {
@@ -72,6 +75,9 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     play_call_count: 0,
                     wt_osc_call_count: 0,
                     loop_call_count: 0,
+                    stereo_width_count: 0,
+                    mid_side_encode_count: 0,
+                    mid_side_decode_count: 0,
                 },
             )
         }
@@ -163,6 +169,9 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         play_call_count: ctx.play_counter,
         wt_osc_call_count: ctx.wt_osc_counter,
         loop_call_count: ctx.loop_counter,
+        stereo_width_count: ctx.stereo_width_counter,
+        mid_side_encode_count: ctx.mid_side_encode_counter,
+        mid_side_decode_count: ctx.mid_side_decode_counter,
     };
 
     (process_body, info)
@@ -326,6 +335,70 @@ fn generate_effect_process(ctx: &ProcessContext, stmt_lines: &[String]) -> Strin
     }
     out.push_str("            }\n");
     out.push_str("        }\n");
+
+    // ── Stereo post-processing passes ─────────────────────────
+    // These operate on the entire buffer after the per-sample loop,
+    // since they need simultaneous access to both L and R channels.
+
+    let has_mid_side_encode = ctx.used_primitives.contains(&DspPrimitive::MidSideEncode);
+    let has_mid_side_decode = ctx.used_primitives.contains(&DspPrimitive::MidSideDecode);
+    let _has_stereo_width = ctx.used_primitives.contains(&DspPrimitive::StereoWidth);
+
+    if has_mid_side_encode {
+        out.push_str("        // Mid/Side encode: L/R -> Mid/Side\n");
+        out.push_str("        {\n");
+        out.push_str("            let channels = buffer.as_slice();\n");
+        out.push_str("            if channels.len() >= 2 {\n");
+        out.push_str("                let (left_slice, rest) = channels.split_at_mut(1);\n");
+        out.push_str("                let left = &mut left_slice[0];\n");
+        out.push_str("                let right = &mut rest[0];\n");
+        out.push_str("                for (l, r) in left.iter_mut().zip(right.iter_mut()) {\n");
+        out.push_str("                    let mid = (*l + *r) * 0.5;\n");
+        out.push_str("                    let side = (*l - *r) * 0.5;\n");
+        out.push_str("                    *l = mid;\n");
+        out.push_str("                    *r = side;\n");
+        out.push_str("                }\n");
+        out.push_str("            }\n");
+        out.push_str("        }\n");
+    }
+
+    for i in 0..ctx.stereo_width_counter {
+        out.push_str(&format!("        // Stereo width post-processing (instance {})\n", i));
+        out.push_str("        {\n");
+        out.push_str(&format!("            let width = self.stereo_width_param_{};\n", i));
+        out.push_str("            let channels = buffer.as_slice();\n");
+        out.push_str("            if channels.len() >= 2 {\n");
+        out.push_str("                let (left_slice, rest) = channels.split_at_mut(1);\n");
+        out.push_str("                let left = &mut left_slice[0];\n");
+        out.push_str("                let right = &mut rest[0];\n");
+        out.push_str("                for (l, r) in left.iter_mut().zip(right.iter_mut()) {\n");
+        out.push_str("                    let mid = (*l + *r) * 0.5;\n");
+        out.push_str("                    let side = (*l - *r) * 0.5;\n");
+        out.push_str("                    *l = mid + side * width;\n");
+        out.push_str("                    *r = mid - side * width;\n");
+        out.push_str("                }\n");
+        out.push_str("            }\n");
+        out.push_str("        }\n");
+    }
+
+    if has_mid_side_decode {
+        out.push_str("        // Mid/Side decode: Mid/Side -> L/R\n");
+        out.push_str("        {\n");
+        out.push_str("            let channels = buffer.as_slice();\n");
+        out.push_str("            if channels.len() >= 2 {\n");
+        out.push_str("                let (left_slice, rest) = channels.split_at_mut(1);\n");
+        out.push_str("                let left = &mut left_slice[0];\n");
+        out.push_str("                let right = &mut rest[0];\n");
+        out.push_str("                for (l, r) in left.iter_mut().zip(right.iter_mut()) {\n");
+        out.push_str("                    let left_out = *l + *r;\n");
+        out.push_str("                    let right_out = *l - *r;\n");
+        out.push_str("                    *l = left_out;\n");
+        out.push_str("                    *r = right_out;\n");
+        out.push_str("                }\n");
+        out.push_str("            }\n");
+        out.push_str("        }\n");
+    }
+
     out.push_str("        ProcessStatus::Normal");
 
     out
@@ -369,6 +442,9 @@ struct ProcessContext<'a> {
     play_counter: usize,
     wt_osc_counter: usize,
     loop_counter: usize,
+    stereo_width_counter: usize,
+    mid_side_encode_counter: usize,
+    mid_side_decode_counter: usize,
     _sample_infos: &'a [SampleInfo],
     _wavetable_infos: &'a [WavetableInfo],
     is_instrument: bool,
@@ -401,6 +477,9 @@ impl<'a> ProcessContext<'a> {
             play_counter: 0,
             wt_osc_counter: 0,
             loop_counter: 0,
+            stereo_width_counter: 0,
+            mid_side_encode_counter: 0,
+            mid_side_decode_counter: 0,
             _sample_infos: sample_infos,
             _wavetable_infos: wavetable_infos,
             is_instrument: false,
@@ -582,6 +661,34 @@ fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut Process
                 "play" => generate_play_call(args, ctx),
                 "loop" => generate_loop_call(args, ctx),
                 "wavetable_osc" => generate_wavetable_osc_call(args, ctx),
+                "stereo_width" => {
+                    ctx.used_primitives.insert(DspPrimitive::StereoWidth);
+                    let width_idx = ctx.stereo_width_counter;
+                    ctx.stereo_width_counter += 1;
+                    let width = generate_expr_as_param(&args[0].0, ctx);
+                    // Store the width param expression for post-processing pass.
+                    // The actual stereo width processing is emitted as a buffer-level
+                    // post-processing loop in generate_effect_process().
+                    // In the per-sample loop, record the width value into plugin state.
+                    ctx.pending_lines.push(format!(
+                        "self.stereo_width_param_{} = {};",
+                        width_idx, width
+                    ));
+                    // Pass through unchanged — post-processing will apply stereo width
+                    input_code.to_string()
+                }
+                "mid_side_encode" => {
+                    ctx.used_primitives.insert(DspPrimitive::MidSideEncode);
+                    ctx.mid_side_encode_counter += 1;
+                    // Buffer-level post-processing — pass through in per-sample loop
+                    input_code.to_string()
+                }
+                "mid_side_decode" => {
+                    ctx.used_primitives.insert(DspPrimitive::MidSideDecode);
+                    ctx.mid_side_decode_counter += 1;
+                    // Buffer-level post-processing — pass through in per-sample loop
+                    input_code.to_string()
+                }
                 _ => format!("{}({})", fn_name, input_code),
             };
         }

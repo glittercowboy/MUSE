@@ -76,6 +76,9 @@ pub enum DspPrimitive {
     Play,
     WavetableOsc,
     Loop,
+    MidSideEncode,
+    MidSideDecode,
+    StereoWidth,
 }
 
 // ── Function signature types ─────────────────────────────────
@@ -392,6 +395,28 @@ pub fn builtin_registry() -> DspRegistry {
             params: vec![param("trigger", DspType::Number)],
             return_type: DspType::Processor,
             primitive: DspPrimitive::SampleAndHold,
+        },
+        // ── Stereo / Mid-Side processing ──
+        // mid_side_encode() → Processor — converts L/R to Mid/Side
+        DspFunction {
+            name: "mid_side_encode".into(),
+            params: vec![],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::MidSideEncode,
+        },
+        // mid_side_decode() → Processor — converts Mid/Side back to L/R
+        DspFunction {
+            name: "mid_side_decode".into(),
+            params: vec![],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::MidSideDecode,
+        },
+        // stereo_width(width: Number) → Processor — width: 0=mono, 1=normal, 2=extra wide
+        DspFunction {
+            name: "stereo_width".into(),
+            params: vec![param("width", DspType::Number)],
+            return_type: DspType::Processor,
+            primitive: DspPrimitive::StereoWidth,
         },
     ];
 
