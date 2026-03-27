@@ -10,263 +10,96 @@ use std::collections::HashSet;
 
 use crate::dsp::primitives::{DspPrimitive, EnvKind, EqKind, FilterKind, OscKind};
 
+/// Append generated code to `out` if `cond` is true.
+fn emit_if(out: &mut String, cond: bool, gen: fn() -> String) {
+    if cond { out.push_str(&gen()); out.push('\n'); }
+}
+
+/// Check if any primitive in the set matches a predicate.
+fn has(prims: &HashSet<DspPrimitive>, f: impl Fn(&DspPrimitive) -> bool) -> bool {
+    prims.iter().any(f)
+}
+
 /// Generate DSP helper code for the set of primitives used in the plugin.
 ///
 /// Returns Rust code for any state structs and processing functions needed.
 pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
     let mut out = String::new();
 
-    let needs_lowpass = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(FilterKind::Lowpass))
-    });
-    let needs_bandpass = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(FilterKind::Bandpass))
-    });
-    let needs_highpass = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(FilterKind::Highpass))
-    });
-    let needs_notch = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Filter(FilterKind::Notch))
-    });
-    let needs_any_biquad = needs_lowpass || needs_bandpass || needs_highpass || needs_notch;
+    // ── Biquad filters (shared state struct) ─────────────────
+    let needs_any_biquad = has(used_primitives, |p| matches!(p, DspPrimitive::Filter(_)));
+    let needs_any_eq = has(used_primitives, |p| matches!(p, DspPrimitive::EqFilter(_)));
 
-    // EQ/shelving filters also use BiquadState
-    let needs_peak_eq = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::EqFilter(EqKind::PeakEq))
-    });
-    let needs_low_shelf = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::EqFilter(EqKind::LowShelf))
-    });
-    let needs_high_shelf = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::EqFilter(EqKind::HighShelf))
-    });
-    let needs_any_eq_biquad = needs_peak_eq || needs_low_shelf || needs_high_shelf;
+    emit_if(&mut out, needs_any_biquad || needs_any_eq, generate_biquad_state);
 
-    if needs_any_biquad || needs_any_eq_biquad {
-        out.push_str(&generate_biquad_state());
-        out.push('\n');
+    // Per-variant filter process functions
+    let filter_fns: &[(FilterKind, fn() -> String)] = &[
+        (FilterKind::Lowpass,  generate_process_biquad),
+        (FilterKind::Bandpass, generate_process_biquad_bandpass),
+        (FilterKind::Highpass, generate_process_biquad_highpass),
+        (FilterKind::Notch,    generate_process_biquad_notch),
+    ];
+    for (kind, gen) in filter_fns {
+        emit_if(&mut out, used_primitives.contains(&DspPrimitive::Filter(*kind)), *gen);
     }
 
-    if needs_lowpass {
-        out.push_str(&generate_process_biquad());
-        out.push('\n');
+    // Per-variant EQ process functions
+    let eq_fns: &[(EqKind, fn() -> String)] = &[
+        (EqKind::PeakEq,    generate_process_biquad_peak_eq),
+        (EqKind::LowShelf,  generate_process_biquad_low_shelf),
+        (EqKind::HighShelf, generate_process_biquad_high_shelf),
+    ];
+    for (kind, gen) in eq_fns {
+        emit_if(&mut out, used_primitives.contains(&DspPrimitive::EqFilter(*kind)), *gen);
     }
 
-    if needs_bandpass {
-        out.push_str(&generate_process_biquad_bandpass());
-        out.push('\n');
+    // ── Oscillators (shared state struct) ────────────────────
+    let needs_any_osc = has(used_primitives, |p| matches!(p, DspPrimitive::Oscillator(_) | DspPrimitive::Lfo | DspPrimitive::Pulse));
+    emit_if(&mut out, needs_any_osc, generate_osc_state);
+
+    let osc_fns: &[(fn(&DspPrimitive) -> bool, fn() -> String)] = &[
+        (|p| matches!(p, DspPrimitive::Oscillator(OscKind::Saw)),      generate_process_osc_saw),
+        (|p| matches!(p, DspPrimitive::Oscillator(OscKind::Square)),   generate_process_osc_square),
+        (|p| matches!(p, DspPrimitive::Oscillator(OscKind::Sine) | DspPrimitive::Lfo), generate_process_osc_sine),
+        (|p| matches!(p, DspPrimitive::Oscillator(OscKind::Triangle)), generate_process_osc_triangle),
+        (|p| matches!(p, DspPrimitive::Pulse),                         generate_process_osc_pulse),
+    ];
+    for (pred, gen) in osc_fns {
+        emit_if(&mut out, has(used_primitives, pred), *gen);
     }
 
-    if needs_highpass {
-        out.push_str(&generate_process_biquad_highpass());
-        out.push('\n');
+    // ── Stateful primitives (state struct + process fn) ──────
+    type GenPair = (DspPrimitive, fn() -> String, fn() -> String);
+    let stateful: &[GenPair] = &[
+        (DspPrimitive::Envelope(EnvKind::Adsr), generate_adsr_state,        generate_process_adsr),
+        (DspPrimitive::Chorus,                  generate_chorus_state,       generate_process_chorus),
+        (DspPrimitive::Compressor,              generate_compressor_state,   generate_process_compressor),
+        (DspPrimitive::Rms,                     generate_rms_state,          generate_process_rms),
+        (DspPrimitive::PeakFollow,              generate_peak_follow_state,  generate_process_peak_follow),
+        (DspPrimitive::Gate,                    generate_gate_state,         generate_process_gate),
+        (DspPrimitive::DcBlock,                 generate_dc_block_state,     generate_process_dc_block),
+        (DspPrimitive::SampleAndHold,           generate_sample_hold_state,  generate_process_sample_hold),
+        (DspPrimitive::WavetableOsc,            generate_wt_osc_state,       generate_process_wavetable_osc),
+    ];
+    for (prim, state_fn, process_fn) in stateful {
+        if used_primitives.contains(prim) {
+            out.push_str(&state_fn()); out.push('\n');
+            out.push_str(&process_fn()); out.push('\n');
+        }
     }
 
-    if needs_notch {
-        out.push_str(&generate_process_biquad_notch());
-        out.push('\n');
-    }
+    // ── Delay variants (shared state struct) ─────────────────
+    let needs_delay = has(used_primitives, |p| matches!(p, DspPrimitive::Delay | DspPrimitive::ModDelay | DspPrimitive::Allpass | DspPrimitive::Comb));
+    emit_if(&mut out, needs_delay, generate_delay_state);
 
-    // ── EQ / Shelving biquad filters ─────────────────────────
-    if needs_peak_eq {
-        out.push_str(&generate_process_biquad_peak_eq());
-        out.push('\n');
-    }
-
-    if needs_low_shelf {
-        out.push_str(&generate_process_biquad_low_shelf());
-        out.push('\n');
-    }
-
-    if needs_high_shelf {
-        out.push_str(&generate_process_biquad_high_shelf());
-        out.push('\n');
-    }
-
-    // ── Oscillators ──────────────────────────────────────────
-    let needs_any_osc = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(_) | DspPrimitive::Lfo | DspPrimitive::Pulse)
-    });
-
-    if needs_any_osc {
-        out.push_str(&generate_osc_state());
-        out.push('\n');
-    }
-
-    let needs_saw = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(OscKind::Saw))
-    });
-    let needs_square = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(OscKind::Square))
-    });
-    let needs_sine = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(OscKind::Sine) | DspPrimitive::Lfo)
-    });
-    let needs_triangle = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Oscillator(OscKind::Triangle))
-    });
-
-    if needs_saw {
-        out.push_str(&generate_process_osc_saw());
-        out.push('\n');
-    }
-    if needs_square {
-        out.push_str(&generate_process_osc_square());
-        out.push('\n');
-    }
-    if needs_sine {
-        out.push_str(&generate_process_osc_sine());
-        out.push('\n');
-    }
-    if needs_triangle {
-        out.push_str(&generate_process_osc_triangle());
-        out.push('\n');
-    }
-
-    let needs_pulse = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Pulse)
-    });
-    if needs_pulse {
-        out.push_str(&generate_process_osc_pulse());
-        out.push('\n');
-    }
-
-    // ── Envelopes ────────────────────────────────────────────
-    let needs_adsr = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Envelope(EnvKind::Adsr))
-    });
-
-    if needs_adsr {
-        out.push_str(&generate_adsr_state());
-        out.push('\n');
-        out.push_str(&generate_process_adsr());
-        out.push('\n');
-    }
-
-    // ── Chorus ───────────────────────────────────────────────
-    let needs_chorus = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Chorus)
-    });
-
-    if needs_chorus {
-        out.push_str(&generate_chorus_state());
-        out.push('\n');
-        out.push_str(&generate_process_chorus());
-        out.push('\n');
-    }
-
-    // ── Compressor ───────────────────────────────────────────
-    let needs_compressor = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Compressor)
-    });
-
-    if needs_compressor {
-        out.push_str(&generate_compressor_state());
-        out.push('\n');
-        out.push_str(&generate_process_compressor());
-        out.push('\n');
-    }
-
-    // ── RMS ──────────────────────────────────────────────────
-    let needs_rms = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Rms)
-    });
-
-    if needs_rms {
-        out.push_str(&generate_rms_state());
-        out.push('\n');
-        out.push_str(&generate_process_rms());
-        out.push('\n');
-    }
-
-    // ── Peak Follow ──────────────────────────────────────────
-    let needs_peak_follow = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::PeakFollow)
-    });
-
-    if needs_peak_follow {
-        out.push_str(&generate_peak_follow_state());
-        out.push('\n');
-        out.push_str(&generate_process_peak_follow());
-        out.push('\n');
-    }
-
-    // ── Gate ─────────────────────────────────────────────────
-    let needs_gate = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Gate)
-    });
-
-    if needs_gate {
-        out.push_str(&generate_gate_state());
-        out.push('\n');
-        out.push_str(&generate_process_gate());
-        out.push('\n');
-    }
-
-    // ── DC Block ─────────────────────────────────────────────
-    let needs_dc_block = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::DcBlock)
-    });
-
-    if needs_dc_block {
-        out.push_str(&generate_dc_block_state());
-        out.push('\n');
-        out.push_str(&generate_process_dc_block());
-        out.push('\n');
-    }
-
-    // ── Sample and Hold ──────────────────────────────────────
-    let needs_sample_hold = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::SampleAndHold)
-    });
-
-    if needs_sample_hold {
-        out.push_str(&generate_sample_hold_state());
-        out.push('\n');
-        out.push_str(&generate_process_sample_hold());
-        out.push('\n');
-    }
-
-    // ── Wavetable oscillator ─────────────────────────────────
-    let needs_wavetable_osc = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::WavetableOsc)
-    });
-
-    if needs_wavetable_osc {
-        out.push_str(&generate_wt_osc_state());
-        out.push('\n');
-        out.push_str(&generate_process_wavetable_osc());
-        out.push('\n');
-    }
-
-    // ── Delay ────────────────────────────────────────────────
-    let needs_delay = used_primitives.iter().any(|p| {
-        matches!(p, DspPrimitive::Delay | DspPrimitive::ModDelay | DspPrimitive::Allpass | DspPrimitive::Comb)
-    });
-
-    if needs_delay {
-        out.push_str(&generate_delay_state());
-        out.push('\n');
-    }
-
-    if used_primitives.contains(&DspPrimitive::Delay) {
-        out.push_str(&generate_process_delay());
-        out.push('\n');
-    }
-
-    if used_primitives.contains(&DspPrimitive::ModDelay) {
-        out.push_str(&generate_process_mod_delay());
-        out.push('\n');
-    }
-
-    if used_primitives.contains(&DspPrimitive::Allpass) {
-        out.push_str(&generate_process_allpass());
-        out.push('\n');
-    }
-
-    if used_primitives.contains(&DspPrimitive::Comb) {
-        out.push_str(&generate_process_comb());
-        out.push('\n');
+    let delay_fns: &[(DspPrimitive, fn() -> String)] = &[
+        (DspPrimitive::Delay,    generate_process_delay),
+        (DspPrimitive::ModDelay, generate_process_mod_delay),
+        (DspPrimitive::Allpass,  generate_process_allpass),
+        (DspPrimitive::Comb,     generate_process_comb),
+    ];
+    for (prim, gen) in delay_fns {
+        emit_if(&mut out, used_primitives.contains(prim), *gen);
     }
 
     out

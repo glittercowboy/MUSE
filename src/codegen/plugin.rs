@@ -4,7 +4,7 @@ use crate::ast::{
     ClapItem, ChannelSpec, FormatBlock, IoDirection, MetadataKey, MetadataValue, PluginDef,
     PluginItem, Vst3Item,
 };
-use crate::codegen::process::ProcessInfo;
+use crate::codegen::process::{ProcessInfo, emit_state_fields, emit_state_defaults, emit_playback_fields, emit_playback_defaults};
 use crate::codegen::SampleInfo;
 use crate::codegen::WavetableInfo;
 use crate::dsp::primitives::DspPrimitive;
@@ -57,19 +57,9 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
 
     let needs_any_biquad = needs_top_level_biquad || !branch_biquad_fields.is_empty();
-    let has_oscillators = process_info.oscillator_count > 0;
     let has_adsr = process_info.has_adsr;
-    let has_chorus = process_info.chorus_count > 0;
-    let has_compressor = process_info.compressor_count > 0;
-    let has_delay = process_info.delay_count > 0;
-    let has_eq_biquad = process_info.eq_biquad_count > 0;
-    let has_rms = process_info.rms_count > 0;
-    let has_peak_follow = process_info.peak_follow_count > 0;
-    let has_gate = process_info.gate_count > 0;
-    let _has_dc_block = process_info.dc_block_count > 0;
-    let _has_sample_hold = process_info.sample_hold_count > 0;
-    let has_wt_osc = process_info.wt_osc_call_count > 0;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate || has_wt_osc;
+    let needs_sample_rate = process_info.needs_sample_rate(needs_any_biquad);
+    let simple_slots = process_info.simple_state_slots();
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
@@ -96,40 +86,16 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         out.push_str(&format!("    voices: [Option<Voice>; {}],\n", voice_count));
         out.push_str("    next_internal_voice_id: u64,\n");
     } else {
-        for i in 0..process_info.oscillator_count {
-            out.push_str(&format!("    osc_state_{}: OscState,\n", i));
-        }
         if has_adsr {
             out.push_str("    adsr_state: AdsrState,\n");
         }
-        for i in 0..process_info.chorus_count {
-            out.push_str(&format!("    chorus_state_{}: ChorusState,\n", i));
-        }
-        for i in 0..process_info.compressor_count {
-            out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
-        }
-        for i in 0..process_info.rms_count {
-            out.push_str(&format!("    rms_state_{}: RmsState,\n", i));
-        }
-        for i in 0..process_info.peak_follow_count {
-            out.push_str(&format!("    peak_follow_state_{}: PeakFollowState,\n", i));
-        }
-        for i in 0..process_info.gate_count {
-            out.push_str(&format!("    gate_state_{}: GateState,\n", i));
-        }
-        for i in 0..process_info.dc_block_count {
-            out.push_str(&format!("    dc_block_state_{}: DcBlockState,\n", i));
-        }
-        for i in 0..process_info.sample_hold_count {
-            out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
-        }
+        out.push_str(&emit_state_fields(&simple_slots, "    "));
     }
 
-    // Delay state fields are outside the poly/mono guard — delays work in both effects and instruments
+    // Delay state fields — outside the poly/mono guard (delays work in both effects and instruments)
     for i in 0..process_info.delay_count {
         out.push_str(&format!("    delay_state_{}: DelayLine,\n", i));
     }
-
     // EQ biquad state fields — per-call-site, per-channel (outside poly/mono guard)
     if !is_polyphonic {
         for i in 0..process_info.eq_biquad_count {
@@ -138,43 +104,20 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
 
     if is_instrument && !is_polyphonic {
-        out.push_str("    active_note: Option<u8>,\n");
-        out.push_str("    note_freq: f32,\n");
-        out.push_str("    velocity: f32,\n");
+        out.push_str("    active_note: Option<u8>,\n    note_freq: f32,\n    velocity: f32,\n");
     }
     if needs_sample_rate {
         out.push_str("    sample_rate: f32,\n");
     }
-    // Sample buffer fields (Vec<f32> for decoded audio, u32 for sample rate)
     for sample in sample_infos {
-        out.push_str(&format!("    sample_{}: Vec<f32>,\n", sample.name));
-        out.push_str(&format!("    sample_{}_rate: u32,\n", sample.name));
+        out.push_str(&format!("    sample_{}: Vec<f32>,\n    sample_{}_rate: u32,\n", sample.name, sample.name));
     }
-    // Per-call-site playback state for play() calls (monophonic only — polyphonic is on Voice)
     if !is_polyphonic {
-        for i in 0..process_info.play_call_count {
-            out.push_str(&format!("    play_pos_{}: f32,\n", i));
-            out.push_str(&format!("    play_active_{}: bool,\n", i));
-        }
+        out.push_str(&emit_playback_fields("play", process_info.play_call_count, "    "));
+        out.push_str(&emit_playback_fields("loop", process_info.loop_call_count, "    "));
     }
-    // Per-call-site loop state for loop() calls (monophonic only — polyphonic is on Voice)
-    if !is_polyphonic {
-        for i in 0..process_info.loop_call_count {
-            out.push_str(&format!("    loop_pos_{}: f32,\n", i));
-            out.push_str(&format!("    loop_active_{}: bool,\n", i));
-        }
-    }
-    // Wavetable buffer fields (shared data, not per-voice)
     for wt in wavetable_infos {
-        out.push_str(&format!("    wavetable_{}: Vec<f32>,\n", wt.name));
-        out.push_str(&format!("    wavetable_{}_frame_size: usize,\n", wt.name));
-        out.push_str(&format!("    wavetable_{}_frame_count: usize,\n", wt.name));
-    }
-    // Per-call-site wavetable oscillator state (monophonic only — polyphonic is on Voice)
-    if !is_polyphonic {
-        for i in 0..process_info.wt_osc_call_count {
-            out.push_str(&format!("    wt_osc_state_{}: WtOscState,\n", i));
-        }
+        out.push_str(&format!("    wavetable_{}: Vec<f32>,\n    wavetable_{}_frame_size: usize,\n    wavetable_{}_frame_count: usize,\n", wt.name, wt.name, wt.name));
     }
     out.push_str("}\n\n");
 
@@ -193,45 +136,18 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
 
     if is_polyphonic {
-        out.push_str(&format!(
-            "            voices: [(); {}].map(|_| None),\n",
-            voice_count
-        ));
+        out.push_str(&format!("            voices: [(); {}].map(|_| None),\n", voice_count));
         out.push_str("            next_internal_voice_id: 0,\n");
     } else {
-        for i in 0..process_info.oscillator_count {
-            out.push_str(&format!("            osc_state_{}: OscState::default(),\n", i));
-        }
         if has_adsr {
             out.push_str("            adsr_state: AdsrState::default(),\n");
         }
-        for i in 0..process_info.chorus_count {
-            out.push_str(&format!("            chorus_state_{}: ChorusState::default(),\n", i));
-        }
-        for i in 0..process_info.compressor_count {
-            out.push_str(&format!("            compressor_state_{}: CompressorState::default(),\n", i));
-        }
-        for i in 0..process_info.rms_count {
-            out.push_str(&format!("            rms_state_{}: RmsState::default(),\n", i));
-        }
-        for i in 0..process_info.peak_follow_count {
-            out.push_str(&format!("            peak_follow_state_{}: PeakFollowState::default(),\n", i));
-        }
-        for i in 0..process_info.gate_count {
-            out.push_str(&format!("            gate_state_{}: GateState::default(),\n", i));
-        }
-        for i in 0..process_info.dc_block_count {
-            out.push_str(&format!("            dc_block_state_{}: DcBlockState::default(),\n", i));
-        }
-        for i in 0..process_info.sample_hold_count {
-            out.push_str(&format!("            sample_hold_state_{}: SampleAndHoldState::default(),\n", i));
-        }
+        out.push_str(&emit_state_defaults(&simple_slots, "            "));
     }
 
     for i in 0..process_info.delay_count {
         out.push_str(&format!("            delay_state_{}: DelayLine::default(),\n", i));
     }
-
     if !is_polyphonic {
         for i in 0..process_info.eq_biquad_count {
             out.push_str(&format!("            eq_biquad_state_{}: [BiquadState::default(); {}],\n", i, num_channels));
@@ -239,43 +155,20 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
 
     if is_instrument && !is_polyphonic {
-        out.push_str("            active_note: None,\n");
-        out.push_str("            note_freq: 440.0,\n");
-        out.push_str("            velocity: 0.0,\n");
+        out.push_str("            active_note: None,\n            note_freq: 440.0,\n            velocity: 0.0,\n");
     }
     if needs_sample_rate {
         out.push_str("            sample_rate: 44100.0,\n");
     }
-    // Sample buffer defaults
     for sample in sample_infos {
-        out.push_str(&format!("            sample_{}: Vec::new(),\n", sample.name));
-        out.push_str(&format!("            sample_{}_rate: 0,\n", sample.name));
+        out.push_str(&format!("            sample_{}: Vec::new(),\n            sample_{}_rate: 0,\n", sample.name, sample.name));
     }
-    // Play call-site state defaults (monophonic only)
     if !is_polyphonic {
-        for i in 0..process_info.play_call_count {
-            out.push_str(&format!("            play_pos_{}: 0.0,\n", i));
-            out.push_str(&format!("            play_active_{}: false,\n", i));
-        }
+        out.push_str(&emit_playback_defaults("play", process_info.play_call_count, "            ", "false"));
+        out.push_str(&emit_playback_defaults("loop", process_info.loop_call_count, "            ", "false"));
     }
-    // Loop call-site state defaults (monophonic only)
-    if !is_polyphonic {
-        for i in 0..process_info.loop_call_count {
-            out.push_str(&format!("            loop_pos_{}: 0.0,\n", i));
-            out.push_str(&format!("            loop_active_{}: false,\n", i));
-        }
-    }
-    // Wavetable buffer defaults
     for wt in wavetable_infos {
-        out.push_str(&format!("            wavetable_{}: Vec::new(),\n", wt.name));
-        out.push_str(&format!("            wavetable_{}_frame_size: 0,\n", wt.name));
-        out.push_str(&format!("            wavetable_{}_frame_count: 0,\n", wt.name));
-    }
-    // Wavetable oscillator state defaults (monophonic only)
-    if !is_polyphonic {
-        for i in 0..process_info.wt_osc_call_count {
-            out.push_str(&format!("            wt_osc_state_{}: WtOscState::default(),\n", i));
-        }
+        out.push_str(&format!("            wavetable_{}: Vec::new(),\n            wavetable_{}_frame_size: 0,\n            wavetable_{}_frame_count: 0,\n", wt.name, wt.name, wt.name));
     }
     out.push_str("        }\n    }\n}\n\n");
 
@@ -310,65 +203,24 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
 fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     let mut out = String::new();
     out.push_str("#[derive(Clone, Copy)]\nstruct Voice {\n");
-    out.push_str("    voice_id: i32,\n");
-    out.push_str("    channel: u8,\n");
-    out.push_str("    note: u8,\n");
-    out.push_str("    internal_voice_id: u64,\n");
-    out.push_str("    note_freq: f32,\n");
-    out.push_str("    velocity: f32,\n");
-    out.push_str("    pressure: f32,\n");
-    out.push_str("    tuning: f32,\n");
-    out.push_str("    slide: f32,\n");
-    out.push_str("    releasing: bool,\n");
-    // Per-voice filter state (if any filters are used)
+    out.push_str("    voice_id: i32,\n    channel: u8,\n    note: u8,\n    internal_voice_id: u64,\n");
+    out.push_str("    note_freq: f32,\n    velocity: f32,\n    pressure: f32,\n    tuning: f32,\n    slide: f32,\n    releasing: bool,\n");
+
     let has_filters = process_info.used_primitives.iter().any(|p| matches!(p, DspPrimitive::Filter(_)));
     if has_filters {
         out.push_str("    biquad_state: BiquadState,\n");
     }
-    for i in 0..process_info.oscillator_count {
-        out.push_str(&format!("    osc_state_{}: OscState,\n", i));
-    }
     if process_info.has_adsr {
         out.push_str("    adsr_state: AdsrState,\n");
     }
-    for i in 0..process_info.chorus_count {
-        out.push_str(&format!("    chorus_state_{}: ChorusState,\n", i));
-    }
-    for i in 0..process_info.compressor_count {
-        out.push_str(&format!("    compressor_state_{}: CompressorState,\n", i));
-    }
-    for i in 0..process_info.rms_count {
-        out.push_str(&format!("    rms_state_{}: RmsState,\n", i));
-    }
-    for i in 0..process_info.peak_follow_count {
-        out.push_str(&format!("    peak_follow_state_{}: PeakFollowState,\n", i));
-    }
-    for i in 0..process_info.gate_count {
-        out.push_str(&format!("    gate_state_{}: GateState,\n", i));
-    }
-    for i in 0..process_info.dc_block_count {
-        out.push_str(&format!("    dc_block_state_{}: DcBlockState,\n", i));
-    }
-    for i in 0..process_info.sample_hold_count {
-        out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
-    }
+    // Voice uses simple BiquadState (not per-channel array) for eq_biquad
+    let voice_slots = process_info.simple_state_slots();
+    out.push_str(&emit_state_fields(&voice_slots, "    "));
     for i in 0..process_info.eq_biquad_count {
         out.push_str(&format!("    eq_biquad_state_{}: BiquadState,\n", i));
     }
-    // Per-voice playback state for play() calls
-    for i in 0..process_info.play_call_count {
-        out.push_str(&format!("    play_pos_{}: f32,\n", i));
-        out.push_str(&format!("    play_active_{}: bool,\n", i));
-    }
-    // Per-voice loop state for loop() calls
-    for i in 0..process_info.loop_call_count {
-        out.push_str(&format!("    loop_pos_{}: f32,\n", i));
-        out.push_str(&format!("    loop_active_{}: bool,\n", i));
-    }
-    // Per-voice wavetable oscillator state
-    for i in 0..process_info.wt_osc_call_count {
-        out.push_str(&format!("    wt_osc_state_{}: WtOscState,\n", i));
-    }
+    out.push_str(&emit_playback_fields("play", process_info.play_call_count, "    "));
+    out.push_str(&emit_playback_fields("loop", process_info.loop_call_count, "    "));
     out.push_str("}\n");
     out
 }
@@ -379,35 +231,17 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     if has_filters {
         fields.push("biquad_state: BiquadState::default()".to_string());
     }
-    for i in 0..process_info.oscillator_count {
-        fields.push(format!("osc_state_{}: OscState::default()", i));
-    }
     if process_info.has_adsr {
         fields.push("adsr_state: AdsrState::default()".to_string());
     }
-    for i in 0..process_info.chorus_count {
-        fields.push(format!("chorus_state_{}: ChorusState::default()", i));
-    }
-    for i in 0..process_info.compressor_count {
-        fields.push(format!("compressor_state_{}: CompressorState::default()", i));
-    }
-    for i in 0..process_info.rms_count {
-        fields.push(format!("rms_state_{}: RmsState::default()", i));
-    }
-    for i in 0..process_info.peak_follow_count {
-        fields.push(format!("peak_follow_state_{}: PeakFollowState::default()", i));
-    }
-    for i in 0..process_info.gate_count {
-        fields.push(format!("gate_state_{}: GateState::default()", i));
-    }
-    for i in 0..process_info.dc_block_count {
-        fields.push(format!("dc_block_state_{}: DcBlockState::default()", i));
-    }
-    for i in 0..process_info.sample_hold_count {
-        fields.push(format!("sample_hold_state_{}: SampleAndHoldState::default()", i));
-    }
+    let voice_slots = process_info.simple_state_slots();
     for i in 0..process_info.eq_biquad_count {
         fields.push(format!("eq_biquad_state_{}: BiquadState::default()", i));
+    }
+    for slot in &voice_slots {
+        for i in 0..slot.count {
+            fields.push(format!("{}_{}: {}::default()", slot.prefix, i, slot.type_name));
+        }
     }
     for i in 0..process_info.play_call_count {
         fields.push(format!("play_pos_{}: 0.0", i));
@@ -416,9 +250,6 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.loop_call_count {
         fields.push(format!("loop_pos_{}: 0.0", i));
         fields.push(format!("loop_active_{}: true", i));
-    }
-    for i in 0..process_info.wt_osc_call_count {
-        fields.push(format!("wt_osc_state_{}: WtOscState::default()", i));
     }
     if fields.is_empty() {
         String::new()
