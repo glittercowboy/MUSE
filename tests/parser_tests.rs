@@ -2576,3 +2576,143 @@ fn parse_test_input_backward_compat() {
         other => panic!("Expected Input impulse, got {:?}", other),
     }
 }
+
+// ── User-defined function tests ─────────────────────────────
+
+#[test]
+fn parse_fn_def_basic() {
+    let source = r#"
+    plugin "Test" {
+      input stereo
+      output stereo
+      fn saturate(amount, cutoff) -> processor {
+        gain(amount) -> tanh() -> lowpass(cutoff)
+      }
+      process {
+        input -> output
+      }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let fn_defs: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| if let PluginItem::FnDef(fd) = item { Some(fd) } else { None })
+        .collect();
+    assert_eq!(fn_defs.len(), 1, "Expected 1 fn def");
+    assert_eq!(fn_defs[0].name, "saturate");
+    assert_eq!(fn_defs[0].params.len(), 2);
+    assert_eq!(fn_defs[0].params[0].name, "amount");
+    assert_eq!(fn_defs[0].params[1].name, "cutoff");
+    assert_eq!(fn_defs[0].return_hint, Some(FnReturnHint::Processor));
+    assert_eq!(fn_defs[0].body.len(), 1, "Expected 1 body statement");
+}
+
+#[test]
+fn parse_fn_def_no_return_hint() {
+    let source = r#"
+    plugin "Test" {
+      input stereo
+      output stereo
+      fn my_func(x) {
+        gain(x)
+      }
+      process {
+        input -> output
+      }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let fn_defs: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| if let PluginItem::FnDef(fd) = item { Some(fd) } else { None })
+        .collect();
+    assert_eq!(fn_defs.len(), 1);
+    assert_eq!(fn_defs[0].name, "my_func");
+    assert_eq!(fn_defs[0].params.len(), 1);
+    assert!(fn_defs[0].return_hint.is_none());
+}
+
+#[test]
+fn parse_fn_def_signal_hint() {
+    let source = r#"
+    plugin "Test" {
+      input stereo
+      output stereo
+      fn gen_signal(freq) -> signal {
+        gain(freq)
+      }
+      process {
+        input -> output
+      }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let fn_defs: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| if let PluginItem::FnDef(fd) = item { Some(fd) } else { None })
+        .collect();
+    assert_eq!(fn_defs[0].return_hint, Some(FnReturnHint::Signal));
+}
+
+#[test]
+fn parse_fn_def_multiple() {
+    let source = r#"
+    plugin "Test" {
+      input stereo
+      output stereo
+      fn saturate(amount, cutoff) -> processor {
+        gain(amount) -> tanh() -> lowpass(cutoff)
+      }
+      fn output_stage(vol) -> processor {
+        gain(vol)
+      }
+      process {
+        input -> output
+      }
+    }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let fn_defs: Vec<_> = plugin.items.iter()
+        .filter_map(|(item, _)| if let PluginItem::FnDef(fd) = item { Some(fd) } else { None })
+        .collect();
+    assert_eq!(fn_defs.len(), 2);
+    assert_eq!(fn_defs[0].name, "saturate");
+    assert_eq!(fn_defs[1].name, "output_stage");
+}
+
+#[test]
+fn parse_user_functions_example() {
+    let source = include_str!("../examples/user_functions.muse");
+    let (ast, errors) = parse(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no errors parsing user_functions.muse, got: {:?}",
+        errors
+    );
+    let plugin = ast.expect("Expected AST from user_functions.muse");
+    assert_eq!(plugin.name, "Channel Strip");
+
+    let fn_count = plugin.items.iter()
+        .filter(|(item, _)| matches!(item, PluginItem::FnDef(_)))
+        .count();
+    assert_eq!(fn_count, 2, "Expected 2 fn definitions");
+
+    let process_count = plugin.items.iter()
+        .filter(|(item, _)| matches!(item, PluginItem::ProcessBlock(_)))
+        .count();
+    assert_eq!(process_count, 1, "Expected 1 process block");
+
+    let test_count = plugin.items.iter()
+        .filter(|(item, _)| matches!(item, PluginItem::TestBlock(_)))
+        .count();
+    assert_eq!(test_count, 2, "Expected 2 test blocks");
+}

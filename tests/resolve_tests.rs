@@ -2031,3 +2031,129 @@ fn tempo_delay_example_resolves() {
     let resolved = resolve_expect_ok(source);
     assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
 }
+
+// ── User-defined function tests ─────────────────────────────
+
+#[test]
+fn user_fn_def_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test.fn" description "test" features [audio_effect, stereo] }
+  vst3 { id "TestFn1" subcategories [Fx] }
+  input stereo
+  output stereo
+  param drive: float = 1.0 in 0.0..10.0 {
+    smoothing linear 20ms
+  }
+  param tone: float = 2000.0 in 200.0..8000.0 {
+    smoothing logarithmic 50ms
+  }
+  fn saturate(amount, cutoff) -> processor {
+    gain(amount) -> tanh() -> lowpass(cutoff)
+  }
+  process {
+    input -> saturate(param.drive, param.tone) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn user_fn_wrong_arg_count_produces_error() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test.fn" description "test" features [audio_effect, stereo] }
+  vst3 { id "TestFn2" subcategories [Fx] }
+  input stereo
+  output stereo
+  param drive: float = 1.0 in 0.0..10.0 {
+    smoothing linear 20ms
+  }
+  fn saturate(amount, cutoff) -> processor {
+    gain(amount) -> tanh() -> lowpass(cutoff)
+  }
+  process {
+    input -> saturate(param.drive) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e004 = find_error(&diags, "E004");
+    assert!(
+        e004.message.contains("expects 2 arguments"),
+        "Expected arg count error, got: {}",
+        e004.message
+    );
+}
+
+#[test]
+fn user_fn_too_many_args_produces_error() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test.fn" description "test" features [audio_effect, stereo] }
+  vst3 { id "TestFn3" subcategories [Fx] }
+  input stereo
+  output stereo
+  fn my_gain(amount) -> processor {
+    gain(amount)
+  }
+  process {
+    input -> my_gain(1.0, 2.0) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e004 = find_error(&diags, "E004");
+    assert!(
+        e004.message.contains("expects 1 argument"),
+        "Expected arg count error, got: {}",
+        e004.message
+    );
+}
+
+#[test]
+fn user_fn_multiple_fns_resolve_ok() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test.fn" description "test" features [audio_effect, stereo] }
+  vst3 { id "TestFn4" subcategories [Fx] }
+  input stereo
+  output stereo
+  param drive: float = 1.0 in 0.0..10.0 {
+    smoothing linear 20ms
+  }
+  param volume: float = 0.0 in -30.0..6.0 {
+    smoothing logarithmic 50ms
+  }
+  fn saturate(amount) -> processor {
+    gain(amount) -> tanh()
+  }
+  fn output_stage(vol) -> processor {
+    gain(vol) -> dc_block()
+  }
+  process {
+    input -> saturate(param.drive) -> output_stage(param.volume) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn user_functions_example_resolves() {
+    let source = include_str!("../examples/user_functions.muse");
+    resolve_expect_ok(source);
+}

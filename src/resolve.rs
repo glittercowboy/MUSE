@@ -69,6 +69,8 @@ struct Resolver<'a> {
     registry: &'a DspRegistry,
     /// param name → ParamType from the plugin's param declarations
     params: HashMap<String, ParamType>,
+    /// User-defined function declarations: name → FnDef
+    fn_defs: HashMap<String, FnDef>,
     /// Whether the plugin has MIDI note handlers (enables note.X resolution)
     has_midi_note: bool,
     /// Whether the plugin has any MIDI declaration at all (instrument mode)
@@ -109,6 +111,7 @@ impl<'a> Resolver<'a> {
         Self {
             registry,
             params: HashMap::new(),
+            fn_defs: HashMap::new(),
             has_midi_note: false,
             has_midi_decl: false,
             seen_voice_decl: false,
@@ -178,6 +181,9 @@ impl<'a> Resolver<'a> {
                         self.seen_wavetables.insert(decl.name.clone());
                         self.wavetables.insert(decl.name.clone(), decl.path.clone());
                     }
+                }
+                PluginItem::FnDef(fn_def) => {
+                    self.fn_defs.insert(fn_def.name.clone(), fn_def.clone());
                 }
                 PluginItem::IoDecl(io_decl) => {
                     let reserved = ["input", "output", "param", "note"];
@@ -1027,7 +1033,67 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Look up in DSP registry first (takes priority over local scope)
+        // Check user-defined functions first
+        if let Some(fn_def) = self.fn_defs.get(&callee_name).cloned() {
+            // Validate argument count
+            if args.len() != fn_def.params.len() {
+                self.diagnostics.push(Diagnostic::error(
+                    "E004",
+                    span,
+                    format!(
+                        "function '{}' expects {} argument{}, got {}",
+                        callee_name,
+                        fn_def.params.len(),
+                        if fn_def.params.len() == 1 { "" } else { "s" },
+                        args.len()
+                    ),
+                ));
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+                return None;
+            }
+
+            // Resolve arguments
+            for arg in args {
+                self.resolve_expr(arg);
+            }
+
+            // Resolve the fn body in a new scope with params bound
+            let saved_scope = self.scope.clone();
+            for (i, param) in fn_def.params.iter().enumerate() {
+                // Use the resolved type of each argument, default to Signal
+                let arg_ty = self.type_map
+                    .get(&(args[i].1.start, args[i].1.end))
+                    .copied()
+                    .unwrap_or(DspType::Signal);
+                self.scope.insert(param.name.clone(), arg_ty);
+            }
+            self.resolve_statements(&fn_def.body);
+            self.scope = saved_scope;
+
+            // Return type: use hint if given, otherwise infer from last expression
+            let return_type = match fn_def.return_hint {
+                Some(FnReturnHint::Processor) => DspType::Processor,
+                Some(FnReturnHint::Signal) => DspType::Signal,
+                None => {
+                    // Infer from last body statement
+                    fn_def.body.last().and_then(|(stmt, _)| match stmt {
+                        Statement::Expr(expr) => {
+                            self.type_map.get(&(expr.1.start, expr.1.end)).copied()
+                        }
+                        Statement::Return(expr) => {
+                            self.type_map.get(&(expr.1.start, expr.1.end)).copied()
+                        }
+                        _ => None,
+                    }).unwrap_or(DspType::Processor)
+                }
+            };
+
+            return Some(return_type);
+        }
+
+        // Look up in DSP registry (takes priority over local scope)
         let func = match self.registry.lookup(&callee_name) {
             Some(f) => f.clone(), // clone to release the borrow on self
             None => {

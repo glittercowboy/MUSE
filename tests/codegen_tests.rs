@@ -2544,3 +2544,34 @@ plugin "Sidechain Test" {
         &lib_rs[lib_rs.find("#[cfg(test)]").unwrap_or(0)..]
     );
 }
+
+// ── User-defined function codegen tests ─────────────────────
+
+#[test]
+fn codegen_user_functions_generates_inlined_code() {
+    let source = include_str!("../examples/user_functions.muse");
+    let (_, lib_rs) = generate_code_strings(source);
+
+    // The fn body should be inlined — params bound as local variables
+    assert!(
+        lib_rs.contains("let amount"),
+        "Generated code should contain 'let amount' binding from fn param.\nGenerated:\n{}",
+        lib_rs
+    );
+    assert!(
+        lib_rs.contains("let cutoff"),
+        "Generated code should contain 'let cutoff' binding from fn param.\nGenerated:\n{}",
+        lib_rs
+    );
+}
+
+#[test]
+fn codegen_user_functions_cargo_check() {
+    let source = include_str!("../examples/user_functions.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-user-functions");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+    let crate_dir = generate_from_source(source, &tmp);
+    assert_cargo_check(&crate_dir);
+}
