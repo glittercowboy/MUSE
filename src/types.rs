@@ -29,6 +29,8 @@ pub enum DspType {
     Param,
     /// Boolean value.
     Bool,
+    /// Musical time value in beats — converted to samples via host tempo at runtime.
+    Beat,
     /// Generic numeric value — compatible with all numeric-domain types.
     Number,
 }
@@ -43,6 +45,7 @@ impl fmt::Display for DspType {
             DspType::Gain => write!(f, "Gain"),
             DspType::Time => write!(f, "Time"),
             DspType::Rate => write!(f, "Rate"),
+            DspType::Beat => write!(f, "Beat"),
             DspType::Param => write!(f, "Param"),
             DspType::Bool => write!(f, "Bool"),
             DspType::Number => write!(f, "Number"),
@@ -65,6 +68,10 @@ impl DspType {
         if self == DspType::Number && expected.is_numeric_domain() {
             return true;
         }
+        // Beat is compatible with Time — codegen handles the tempo conversion
+        if self == DspType::Beat && expected == DspType::Time {
+            return true;
+        }
         // Envelope is a 0.0–1.0 control signal — usable as a numeric value
         if self == DspType::Envelope && expected.is_numeric_domain() {
             return true;
@@ -81,6 +88,7 @@ impl DspType {
                 | DspType::Gain
                 | DspType::Time
                 | DspType::Rate
+                | DspType::Beat
                 | DspType::Number
         )
     }
@@ -92,6 +100,7 @@ pub fn type_from_unit_suffix(suffix: UnitSuffix) -> DspType {
         UnitSuffix::Hz | UnitSuffix::KHz => DspType::Frequency,
         UnitSuffix::Ms | UnitSuffix::S => DspType::Time,
         UnitSuffix::DB => DspType::Gain,
+        UnitSuffix::Beat => DspType::Beat,
         UnitSuffix::Percent | UnitSuffix::St => DspType::Number,
     }
 }

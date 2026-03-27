@@ -199,6 +199,8 @@ where
         Token::UnitS => UnitSuffix::S,
         Token::UnitDB => UnitSuffix::DB,
         Token::UnitSt => UnitSuffix::St,
+        Token::UnitBeat => UnitSuffix::Beat,
+        Token::UnitBeats => UnitSuffix::Beat,
     };
 
     select! { Token::Number(n) => n }

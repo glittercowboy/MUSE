@@ -821,6 +821,8 @@ impl<'a> Resolver<'a> {
         match name {
             "input" => Some(DspType::Signal),
             "output" => Some(DspType::Signal),
+            "tempo" => Some(DspType::Number),
+            "beat_position" => Some(DspType::Number),
             _ => {
                 // Check named bus declarations (e.g. `sidechain` from `input sidechain stereo`)
                 if self.bus_names.contains_key(name) {

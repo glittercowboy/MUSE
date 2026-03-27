@@ -172,7 +172,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     }
     out.push_str("        }\n    }\n}\n\n");
 
-    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, process_info.reverb_count, sample_infos, wavetable_infos));
+    out.push_str(&generate_plugin_trait(&info, needs_sample_rate, is_instrument, is_polyphonic, has_gui, process_info.delay_count, process_info.reverb_count, sample_infos, wavetable_infos, process_info.needs_transport));
 
     if is_polyphonic {
         let helper_defaults = generate_voice_field_defaults(process_info);
@@ -373,6 +373,7 @@ fn generate_plugin_trait(
     reverb_count: usize,
     sample_infos: &[SampleInfo],
     wavetable_infos: &[WavetableInfo],
+    needs_transport: bool,
 ) -> String {
     let s = &info.struct_name;
     let in_ch = info.input_channels;
@@ -464,7 +465,7 @@ fn generate_plugin_trait(
         String::new()
     };
 
-    let context_param = if is_instrument { "context" } else { "_context" };
+    let context_param = if is_instrument || needs_transport { "context" } else { "_context" };
 
     // Build AUDIO_IO_LAYOUTS block — include aux ports when declared
     let mut layout_fields = String::new();

@@ -1,0 +1,41 @@
+plugin "Tempo Delay" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.tempo-delay"
+    description "A tempo-synced delay effect"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseTempoDelay"
+    subcategories   [Fx, Delay]
+  }
+
+  input  stereo
+  output stereo
+
+  param fb: float = 0.5 in 0.0..0.95 {
+    smoothing linear 20ms
+  }
+
+  param mix_amt: float = 0.5 in 0.0..1.0 {
+    smoothing linear 20ms
+    display "percentage"
+  }
+
+  process {
+    let delay_time = 0.5beats
+    input -> delay(delay_time) -> gain(param.fb) -> gain(param.mix_amt) -> output
+  }
+
+  test "delay produces output" {
+    set param.fb = 0.5
+    set param.mix_amt = 1.0
+    input impulse 44100 samples
+    assert output.rms > -60dB
+    assert no_nan
+  }
+}
