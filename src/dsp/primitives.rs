@@ -77,6 +77,7 @@ pub enum DspPrimitive {
     WavetableOsc,
     Loop,
     Reverb,
+    Oversample,
 }
 
 // ── Function signature types ─────────────────────────────────

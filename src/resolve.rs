@@ -824,6 +824,7 @@ impl<'a> Resolver<'a> {
             Expr::Split { branches } => self.resolve_split(branches, span),
             Expr::Merge => self.resolve_merge(span),
             Expr::Feedback { body } => self.resolve_feedback(body, span),
+            Expr::Oversample { factor, body } => self.resolve_oversample(*factor, body, span),
             Expr::Error => None,
         }
     }
@@ -903,6 +904,36 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
+
+        Some(DspType::Processor)
+    }
+
+    /// Resolve an oversample block: validate factor and resolve body.
+    /// Oversample is a Processor (signal→signal with anti-aliasing filters).
+    fn resolve_oversample(
+        &mut self,
+        factor: u32,
+        body: &[Spanned<Statement>],
+        span: Span,
+    ) -> Option<DspType> {
+        // Validate factor is a power of 2 in {2, 4, 8, 16}
+        if !matches!(factor, 2 | 4 | 8 | 16) {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    "E012",
+                    span,
+                    format!(
+                        "invalid oversample factor {} — must be 2, 4, 8, or 16",
+                        factor
+                    ),
+                )
+                .with_suggestion("Use `oversample 2 { ... }`, `oversample 4 { ... }`, `oversample 8 { ... }`, or `oversample 16 { ... }`."),
+            );
+            return None;
+        }
+
+        // Resolve body statements (same as feedback)
+        self.resolve_statements(body);
 
         Some(DspType::Processor)
     }

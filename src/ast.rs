@@ -326,6 +326,13 @@ pub enum Expr {
     Feedback {
         body: Vec<Spanned<Statement>>,
     },
+    /// Oversampling block: `oversample N { body }`
+    /// Runs the body at N times the sample rate with anti-aliasing filters.
+    /// N must be 2, 4, 8, or 16.
+    Oversample {
+        factor: u32,
+        body: Vec<Spanned<Statement>>,
+    },
     /// Error recovery placeholder
     Error,
 }

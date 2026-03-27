@@ -103,6 +103,11 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         emit_if(&mut out, used_primitives.contains(prim), *gen);
     }
 
+    if used_primitives.contains(&DspPrimitive::Oversample) {
+        out.push_str(&generate_oversample_state());
+        out.push('\n');
+    }
+
     out
 }
 
@@ -1368,6 +1373,131 @@ fn process_wavetable_osc(
     state.phase -= state.phase.floor();
 
     output
+}
+"#
+    .to_string()
+}
+
+/// Generate the OversampleState struct and its methods.
+///
+/// Uses a linear-phase FIR half-band filter for anti-aliasing.
+/// The filter is applied at each 2x stage. For 4x oversampling,
+/// two 2x stages are cascaded. The FIR coefficients are a 7-tap
+/// half-band kernel: [0.03125, 0.0, 0.234375, 0.46875, 0.234375, 0.0, 0.03125].
+pub fn generate_oversample_state() -> String {
+    r#"/// Oversampling state for anti-aliased nonlinear processing.
+///
+/// Supports 2x, 4x, 8x, and 16x oversampling via cascaded half-band FIR stages.
+/// Each stage uses a 7-tap linear-phase half-band filter for anti-aliasing.
+/// All buffers are fixed-size (no heap allocation after init).
+const OS_HALF_BAND_KERNEL: [f32; 7] = [0.03125, 0.0, 0.234375, 0.46875, 0.234375, 0.0, 0.03125];
+const OS_KERNEL_LEN: usize = 7;
+const OS_MAX_FACTOR: usize = 16;
+
+struct OversampleState {
+    factor: usize,
+    /// Number of 2x stages (log2 of factor)
+    num_stages: usize,
+    /// Upsampling FIR delay lines — one per 2x stage
+    up_buf: [[f32; OS_KERNEL_LEN]; 4],
+    /// Downsampling FIR delay lines — one per 2x stage
+    down_buf: [[f32; OS_KERNEL_LEN]; 4],
+    /// Scratch buffer for upsampled samples
+    scratch: [f32; OS_MAX_FACTOR],
+}
+
+impl OversampleState {
+    fn new(factor: usize) -> Self {
+        let num_stages = match factor {
+            2 => 1,
+            4 => 2,
+            8 => 3,
+            16 => 4,
+            _ => 1,
+        };
+        Self {
+            factor,
+            num_stages,
+            up_buf: [[0.0; OS_KERNEL_LEN]; 4],
+            down_buf: [[0.0; OS_KERNEL_LEN]; 4],
+            scratch: [0.0; OS_MAX_FACTOR],
+        }
+    }
+
+    /// Upsample a single input sample by the configured factor.
+    /// Returns a fixed-size array; only the first `factor` elements are valid.
+    fn upsample(&mut self, input: f32) -> [f32; OS_MAX_FACTOR] {
+        let mut buf = [0.0f32; OS_MAX_FACTOR];
+        // Start with the input for the first 2x stage
+        let mut stage_len = 1usize;
+        buf[0] = input;
+
+        for stage in 0..self.num_stages {
+            // Expand: insert zeros between existing samples (zero-stuffing)
+            // Work backwards to avoid overwriting
+            let new_len = stage_len * 2;
+            for i in (0..stage_len).rev() {
+                buf[i * 2] = buf[i] * 2.0; // compensate for zero-stuffing energy loss
+                buf[i * 2 + 1] = 0.0;
+            }
+            // Apply half-band lowpass to remove imaging
+            for i in 0..new_len {
+                // Shift delay line
+                let dl = &mut self.up_buf[stage];
+                for j in (1..OS_KERNEL_LEN).rev() {
+                    dl[j] = dl[j - 1];
+                }
+                dl[0] = buf[i];
+                // Convolve
+                let mut sum = 0.0f32;
+                for j in 0..OS_KERNEL_LEN {
+                    sum += dl[j] * OS_HALF_BAND_KERNEL[j];
+                }
+                buf[i] = sum;
+            }
+            stage_len = new_len;
+        }
+
+        buf
+    }
+
+    /// Accumulate a downsampled result. Call once per oversampled sample.
+    /// Returns the final decimated output on the last call (os_idx == factor - 1).
+    fn downsample_accumulate(&mut self, sample: f32, os_idx: usize) -> f32 {
+        self.scratch[os_idx] = sample;
+
+        if os_idx < self.factor - 1 {
+            return 0.0;
+        }
+
+        // Decimate through each 2x stage in reverse
+        let mut stage_len = self.factor;
+        let mut buf = self.scratch;
+
+        for stage in (0..self.num_stages).rev() {
+            // Apply half-band lowpass before decimating
+            for i in 0..stage_len {
+                let dl = &mut self.down_buf[stage];
+                for j in (1..OS_KERNEL_LEN).rev() {
+                    dl[j] = dl[j - 1];
+                }
+                dl[0] = buf[i];
+                let mut sum = 0.0f32;
+                for j in 0..OS_KERNEL_LEN {
+                    sum += dl[j] * OS_HALF_BAND_KERNEL[j];
+                }
+                buf[i] = sum;
+            }
+            // Decimate: keep every other sample
+            let new_len = stage_len / 2;
+            for i in 0..new_len {
+                buf[i] = buf[i * 2];
+            }
+            stage_len = new_len;
+        }
+
+        buf[0]
+    }
 }
 "#
     .to_string()
