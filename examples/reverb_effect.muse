@@ -1,0 +1,59 @@
+plugin "Reverb" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.reverb"
+    description "An algorithmic reverb effect"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseReverb0001"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param size: float = 0.5 in 0.0..1.0 {
+    smoothing linear 50ms
+    display "percentage"
+  }
+
+  param decay: float = 2.0 in 0.1..10.0 {
+    smoothing logarithmic 50ms
+    unit "s"
+  }
+
+  param damping: float = 0.5 in 0.0..1.0 {
+    smoothing linear 20ms
+    display "percentage"
+  }
+
+  param mix_amt: float = 0.3 in 0.0..1.0 {
+    smoothing linear 20ms
+    display "percentage"
+  }
+
+  process {
+    input -> reverb(param.size, param.decay, param.damping, param.mix_amt) -> output
+  }
+
+  test "reverb produces output" {
+    set param.size = 0.7
+    set param.decay = 2.0
+    set param.mix_amt = 1.0
+    input impulse 8192 samples
+    assert output.rms > -60dB
+    assert no_nan
+    assert no_denormal
+  }
+
+  test "silence in silence out" {
+    input silence 4096 samples
+    assert output.rms < -80dB
+    assert no_nan
+  }
+}

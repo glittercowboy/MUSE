@@ -80,6 +80,7 @@ pub fn generate_dsp_helpers(used_primitives: &HashSet<DspPrimitive>) -> String {
         (DspPrimitive::DcBlock,                 generate_dc_block_state,     generate_process_dc_block),
         (DspPrimitive::SampleAndHold,           generate_sample_hold_state,  generate_process_sample_hold),
         (DspPrimitive::WavetableOsc,            generate_wt_osc_state,       generate_process_wavetable_osc),
+        (DspPrimitive::Reverb,                  generate_reverb_state,       generate_process_reverb),
     ];
     for (prim, state_fn, process_fn) in stateful {
         if used_primitives.contains(prim) {
@@ -574,6 +575,160 @@ fn process_compressor(state: &mut CompressorState, input: f32, threshold: f32, r
     } else {
         input
     }
+}
+"#
+    .to_string()
+}
+
+// ══════════════════════════════════════════════════════════════
+// Reverb helper
+// ══════════════════════════════════════════════════════════════
+
+/// Generate the ReverbState struct.
+fn generate_reverb_state() -> String {
+    r#"/// Maximum buffer size for reverb delay lines (~186ms at 192kHz).
+const REVERB_MAX_BUF: usize = 8192;
+
+/// Per-call-site Freeverb-style reverb state.
+/// 8 parallel comb filters + 4 series allpass diffusers, all with fixed-size buffers.
+#[derive(Clone, Copy)]
+struct ReverbComb {
+    buffer: [f32; REVERB_MAX_BUF],
+    write_pos: usize,
+    delay_len: usize,
+    filter_state: f32,
+}
+
+impl Default for ReverbComb {
+    fn default() -> Self {
+        Self {
+            buffer: [0.0; REVERB_MAX_BUF],
+            write_pos: 0,
+            delay_len: 1116,
+            filter_state: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReverbAllpass {
+    buffer: [f32; REVERB_MAX_BUF],
+    write_pos: usize,
+    delay_len: usize,
+}
+
+impl Default for ReverbAllpass {
+    fn default() -> Self {
+        Self {
+            buffer: [0.0; REVERB_MAX_BUF],
+            write_pos: 0,
+            delay_len: 556,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ReverbState {
+    combs: [ReverbComb; 8],
+    allpasses: [ReverbAllpass; 4],
+}
+
+impl Default for ReverbState {
+    fn default() -> Self {
+        Self {
+            combs: [ReverbComb::default(); 8],
+            allpasses: [ReverbAllpass::default(); 4],
+        }
+    }
+}
+
+/// Initialize reverb delay lengths scaled to the current sample rate.
+fn init_reverb_state(state: &mut ReverbState, sample_rate: f32) {
+    // Standard Freeverb tunings at 44100 Hz
+    let comb_tunings: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
+    let allpass_tunings: [usize; 4] = [556, 441, 341, 225];
+    let scale = sample_rate / 44100.0;
+
+    for (i, &tuning) in comb_tunings.iter().enumerate() {
+        let len = ((tuning as f32) * scale) as usize;
+        state.combs[i].delay_len = len.min(REVERB_MAX_BUF).max(1);
+        state.combs[i].write_pos = 0;
+        state.combs[i].filter_state = 0.0;
+        state.combs[i].buffer = [0.0; REVERB_MAX_BUF];
+    }
+    for (i, &tuning) in allpass_tunings.iter().enumerate() {
+        let len = ((tuning as f32) * scale) as usize;
+        state.allpasses[i].delay_len = len.min(REVERB_MAX_BUF).max(1);
+        state.allpasses[i].write_pos = 0;
+        state.allpasses[i].buffer = [0.0; REVERB_MAX_BUF];
+    }
+}
+"#
+    .to_string()
+}
+
+/// Generate the process_reverb function.
+fn generate_process_reverb() -> String {
+    r#"/// Process one sample through a Freeverb-style reverb.
+///
+/// `room_size` scales delay line lengths (0.0..1.0), `decay` is feedback amount (seconds mapped to 0..1),
+/// `damping` applies per-comb lowpass (0.0..1.0), `mix` is dry/wet balance (0.0..1.0).
+fn process_reverb(state: &mut ReverbState, input: f32, room_size: f32, decay: f32, damping: f32, mix: f32) -> f32 {
+    let room_size = room_size.clamp(0.0, 1.0);
+    let feedback = decay.clamp(0.0, 1.0) * 0.98 + 0.01; // map to safe feedback range
+    let damping = damping.clamp(0.0, 1.0);
+    let mix = mix.clamp(0.0, 1.0);
+
+    // Scale effective delay lengths by room_size (0.5..1.0 range for stability)
+    let size_scale = 0.5 + room_size * 0.5;
+
+    // Sum output of 8 parallel comb filters
+    let mut comb_out = 0.0_f32;
+    for comb in state.combs.iter_mut() {
+        let eff_len = ((comb.delay_len as f32) * size_scale) as usize;
+        let eff_len = eff_len.min(REVERB_MAX_BUF).max(1);
+
+        // Read from delay line
+        let read_pos = if comb.write_pos >= eff_len {
+            comb.write_pos - eff_len
+        } else {
+            REVERB_MAX_BUF + comb.write_pos - eff_len
+        };
+        let delayed = comb.buffer[read_pos % REVERB_MAX_BUF];
+
+        // Apply damping (one-pole lowpass on feedback path)
+        comb.filter_state = delayed * (1.0 - damping) + comb.filter_state * damping;
+
+        // Write input + filtered feedback to delay line
+        comb.buffer[comb.write_pos] = input + comb.filter_state * feedback;
+        comb.write_pos = (comb.write_pos + 1) % REVERB_MAX_BUF;
+
+        comb_out += delayed;
+    }
+
+    // Pass through 4 series allpass filters for diffusion
+    let mut allpass_out = comb_out;
+    let allpass_feedback = 0.5_f32;
+    for ap in state.allpasses.iter_mut() {
+        let eff_len = ((ap.delay_len as f32) * size_scale) as usize;
+        let eff_len = eff_len.min(REVERB_MAX_BUF).max(1);
+
+        let read_pos = if ap.write_pos >= eff_len {
+            ap.write_pos - eff_len
+        } else {
+            REVERB_MAX_BUF + ap.write_pos - eff_len
+        };
+        let delayed = ap.buffer[read_pos % REVERB_MAX_BUF];
+
+        let ap_input = allpass_out + delayed * allpass_feedback;
+        ap.buffer[ap.write_pos] = ap_input;
+        ap.write_pos = (ap.write_pos + 1) % REVERB_MAX_BUF;
+
+        allpass_out = delayed - allpass_out * allpass_feedback;
+    }
+
+    // Dry/wet mix
+    input * (1.0 - mix) + allpass_out * mix * 0.125 // 1/8 to normalize 8 comb outputs
 }
 "#
     .to_string()

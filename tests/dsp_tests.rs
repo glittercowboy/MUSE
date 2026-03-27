@@ -7,7 +7,7 @@ use muse_lang::types::{type_from_unit_suffix, DspType};
 // ── Registry completeness ────────────────────────────────────
 
 #[test]
-fn registry_contains_all_37_functions() {
+fn registry_contains_all_38_functions() {
     let reg = builtin_registry();
     let expected = [
         "sine", "saw", "square", "triangle", "noise", "lowpass", "highpass", "bandpass", "notch",
@@ -17,6 +17,7 @@ fn registry_contains_all_37_functions() {
         "peak_eq", "low_shelf", "high_shelf",
         "rms", "peak_follow", "gate",
         "soft_clip", "dc_block", "crossfade", "sample_and_hold",
+        "reverb",
     ];
     assert_eq!(reg.functions.len(), expected.len(), "registry size mismatch");
     for name in &expected {
@@ -30,7 +31,7 @@ fn registry_contains_all_37_functions() {
 #[test]
 fn unknown_function_returns_none() {
     let reg = builtin_registry();
-    assert!(reg.lookup("reverb").is_none());
+    assert!(reg.lookup("nonexistent").is_none());
     assert!(reg.lookup("").is_none());
 }
 
@@ -398,6 +399,20 @@ fn dsp_registry_sample_and_hold() {
     assert_param(&f.params[0], "trigger", DspType::Number, false);
     assert_eq!(f.return_type, DspType::Processor);
     assert_eq!(f.primitive, DspPrimitive::SampleAndHold);
+}
+
+// ── Reverb ───────────────────────────────────────────────────
+
+#[test]
+fn reverb_signature() {
+    let f = lookup("reverb");
+    assert_eq!(f.params.len(), 4);
+    assert_param(&f.params[0], "size", DspType::Number, false);
+    assert_param(&f.params[1], "decay", DspType::Time, false);
+    assert_param(&f.params[2], "damping", DspType::Number, true);
+    assert_param(&f.params[3], "mix", DspType::Number, true);
+    assert_eq!(f.return_type, DspType::Processor);
+    assert_eq!(f.primitive, DspPrimitive::Reverb);
 }
 
 // ── Type compatibility ───────────────────────────────────────
