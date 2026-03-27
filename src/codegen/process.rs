@@ -42,6 +42,7 @@ pub struct ProcessInfo {
     pub play_call_count: usize,
     pub wt_osc_call_count: usize,
     pub loop_call_count: usize,
+    pub needs_transport: bool,
 }
 
 /// A (field_prefix, rust_type, count) descriptor for generating DSP state fields.
@@ -79,6 +80,7 @@ impl ProcessInfo {
             || self.chorus_count > 0 || self.compressor_count > 0 || self.delay_count > 0
             || self.eq_biquad_count > 0 || self.rms_count > 0 || self.peak_follow_count > 0
             || self.gate_count > 0 || self.wt_osc_call_count > 0 || self.reverb_count > 0
+            || self.needs_transport
     }
 }
 
@@ -154,6 +156,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     play_call_count: 0,
                     wt_osc_call_count: 0,
                     loop_call_count: 0,
+                    needs_transport: false,
                 },
             )
         }
@@ -209,13 +212,21 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let dc_block_count = ctx.dc_block_counter;
     let sample_hold_count = ctx.sample_hold_counter;
 
-    let process_body = if ctx.is_polyphonic {
+    let mut process_body = String::new();
+
+    // Inject transport bindings when beat/tempo features are used
+    if ctx.needs_transport {
+        process_body.push_str("        let transport = context.transport();\n");
+        process_body.push_str("        let tempo = transport.tempo.unwrap_or(120.0) as f32;\n");
+    }
+
+    process_body.push_str(&if ctx.is_polyphonic {
         generate_polyphonic_process(&ctx.smoothed_params, &stmt_lines, unison_config)
     } else if is_instrument {
         generate_monophonic_instrument_process(&ctx.smoothed_params, &stmt_lines, ctx.play_counter, ctx.wt_osc_counter, ctx.loop_counter)
     } else {
         generate_effect_process(&ctx, &stmt_lines)
-    };
+    });
 
     let needs_channel_idx = if ctx.is_polyphonic {
         false
@@ -247,6 +258,7 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         play_call_count: ctx.play_counter,
         wt_osc_call_count: ctx.wt_osc_counter,
         loop_call_count: ctx.loop_counter,
+        needs_transport: ctx.needs_transport,
     };
 
     (process_body, info)
@@ -460,6 +472,7 @@ struct ProcessContext<'a> {
     is_polyphonic: bool,
     aux_input_map: HashMap<String, usize>,
     aux_output_map: HashMap<String, usize>,
+    needs_transport: bool,
 }
 
 impl<'a> ProcessContext<'a> {
@@ -493,6 +506,7 @@ impl<'a> ProcessContext<'a> {
             is_polyphonic: false,
             aux_input_map: HashMap::new(),
             aux_output_map: HashMap::new(),
+            needs_transport: false,
         }
     }
 
@@ -803,6 +817,11 @@ fn generate_branch_chain(expr: &Expr, branch_var: &str, ctx: &mut ProcessContext
 
 fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
     match expr {
+        Expr::Number(n, Some(crate::ast::UnitSuffix::Beat)) => {
+            ctx.needs_transport = true;
+            // Convert beats to samples: beats * 60.0 / tempo * sample_rate
+            format!("({:.1}_f32 * 60.0 / tempo * self.sample_rate)", n)
+        }
         Expr::Number(n, _) => format!("{:.1}_f32", n),
         Expr::Bool(b) => format!("{}", b),
         Expr::StringLit(s) => format!("\"{}\"", s),
@@ -813,6 +832,14 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                 } else {
                     "*sample".to_string()
                 }
+            }
+            "tempo" => {
+                ctx.needs_transport = true;
+                "tempo".to_string()
+            }
+            "beat_position" => {
+                ctx.needs_transport = true;
+                "(transport.pos_beats().unwrap_or(0.0)) as f32".to_string()
             }
             _ => {
                 if ctx.aux_input_map.contains_key(name) {

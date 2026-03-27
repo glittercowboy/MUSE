@@ -1958,3 +1958,76 @@ plugin "Test" {
     let resolved = resolve_expect_ok(source);
     assert!(!resolved.type_map.is_empty());
 }
+
+// ── Tempo sync tests ─────────────────────────────────────────
+
+#[test]
+fn tempo_resolves_as_number_in_process_block() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output mono
+  process {
+    let t = tempo
+    input -> gain(t) -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn beat_position_resolves_as_number_in_process_block() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output mono
+  process {
+    let pos = beat_position
+    input -> gain(pos) -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn beat_suffix_parses_and_resolves() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output mono
+  process {
+    let delay_time = 0.5beats
+    input -> delay(delay_time) -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn beat_singular_suffix_parses_and_resolves() {
+    let source = r#"
+plugin "Test" {
+  input mono
+  output mono
+  process {
+    let delay_time = 1beat
+    input -> delay(delay_time) -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty());
+}
+
+#[test]
+fn tempo_delay_example_resolves() {
+    let source = include_str!("../examples/tempo_delay.muse");
+    let resolved = resolve_expect_ok(source);
+    assert!(!resolved.type_map.is_empty(), "Type map should not be empty");
+}

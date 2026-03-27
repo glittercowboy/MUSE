@@ -319,6 +319,7 @@ pub enum UnitSuffix {
     DB,
     St,
     Percent,
+    Beat,
 }
 
 // ── Test blocks ──────────────────────────────────────────────

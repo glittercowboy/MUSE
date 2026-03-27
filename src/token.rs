@@ -148,6 +148,10 @@ pub enum Token {
     UnitDB,
     #[token("st")]
     UnitSt,
+    #[token("beats")]
+    UnitBeats,
+    #[token("beat")]
+    UnitBeat,
     // Note: "%" is already the modulo operator. The parser
     // disambiguates based on context (after a number literal = unit).
 
@@ -297,6 +301,8 @@ impl fmt::Display for Token {
             Token::UnitS => write!(f, "s"),
             Token::UnitDB => write!(f, "dB"),
             Token::UnitSt => write!(f, "st"),
+            Token::UnitBeat => write!(f, "beat"),
+            Token::UnitBeats => write!(f, "beats"),
             Token::Arrow => write!(f, "->"),
             Token::EqEq => write!(f, "=="),
             Token::BangEq => write!(f, "!="),
