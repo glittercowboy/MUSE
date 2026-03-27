@@ -69,7 +69,7 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
     let _has_dc_block = process_info.dc_block_count > 0;
     let _has_sample_hold = process_info.sample_hold_count > 0;
     let has_wt_osc = process_info.wt_osc_call_count > 0;
-    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate || has_wt_osc;
+    let needs_sample_rate = needs_any_biquad || is_instrument || has_oscillators || has_chorus || has_compressor || has_delay || has_eq_biquad || has_rms || has_peak_follow || has_gate || has_wt_osc || process_info.uses_sample_rate_directly;
     let num_channels = info.output_channels.max(info.input_channels) as usize;
     let has_gui = crate::codegen::gui::find_gui_block(plugin).is_some();
 
@@ -122,6 +122,15 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         }
         for i in 0..process_info.sample_hold_count {
             out.push_str(&format!("    sample_hold_state_{}: SampleAndHoldState,\n", i));
+        }
+        // User-declared state variable fields (non-polyphonic: on plugin struct)
+        for (name, state_type, _) in &process_info.state_decls {
+            let rust_type = match state_type {
+                crate::ast::StateType::Float => "f32",
+                crate::ast::StateType::Int => "i32",
+                crate::ast::StateType::Bool => "bool",
+            };
+            out.push_str(&format!("    state_{}: {},\n", name, rust_type));
         }
     }
 
@@ -225,6 +234,10 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         }
         for i in 0..process_info.sample_hold_count {
             out.push_str(&format!("            sample_hold_state_{}: SampleAndHoldState::default(),\n", i));
+        }
+        // User-declared state variable defaults (non-polyphonic)
+        for (name, _state_type, default_code) in &process_info.state_decls {
+            out.push_str(&format!("            state_{}: {},\n", name, default_code));
         }
     }
 
@@ -369,6 +382,15 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.wt_osc_call_count {
         out.push_str(&format!("    wt_osc_state_{}: WtOscState,\n", i));
     }
+    // Per-voice user-declared state variables
+    for (name, state_type, _) in &process_info.state_decls {
+        let rust_type = match state_type {
+            crate::ast::StateType::Float => "f32",
+            crate::ast::StateType::Int => "i32",
+            crate::ast::StateType::Bool => "bool",
+        };
+        out.push_str(&format!("    state_{}: {},\n", name, rust_type));
+    }
     out.push_str("}\n");
     out
 }
@@ -419,6 +441,10 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     }
     for i in 0..process_info.wt_osc_call_count {
         fields.push(format!("wt_osc_state_{}: WtOscState::default()", i));
+    }
+    // User-declared state variable defaults
+    for (name, _state_type, default_code) in &process_info.state_decls {
+        fields.push(format!("state_{}: {}", name, default_code));
     }
     if fields.is_empty() {
         String::new()

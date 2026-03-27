@@ -52,6 +52,8 @@ pub enum Token {
     Else,
     #[token("let")]
     Let,
+    #[token("state")]
+    State,
     #[token("return")]
     Return,
     #[token("true")]
@@ -256,6 +258,7 @@ impl fmt::Display for Token {
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
             Token::Let => write!(f, "let"),
+            Token::State => write!(f, "state"),
             Token::Return => write!(f, "return"),
             Token::True => write!(f, "true"),
             Token::False => write!(f, "false"),

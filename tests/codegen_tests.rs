@@ -325,6 +325,24 @@ fn poly_synth_example_cargo_check() {
 }
 
 #[test]
+fn phase_osc_state_vars_cargo_check() {
+    let source = include_str!("../examples/phase_osc.muse");
+    let tmp = std::env::temp_dir().join("muse-codegen-test-phase-osc-state");
+    if tmp.exists() {
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    let crate_dir = generate_from_source(source, &tmp);
+    let lib_rs = std::fs::read_to_string(crate_dir.join("src/lib.rs")).unwrap();
+
+    // Verify state variable codegen: field on plugin struct, used in process loop
+    assert!(lib_rs.contains("state_phase: f32"), "Plugin struct should have state_phase field");
+    assert!(lib_rs.contains("self.state_phase"), "Process loop should reference self.state_phase");
+
+    assert_cargo_check(&crate_dir);
+}
+
+#[test]
 fn poly_codegen_contains_voice_struct() {
     let source = include_str!("../tests/fixtures/poly_synth_voice_decl.muse");
     let (_, lib_rs) = generate_code_strings(source);

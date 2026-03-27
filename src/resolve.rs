@@ -102,6 +102,8 @@ struct Resolver<'a> {
     bus_names: HashMap<String, IoDirection>,
     /// Duplicate bus name detection scoped by direction: (direction, effective_name)
     seen_bus_names: HashSet<(IoDirection, String)>,
+    /// State variable declarations: name → DspType (for validating assignments)
+    state_vars: HashMap<String, DspType>,
 }
 
 impl<'a> Resolver<'a> {
@@ -124,6 +126,7 @@ impl<'a> Resolver<'a> {
             seen_wavetables: HashSet::new(),
             bus_names: HashMap::new(),
             seen_bus_names: HashSet::new(),
+            state_vars: HashMap::new(),
         }
     }
 
@@ -632,9 +635,40 @@ impl<'a> Resolver<'a> {
                 }
                 self.split_depth = saved_depth;
             }
-            Statement::Assign { value, .. } => {
+            Statement::StateDecl { name, state_type, default } => {
                 let saved_depth = self.split_depth;
                 self.split_depth = 0;
+                // Resolve the default value expression
+                self.resolve_expr(default);
+                // Map StateType to DspType and register in both scope and state_vars
+                let dsp_type = match state_type {
+                    crate::ast::StateType::Float => DspType::Number,
+                    crate::ast::StateType::Int => DspType::Number,
+                    crate::ast::StateType::Bool => DspType::Bool,
+                };
+                self.scope.insert(name.clone(), dsp_type);
+                self.state_vars.insert(name.clone(), dsp_type);
+                self.split_depth = saved_depth;
+            }
+            Statement::Assign { target, value, .. } => {
+                let saved_depth = self.split_depth;
+                self.split_depth = 0;
+                // Validate that target is a declared state variable
+                if !self.state_vars.contains_key(target) {
+                    self.diagnostics.push(
+                        Diagnostic::error(
+                            "E017",
+                            value.1,
+                            format!(
+                                "assignment to undeclared state variable '{}' — declare it first with `state {}: float = 0.0`",
+                                target, target
+                            ),
+                        )
+                        .with_suggestion(
+                            "Only state variables can be assigned to. Use `state` to declare one.",
+                        ),
+                    );
+                }
                 self.resolve_expr(value);
                 if self.split_depth > 0 {
                     self.diagnostics.push(
@@ -788,6 +822,9 @@ impl<'a> Resolver<'a> {
             Statement::Let { value, .. } => {
                 self.type_map.get(&(value.1.start, value.1.end)).copied()
             }
+            Statement::StateDecl { default, .. } => {
+                self.type_map.get(&(default.1.start, default.1.end)).copied()
+            }
             Statement::Return(expr) => {
                 self.type_map.get(&(expr.1.start, expr.1.end)).copied()
             }
@@ -821,6 +858,7 @@ impl<'a> Resolver<'a> {
         match name {
             "input" => Some(DspType::Signal),
             "output" => Some(DspType::Signal),
+            "sample_rate" => Some(DspType::Number),
             _ => {
                 // Check named bus declarations (e.g. `sidechain` from `input sidechain stereo`)
                 if self.bus_names.contains_key(name) {
