@@ -34,6 +34,7 @@ pub enum PluginItem {
     GuiDecl(GuiBlock),
     SampleDecl(SampleDecl),
     WavetableDecl(WavetableDecl),
+    FnDef(FnDef),
 }
 
 // ── Metadata ─────────────────────────────────────────────────
@@ -202,6 +203,32 @@ pub enum SmoothingKind {
 pub struct ProcessBlock {
     pub body: Vec<Spanned<Statement>>,
     pub span: Span,
+}
+
+// ── User-defined functions ───────────────────────────────────
+
+/// A user-defined function declaration: `fn name(params) -> hint { body }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnDef {
+    pub name: String,
+    pub params: Vec<FnParam>,
+    pub return_hint: Option<FnReturnHint>,
+    pub body: Vec<Spanned<Statement>>,
+    pub span: Span,
+}
+
+/// A parameter in a user-defined function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnParam {
+    pub name: String,
+    pub span: Span,
+}
+
+/// Return type hint for user-defined functions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FnReturnHint {
+    Processor,
+    Signal,
 }
 
 // ── Statements ───────────────────────────────────────────────

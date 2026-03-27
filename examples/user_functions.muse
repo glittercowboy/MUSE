@@ -1,0 +1,63 @@
+plugin "Channel Strip" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.channel-strip"
+    description "A channel strip with reusable processing blocks"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseChanStrip1"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param drive: float = 1.0 in 0.0..10.0 {
+    smoothing linear 20ms
+  }
+
+  param tone: float = 2000.0 in 200.0..8000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  param volume: float = 0.0 in -30.0..6.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  fn saturate(amount, cutoff) -> processor {
+    gain(amount) -> tanh() -> lowpass(cutoff)
+  }
+
+  fn output_stage(vol) -> processor {
+    gain(vol) -> dc_block()
+  }
+
+  process {
+    input -> saturate(param.drive, param.tone) -> output_stage(param.volume) -> output
+  }
+
+  test "clean pass through" {
+    set param.drive = 1.0
+    set param.tone = 8000.0
+    set param.volume = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+
+  test "saturation adds harmonics" {
+    set param.drive = 5.0
+    set param.tone = 8000.0
+    set param.volume = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+}

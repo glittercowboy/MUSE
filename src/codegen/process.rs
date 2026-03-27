@@ -10,8 +10,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BinOp, ElseBody, Expr, IoDirection, PluginDef, PluginItem, ProcessBlock, Spanned, Statement,
-    UnaryOp,
+    BinOp, ElseBody, Expr, FnDef, IoDirection, PluginDef, PluginItem, ProcessBlock, Spanned,
+    Statement, UnaryOp,
 };
 use crate::codegen::SampleInfo;
 use crate::codegen::WavetableInfo;
@@ -165,6 +165,13 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
     let mut ctx = ProcessContext::new(sample_infos, wavetable_infos);
     ctx.is_instrument = is_instrument;
     ctx.is_polyphonic = is_instrument && voice_count.is_some();
+
+    // Collect user-defined function declarations
+    for (item, _) in &plugin.items {
+        if let PluginItem::FnDef(fn_def) = item {
+            ctx.fn_defs.insert(fn_def.name.clone(), fn_def.clone());
+        }
+    }
 
     // Build aux input/output maps from IoDecl items (same 3-way classification as extract_plugin_info)
     {
@@ -473,6 +480,8 @@ struct ProcessContext<'a> {
     aux_input_map: HashMap<String, usize>,
     aux_output_map: HashMap<String, usize>,
     needs_transport: bool,
+    /// User-defined function declarations for inlining at call sites.
+    fn_defs: HashMap<String, FnDef>,
 }
 
 impl<'a> ProcessContext<'a> {
@@ -507,6 +516,7 @@ impl<'a> ProcessContext<'a> {
             aux_input_map: HashMap::new(),
             aux_output_map: HashMap::new(),
             needs_transport: false,
+            fn_defs: HashMap::new(),
         }
     }
 
@@ -624,6 +634,10 @@ fn generate_chain_value(expr: &Expr, ctx: &mut ProcessContext) -> String {
 fn generate_dsp_call_with_input(expr: &Expr, input_code: &str, ctx: &mut ProcessContext) -> String {
     if let Expr::FnCall { callee, args } = expr {
         if let Expr::Ident(fn_name) = &callee.0 {
+            // Check user-defined functions first — inline the body
+            if let Some(fn_def) = ctx.fn_defs.get(fn_name).cloned() {
+                return generate_user_fn_inline(input_code, &fn_def, args, ctx);
+            }
             return match fn_name.as_str() {
                 "gain" => {
                     ctx.used_primitives.insert(DspPrimitive::Gain);
@@ -794,6 +808,87 @@ fn generate_split_branches(
         .last()
         .cloned()
         .unwrap_or_else(|| "0.0_f32".to_string())
+}
+
+/// Generate inlined code for a user-defined function call in chain context.
+///
+/// For `fn saturate(amount, cutoff) -> processor { gain(amount) -> tanh() -> lowpass(cutoff) }`
+/// called as `input -> saturate(param.drive, 2000Hz)`, generates the body chain
+/// with arguments bound to local variables and input_code piped through.
+fn generate_user_fn_inline(
+    input_code: &str,
+    fn_def: &FnDef,
+    args: &[Spanned<Expr>],
+    ctx: &mut ProcessContext,
+) -> String {
+    // Generate argument expressions and bind them to fn param names via pending lines
+    let mut param_bindings: Vec<(String, String)> = Vec::new();
+    for (i, param) in fn_def.params.iter().enumerate() {
+        let arg_code = if i < args.len() {
+            generate_expr_as_param(&args[i].0, ctx)
+        } else {
+            "0.0_f32".to_string()
+        };
+        param_bindings.push((param.name.clone(), arg_code));
+    }
+
+    // Emit param bindings as pending lines
+    for (name, code) in &param_bindings {
+        ctx.pending_lines.push(format!("let {} = {};", name, code));
+    }
+
+    // Generate the body. The body is a list of statements; the last one is the result.
+    // For single-expression bodies (the common case), we pipe input_code through the chain.
+    if fn_def.body.len() == 1 {
+        if let Statement::Expr(ref body_expr) = fn_def.body[0].0 {
+            return generate_fn_body_chain(&body_expr.0, input_code, ctx);
+        }
+    }
+
+    // Multi-statement body: emit intermediate statements as pending lines,
+    // and use the last expression as the result.
+    let last_idx = fn_def.body.len().saturating_sub(1);
+    for (i, (stmt, _)) in fn_def.body.iter().enumerate() {
+        if i < last_idx {
+            let lines = generate_statement(stmt, false, ctx);
+            ctx.pending_lines.extend(lines);
+        }
+    }
+
+    // Last statement — generate as chain from input
+    if let Some((last_stmt, _)) = fn_def.body.last() {
+        match last_stmt {
+            Statement::Expr(ref body_expr) => {
+                return generate_fn_body_chain(&body_expr.0, input_code, ctx);
+            }
+            Statement::Return(ref body_expr) => {
+                return generate_fn_body_chain(&body_expr.0, input_code, ctx);
+            }
+            _ => {}
+        }
+    }
+
+    // Fallback: just return the input unchanged
+    input_code.to_string()
+}
+
+/// Generate a chain expression from a user fn body, routing input_code as the starting signal.
+///
+/// Similar to `generate_branch_chain` but for user fn bodies.
+fn generate_fn_body_chain(expr: &Expr, input_code: &str, ctx: &mut ProcessContext) -> String {
+    match expr {
+        Expr::Binary {
+            left,
+            op: BinOp::Chain,
+            right,
+        } => {
+            let input = generate_fn_body_chain(&left.0, input_code, ctx);
+            generate_dsp_call_with_input(&right.0, &input, ctx)
+        }
+        Expr::FnCall { .. } => generate_dsp_call_with_input(expr, input_code, ctx),
+        Expr::Ident(name) if name == "input" => input_code.to_string(),
+        _ => generate_expr(expr, ctx),
+    }
 }
 
 fn generate_branch_chain(expr: &Expr, branch_var: &str, ctx: &mut ProcessContext) -> String {

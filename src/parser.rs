@@ -1711,6 +1711,74 @@ where
         })
 }
 
+// ── User-defined function parser ─────────────────────────────
+
+fn fn_def_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let expr = expr_parser();
+    let stmt = {
+        let let_stmt = just(Token::Let)
+            .ignore_then(ident_name())
+            .then_ignore(just(Token::Eq))
+            .then(expr.clone())
+            .map_with(|(name, value), e| (Statement::Let { name, value }, e.span()));
+
+        let return_stmt = just(Token::Return)
+            .ignore_then(expr.clone())
+            .map_with(|value, e| (Statement::Return(value), e.span()));
+
+        let expr_stmt = expr
+            .map_with(|e, extra| (Statement::Expr(e), extra.span()));
+
+        let_stmt.or(return_stmt).or(expr_stmt)
+    };
+
+    // Parse return hint: -> processor | -> signal
+    let return_hint = just(Token::Arrow)
+        .ignore_then(select! { Token::Ident(s) => s })
+        .map(|s| match s.as_str() {
+            "processor" => FnReturnHint::Processor,
+            "signal" => FnReturnHint::Signal,
+            _ => FnReturnHint::Processor, // default
+        });
+
+    // Parse parameter list: (name1, name2, ...)
+    let fn_params = ident_name()
+        .map_with(|name, e| FnParam {
+            name,
+            span: e.span(),
+        })
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+
+    just(Token::Fn)
+        .ignore_then(ident_name())
+        .then(fn_params)
+        .then(return_hint.or_not())
+        .then(
+            stmt.repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(((name, params), return_hint), body), e| {
+            (
+                PluginItem::FnDef(FnDef {
+                    name,
+                    params,
+                    return_hint,
+                    body,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1730,6 +1798,7 @@ where
         gui_block_parser(),
         sample_decl_parser(),
         wavetable_decl_parser(),
+        fn_def_parser(),
         process_block_parser(),
         test_block_parser(),
     ))
