@@ -105,6 +105,14 @@ pub enum Token {
     #[token("amount")]
     Amount,
 
+    // ── Import keywords ───────────────────────────────────────
+    #[token("use")]
+    Use,
+    #[token("expose")]
+    Expose,
+    #[token("as")]
+    As,
+
     // ── Reserved keywords ────────────────────────────────────
     #[token("voices")]
     Voice,
@@ -300,6 +308,9 @@ impl fmt::Display for Token {
             Token::ModKw => write!(f, "mod"),
             Token::Route => write!(f, "route"),
             Token::Amount => write!(f, "amount"),
+            Token::Use => write!(f, "use"),
+            Token::Expose => write!(f, "expose"),
+            Token::As => write!(f, "as"),
             Token::Voice => write!(f, "voices"),
             Token::Poly => write!(f, "poly"),
             Token::Unison => write!(f, "unison"),

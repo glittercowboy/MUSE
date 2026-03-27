@@ -289,6 +289,9 @@ where
         Token::Float => "float".to_string(),
         Token::Bool => "bool".to_string(),
         Token::Int => "int".to_string(),
+        Token::Expose => "expose".to_string(),
+        Token::As => "as".to_string(),
+        Token::Fn => "fn".to_string(),
     }
 }
 
@@ -1813,7 +1816,46 @@ where
         })
 }
 
+// ── Use declaration parser ───────────────────────────────────
+
+/// Parse: `use "path/to/file.muse" expose name1, name2`
+/// Or:    `use "path/to/file.muse" as namespace`
+fn use_decl_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let expose_list = just(Token::Expose)
+        .ignore_then(
+            ident_name()
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map(|names| (names, None));
+
+    let as_alias = just(Token::As)
+        .ignore_then(ident_name())
+        .map(|alias| (vec![], Some(alias)));
+
+    just(Token::Use)
+        .ignore_then(select! { Token::StringLiteral(s) => s })
+        .then(expose_list.or(as_alias))
+        .map_with(|(path, (expose, alias)), e| {
+            (
+                PluginItem::UseDecl(UseDecl {
+                    path,
+                    expose,
+                    alias,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── User-defined function parser ─────────────────────────────
+
 
 fn fn_def_parser<'src, I>(
 ) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
@@ -1960,6 +2002,7 @@ where
         gui_block_parser(),
         sample_decl_parser(),
         wavetable_decl_parser(),
+        use_decl_parser(),
         fn_def_parser(),
         mod_decl_parser(),
         route_decl_parser(),

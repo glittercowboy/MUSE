@@ -189,6 +189,16 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 PluginItem::FnDef(fn_def) => {
+                    if self.fn_defs.contains_key(&fn_def.name) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E018",
+                                fn_def.span,
+                                format!("duplicate function definition '{}'", fn_def.name),
+                            )
+                            .with_suggestion("Each function must have a unique name."),
+                        );
+                    }
                     self.fn_defs.insert(fn_def.name.clone(), fn_def.clone());
                 }
                 PluginItem::IoDecl(io_decl) => {

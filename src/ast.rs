@@ -37,6 +37,22 @@ pub enum PluginItem {
     FnDef(FnDef),
     ModDecl(ModDecl),
     RouteDecl(RouteDecl),
+    UseDecl(UseDecl),
+}
+
+// ── Use/import declarations ─────────────────────────────────
+
+/// `use "path/to/module.muse" expose name1, name2`
+/// or `use "path/to/module.muse" as namespace`
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    /// Relative path to the .muse file to import from.
+    pub path: String,
+    /// Names to selectively import (when using `expose`).
+    pub expose: Vec<String>,
+    /// Optional namespace alias (when using `as`).
+    pub alias: Option<String>,
+    pub span: Span,
 }
 
 // ── Modulation ───────────────────────────────────────────────
