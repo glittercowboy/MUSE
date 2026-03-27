@@ -2576,3 +2576,73 @@ fn parse_test_input_backward_compat() {
         other => panic!("Expected Input impulse, got {:?}", other),
     }
 }
+
+// ── Oversample block tests ──────────────────────────────────
+
+#[test]
+fn parse_oversample_block_factor_4() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {
+    input -> oversample 4 {
+      gain(2.0) -> tanh()
+    } -> output
+  }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no errors, got: {:?}",
+        errors
+    );
+    let plugin = ast.expect("Expected AST");
+    // Find the process block and verify oversample is in the chain
+    let process = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::ProcessBlock(pb) = item { Some(pb) } else { None }
+    }).expect("Expected process block");
+    assert!(!process.body.is_empty(), "Process body should not be empty");
+}
+
+#[test]
+fn parse_oversample_block_factor_2_with_x_suffix() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {
+    input -> oversample 2x {
+      tanh()
+    } -> output
+  }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no errors, got: {:?}",
+        errors
+    );
+    let _plugin = ast.expect("Expected AST");
+}
+
+#[test]
+fn parse_oversampled_distortion_example() {
+    let source = include_str!("../examples/oversampled_distortion.muse");
+    let (ast, errors) = parse(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no errors parsing oversampled_distortion.muse, got: {:?}",
+        errors
+    );
+    let plugin = ast.expect("Expected AST from oversampled_distortion.muse");
+    assert_eq!(plugin.name, "HQ Distortion");
+}

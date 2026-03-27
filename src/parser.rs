@@ -436,6 +436,22 @@ where
             )
             .map_with(|body, e| (Expr::Feedback { body }, e.span()));
 
+        // oversample N { body }
+        // N is an integer (2, 4, 8, or 16). Optionally followed by 'x' identifier.
+        let oversample_expr = just(Token::Oversample)
+            .ignore_then(select! { Token::Number(n) => n })
+            .then_ignore(select! { Token::Ident(s) => s }.filter(|s: &String| s == "x").or_not())
+            .then(
+                stmt.clone()
+                    .repeated()
+                    .collect::<Vec<Spanned<Statement>>>()
+                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            )
+            .map_with(|(factor_str, body), e| {
+                let factor = factor_str.parse::<u32>().unwrap_or(0);
+                (Expr::Oversample { factor, body }, e.span())
+            });
+
         // ── Primary expressions (atoms) ──────────────────
         let atom = number_with_unit()
             .or(string_lit())
@@ -443,6 +459,7 @@ where
             .or(merge_expr)
             .or(split_expr)
             .or(feedback_expr)
+            .or(oversample_expr)
             .or(ident_expr())
             .or(if_expr)
             .or(expr

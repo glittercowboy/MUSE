@@ -41,6 +41,9 @@ pub struct ProcessInfo {
     pub play_call_count: usize,
     pub wt_osc_call_count: usize,
     pub loop_call_count: usize,
+    pub oversample_count: usize,
+    /// (index, factor) pairs for each oversample block
+    pub oversample_factors: Vec<(usize, u32)>,
 }
 
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> (String, ProcessInfo) {
@@ -72,6 +75,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     play_call_count: 0,
                     wt_osc_call_count: 0,
                     loop_call_count: 0,
+                    oversample_count: 0,
+                    oversample_factors: Vec::new(),
                 },
             )
         }
@@ -163,6 +168,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         play_call_count: ctx.play_counter,
         wt_osc_call_count: ctx.wt_osc_counter,
         loop_call_count: ctx.loop_counter,
+        oversample_count: ctx.oversample_counter,
+        oversample_factors: ctx.oversample_factors,
     };
 
     (process_body, info)
@@ -369,6 +376,8 @@ struct ProcessContext<'a> {
     play_counter: usize,
     wt_osc_counter: usize,
     loop_counter: usize,
+    oversample_counter: usize,
+    oversample_factors: Vec<(usize, u32)>,
     _sample_infos: &'a [SampleInfo],
     _wavetable_infos: &'a [WavetableInfo],
     is_instrument: bool,
@@ -401,6 +410,8 @@ impl<'a> ProcessContext<'a> {
             play_counter: 0,
             wt_osc_counter: 0,
             loop_counter: 0,
+            oversample_counter: 0,
+            oversample_factors: Vec::new(),
             _sample_infos: sample_infos,
             _wavetable_infos: wavetable_infos,
             is_instrument: false,
@@ -513,6 +524,10 @@ fn generate_chain_value(expr: &Expr, ctx: &mut ProcessContext) -> String {
         if let Expr::Split { branches } = &right.0 {
             let input_code = generate_chain_value(&left.0, ctx);
             return generate_split_branches(&input_code, branches, ctx);
+        }
+        if let Expr::Oversample { factor, body } = &right.0 {
+            let input_code = generate_chain_value(&left.0, ctx);
+            return generate_oversample_block(&input_code, *factor, body, ctx);
         }
         let input_code = generate_chain_value(&left.0, ctx);
         return generate_dsp_call_with_input(&right.0, &input_code, ctx);
@@ -693,6 +708,78 @@ fn generate_split_branches(
         .last()
         .cloned()
         .unwrap_or_else(|| "0.0_f32".to_string())
+}
+
+/// Generate code for an oversample block: upsample, process body N times, downsample.
+fn generate_oversample_block(
+    input_code: &str,
+    factor: u32,
+    body: &[Spanned<Statement>],
+    ctx: &mut ProcessContext,
+) -> String {
+    let os_idx = ctx.oversample_counter;
+    ctx.oversample_counter += 1;
+    ctx.oversample_factors.push((os_idx, factor));
+    ctx.used_primitives.insert(DspPrimitive::Oversample);
+
+    // Generate body chain code using a temporary input variable
+    // The body statements form a chain; the last expression-statement's value is the output
+    let body_input_var = format!("__os_in_{}", os_idx);
+
+    // Generate the body by processing each statement, collecting lines
+    let mut body_lines: Vec<String> = Vec::new();
+    let mut last_expr_code = body_input_var.clone();
+    for (stmt, _) in body {
+        match stmt {
+            Statement::Expr(expr) => {
+                // Generate chain with our oversample input
+                last_expr_code = generate_dsp_call_with_input_or_chain(&expr.0, &last_expr_code, ctx);
+            }
+            Statement::Let { name, value } => {
+                let val_code = generate_expr(&value.0, ctx);
+                body_lines.push(format!("let {} = {};", name, val_code));
+            }
+            _ => {}
+        }
+    }
+
+    // Generate the oversample processing loop
+    let state_name = format!("self.oversample_state_{}", os_idx);
+    format!(
+        "{{ \
+let __os_input = {input}; \
+let __os_up = {state}.upsample(__os_input); \
+let mut __os_result = 0.0_f32; \
+for __os_i in 0..{factor}usize {{ \
+let {body_in} = __os_up[__os_i]; \
+{body_extra}\
+let __os_processed = {body_out}; \
+__os_result = {state}.downsample_accumulate(__os_processed, __os_i); \
+}} \
+__os_result \
+}}",
+        input = input_code,
+        state = state_name,
+        factor = factor,
+        body_in = body_input_var,
+        body_extra = if body_lines.is_empty() {
+            String::new()
+        } else {
+            body_lines.join(" ") + " "
+        },
+        body_out = last_expr_code,
+    )
+}
+
+/// Helper: either generate a chain value or a DSP call with input depending on expression type.
+fn generate_dsp_call_with_input_or_chain(expr: &Expr, input_code: &str, ctx: &mut ProcessContext) -> String {
+    if let Expr::Binary { left, op: BinOp::Chain, right } = expr {
+        // It's a chain — recursively process
+        let left_code = generate_dsp_call_with_input_or_chain(&left.0, input_code, ctx);
+        generate_dsp_call_with_input_or_chain(&right.0, &left_code, ctx)
+    } else {
+        generate_dsp_call_with_input(expr, input_code, ctx)
+    }
 }
 
 fn generate_branch_chain(expr: &Expr, branch_var: &str, ctx: &mut ProcessContext) -> String {
@@ -1029,6 +1116,15 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                 ctx.split_branch_vars.clear();
                 sum
             }
+        }
+        Expr::Oversample { factor, body } => {
+            // Standalone oversample (no input chain) — use *sample as input
+            let input = if ctx.is_polyphonic {
+                "0.0_f32"
+            } else {
+                "*sample"
+            };
+            generate_oversample_block(input, *factor, body, ctx)
         }
         _ => {
             ctx.diagnostics.push(

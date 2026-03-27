@@ -130,6 +130,11 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         out.push_str(&format!("    delay_state_{}: DelayLine,\n", i));
     }
 
+    // Oversample state fields
+    for &(idx, factor) in &process_info.oversample_factors {
+        out.push_str(&format!("    oversample_state_{}: OversampleState, // {}x\n", idx, factor));
+    }
+
     // EQ biquad state fields — per-call-site, per-channel (outside poly/mono guard)
     if !is_polyphonic {
         for i in 0..process_info.eq_biquad_count {
@@ -230,6 +235,10 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
 
     for i in 0..process_info.delay_count {
         out.push_str(&format!("            delay_state_{}: DelayLine::default(),\n", i));
+    }
+
+    for &(idx, factor) in &process_info.oversample_factors {
+        out.push_str(&format!("            oversample_state_{}: OversampleState::new({}),\n", idx, factor));
     }
 
     if !is_polyphonic {

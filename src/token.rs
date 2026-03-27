@@ -122,6 +122,8 @@ pub enum Token {
     Preset,
     #[token("gui")]
     Gui,
+    #[token("oversample")]
+    Oversample,
 
     // ── Type keywords ────────────────────────────────────────
     #[token("float")]
@@ -287,6 +289,7 @@ impl fmt::Display for Token {
             Token::Assert => write!(f, "assert"),
             Token::Preset => write!(f, "preset"),
             Token::Gui => write!(f, "gui"),
+            Token::Oversample => write!(f, "oversample"),
             Token::Float => write!(f, "float"),
             Token::Int => write!(f, "int"),
             Token::Bool => write!(f, "bool"),

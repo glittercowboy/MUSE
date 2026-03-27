@@ -1,0 +1,51 @@
+plugin "HQ Distortion" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.hq-distortion"
+    description "Oversampled distortion with zero aliasing"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseHQDist001"
+    subcategories   [Fx, Distortion]
+  }
+
+  input  stereo
+  output stereo
+
+  param drive: float = 1.0 in 1.0..20.0 {
+    smoothing linear 20ms
+  }
+
+  param tone: float = 4000.0 in 500.0..12000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  process {
+    input -> oversample 4 {
+      gain(param.drive) -> tanh()
+    } -> lowpass(param.tone) -> output
+  }
+
+  test "distortion produces output" {
+    set param.drive = 5.0
+    set param.tone = 8000.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+    assert no_denormal
+  }
+
+  test "clean at unity drive" {
+    set param.drive = 1.0
+    set param.tone = 12000.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+}

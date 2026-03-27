@@ -1816,3 +1816,85 @@ plugin "Test" {
         e016.message
     );
 }
+
+// ── Oversample resolution tests ─────────────────────────────
+
+#[test]
+fn oversample_valid_factors_resolve() {
+    for factor in &[2, 4, 8, 16] {
+        let source = format!(
+            r#"
+plugin "Test" {{
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {{
+    input -> oversample {} {{
+      tanh()
+    }} -> output
+  }}
+}}
+"#,
+            factor
+        );
+        resolve_expect_ok(&source);
+    }
+}
+
+#[test]
+fn oversample_invalid_factor_3_produces_e012() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {
+    input -> oversample 3 {
+      tanh()
+    } -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e012 = find_error(&diags, "E012");
+    assert!(
+        e012.message.contains("invalid oversample factor 3"),
+        "Expected invalid factor message, got: {}",
+        e012.message
+    );
+}
+
+#[test]
+fn oversample_invalid_factor_5_produces_e012() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {
+    input -> oversample 5 {
+      tanh()
+    } -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e012 = find_error(&diags, "E012");
+    assert!(
+        e012.message.contains("invalid oversample factor 5"),
+        "Expected invalid factor message, got: {}",
+        e012.message
+    );
+}
+
+#[test]
+fn oversample_distortion_example_resolves() {
+    let source = include_str!("../examples/oversampled_distortion.muse");
+    resolve_expect_ok(source);
+}
