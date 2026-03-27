@@ -287,6 +287,9 @@ where
         Token::Float => "float".to_string(),
         Token::Bool => "bool".to_string(),
         Token::Int => "int".to_string(),
+        Token::Expose => "expose".to_string(),
+        Token::As => "as".to_string(),
+        Token::Fn => "fn".to_string(),
     }
 }
 
@@ -1709,6 +1712,103 @@ where
         })
 }
 
+// ── Use declaration parser ───────────────────────────────────
+
+/// Parse: `use "path/to/file.muse" expose name1, name2`
+/// Or:    `use "path/to/file.muse" as namespace`
+fn use_decl_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let expose_list = just(Token::Expose)
+        .ignore_then(
+            ident_name()
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map(|names| (names, None));
+
+    let as_alias = just(Token::As)
+        .ignore_then(ident_name())
+        .map(|alias| (vec![], Some(alias)));
+
+    just(Token::Use)
+        .ignore_then(select! { Token::StringLiteral(s) => s })
+        .then(expose_list.or(as_alias))
+        .map_with(|(path, (expose, alias)), e| {
+            (
+                PluginItem::UseDecl(UseDecl {
+                    path,
+                    expose,
+                    alias,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
+// ── Function definition parser ──────────────────────────────
+
+/// Parse: `fn name(param1, param2) -> return_type { body }`
+fn fn_def_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let expr = expr_parser();
+    let stmt = {
+        let let_stmt = just(Token::Let)
+            .ignore_then(ident_name())
+            .then_ignore(just(Token::Eq))
+            .then(expr.clone())
+            .map_with(|(name, value), e| (Statement::Let { name, value }, e.span()));
+
+        let return_stmt = just(Token::Return)
+            .ignore_then(expr.clone())
+            .map_with(|value, e| (Statement::Return(value), e.span()));
+
+        let expr_stmt = expr
+            .map_with(|e, extra| (Statement::Expr(e), extra.span()));
+
+        let_stmt.or(return_stmt).or(expr_stmt)
+    };
+
+    let params = ident_name()
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LParen), just(Token::RParen));
+
+    let return_type = just(Token::Arrow)
+        .ignore_then(ident_name())
+        .or_not();
+
+    just(Token::Fn)
+        .ignore_then(ident_name())
+        .then(params)
+        .then(return_type)
+        .then(
+            stmt.repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|(((name, params), return_type), body), e| {
+            (
+                PluginItem::FnDef(FnDef {
+                    name,
+                    params,
+                    return_type,
+                    body,
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1716,6 +1816,8 @@ where
     I: ValueInput<'src, Token = Token, Span = Span>,
 {
     let plugin_item = choice((
+        use_decl_parser(),
+        fn_def_parser(),
         metadata_parser(),
         clap_block_parser(),
         vst3_block_parser(),

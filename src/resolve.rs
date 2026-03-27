@@ -102,6 +102,8 @@ struct Resolver<'a> {
     bus_names: HashMap<String, IoDirection>,
     /// Duplicate bus name detection scoped by direction: (direction, effective_name)
     seen_bus_names: HashSet<(IoDirection, String)>,
+    /// User-defined functions: name → (param_names, body)
+    user_fns: HashMap<String, FnDef>,
 }
 
 impl<'a> Resolver<'a> {
@@ -124,6 +126,7 @@ impl<'a> Resolver<'a> {
             seen_wavetables: HashSet::new(),
             bus_names: HashMap::new(),
             seen_bus_names: HashSet::new(),
+            user_fns: HashMap::new(),
         }
     }
 
@@ -214,6 +217,20 @@ impl<'a> Resolver<'a> {
                                 self.bus_names.insert(effective_name, io_decl.direction.clone());
                             }
                         }
+                    }
+                }
+                PluginItem::FnDef(fn_def) => {
+                    if self.user_fns.contains_key(&fn_def.name) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E018",
+                                fn_def.span,
+                                format!("duplicate function definition '{}'", fn_def.name),
+                            )
+                            .with_suggestion("Each function must have a unique name."),
+                        );
+                    } else {
+                        self.user_fns.insert(fn_def.name.clone(), fn_def.clone());
                     }
                 }
                 _ => {}
@@ -1025,7 +1042,39 @@ impl<'a> Resolver<'a> {
             }
         }
 
-        // Look up in DSP registry first (takes priority over local scope)
+        // Check user-defined functions first
+        if let Some(fn_def) = self.user_fns.get(&callee_name).cloned() {
+            let expected = fn_def.params.len();
+            let actual = args.len();
+            if actual != expected {
+                self.diagnostics.push(Diagnostic::error(
+                    "E004",
+                    span,
+                    format!(
+                        "Function '{}' expects {} argument{}, got {}",
+                        callee_name,
+                        expected,
+                        if expected == 1 { "" } else { "s" },
+                        actual
+                    ),
+                ));
+            }
+            // Resolve all args (user fn params are untyped — accept anything)
+            for arg in args {
+                self.resolve_expr(arg);
+            }
+            // Resolve the function body with params in scope
+            let saved_scope = self.scope.clone();
+            for param_name in &fn_def.params {
+                self.scope.insert(param_name.clone(), DspType::Number);
+            }
+            self.resolve_statements(&fn_def.body);
+            self.scope = saved_scope;
+            // User-defined fns return Signal (processor chain)
+            return Some(DspType::Signal);
+        }
+
+        // Look up in DSP registry (takes priority over local scope)
         let func = match self.registry.lookup(&callee_name) {
             Some(f) => f.clone(), // clone to release the borrow on self
             None => {

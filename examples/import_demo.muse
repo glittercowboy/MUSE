@@ -1,0 +1,34 @@
+plugin "Import Demo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.import-demo"
+    description "Demonstrates the import system"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseImportDemo"
+    subcategories   [Fx]
+  }
+
+  use "lib/saturation.muse" expose warm_saturate
+
+  input  stereo
+  output stereo
+
+  param drive: float = 2.0 in 1.0..10.0 {
+    smoothing linear 20ms
+  }
+
+  param tone: float = 4000.0 in 500.0..12000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  process {
+    input -> warm_saturate(param.drive, param.tone) -> output
+  }
+}

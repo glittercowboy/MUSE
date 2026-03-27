@@ -1167,3 +1167,96 @@ plugin "Bus Test" {
     let resolved = resolve_plugin(&ast, &registry);
     assert!(resolved.is_ok(), "resolve should succeed for named bus plugin, got: {:?}", resolved.err());
 }
+
+// ── Import system integration tests ────────────────────────────
+
+#[test]
+fn import_demo_parses_ok() {
+    let plugin = parse_example("import_demo.muse");
+    assert_eq!(plugin.name, "Import Demo");
+
+    // Should have a UseDecl
+    let use_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::UseDecl(_))).count();
+    assert_eq!(use_count, 1);
+}
+
+#[test]
+fn saturation_lib_parses_ok() {
+    let plugin = parse_example("lib/saturation.muse");
+    assert_eq!(plugin.name, "Saturation Lib");
+
+    // Should have FnDef items
+    let fn_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::FnDef(_))).count();
+    assert_eq!(fn_count, 2, "Expected 2 fn definitions in saturation lib");
+}
+
+#[test]
+fn import_resolves_with_compile_check() {
+    // Use compile_check which resolves imports via lib.rs pipeline
+    let source = std::fs::read_to_string("examples/import_demo.muse")
+        .expect("failed to read import_demo.muse");
+    let ok = muse_lang::compile_check(&source, "examples/import_demo.muse", false);
+    assert!(ok, "import_demo.muse should pass compile_check (import resolution + resolve)");
+}
+
+#[test]
+fn import_nonexistent_file_errors() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  use "nonexistent/file.muse" expose something
+
+  process { input -> output }
+}
+"#;
+    // compile_check returns false when there are import errors
+    let ok = muse_lang::compile_check(source, "tests/fake.muse", false);
+    assert!(!ok, "Importing nonexistent file should fail compile_check");
+}
+
+#[test]
+fn import_nonexistent_name_errors() {
+    // Try to import a name that doesn't exist in the target file
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  use "lib/saturation.muse" expose nonexistent_fn
+
+  process { input -> output }
+}
+"#;
+    let ok = muse_lang::compile_check(source, "examples/test.muse", false);
+    assert!(!ok, "Importing nonexistent name should fail compile_check");
+}
+
+#[test]
+fn import_with_as_alias() {
+    // Parse a plugin that uses `as` alias and verify the fns get prefixed
+    let source = std::fs::read_to_string("examples/lib/saturation.muse")
+        .expect("failed to read saturation lib");
+    let (target_ast, _) = parse_to_diagnostics(&source);
+    let target_plugin = target_ast.unwrap();
+
+    // Verify the lib has fn definitions
+    let fn_names: Vec<String> = target_plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::FnDef(f) = item { Some(f.name.clone()) } else { None }
+    }).collect();
+    assert!(fn_names.contains(&"warm_saturate".to_string()));
+    assert!(fn_names.contains(&"hard_clip_saturate".to_string()));
+}
+
+#[test]
+fn import_as_alias_resolves() {
+    let source = std::fs::read_to_string("examples/import_as_demo.muse")
+        .expect("failed to read import_as_demo.muse");
+    let ok = muse_lang::compile_check(&source, "examples/import_as_demo.muse", false);
+    assert!(ok, "import_as_demo.muse should pass compile_check with 'as' alias import");
+}

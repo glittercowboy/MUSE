@@ -1816,3 +1816,84 @@ plugin "Test" {
         e016.message
     );
 }
+
+// ── User-defined function tests ──────────────────────────────
+
+#[test]
+fn user_fn_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  fn warm_saturate(drive, tone) -> processor {
+    input -> gain(drive) -> tanh() -> lowpass(tone) -> output
+  }
+
+  process {
+    input -> warm_saturate(2.0, 4000.0) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn user_fn_wrong_arg_count() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  fn my_effect(drive, tone) -> processor {
+    input -> gain(drive) -> lowpass(tone) -> output
+  }
+
+  process {
+    input -> my_effect(2.0) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e004 = find_error(&diags, "E004");
+    assert!(
+        e004.message.contains("expects 2 argument"),
+        "Expected arg count error, got: {}",
+        e004.message
+    );
+}
+
+#[test]
+fn duplicate_fn_def_error() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  fn my_effect(amount) -> processor {
+    input -> gain(amount) -> output
+  }
+
+  fn my_effect(drive) -> processor {
+    input -> gain(drive) -> tanh() -> output
+  }
+
+  process {
+    input -> my_effect(2.0) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e018 = find_error(&diags, "E018");
+    assert!(
+        e018.message.contains("duplicate function definition"),
+        "Expected duplicate fn error, got: {}",
+        e018.message
+    );
+}

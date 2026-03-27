@@ -93,6 +93,16 @@ pub enum Token {
     #[token("utility")]
     Utility,
 
+    // ── Import / function keywords ─────────────────────────────
+    #[token("use")]
+    Use,
+    #[token("expose")]
+    Expose,
+    #[token("as")]
+    As,
+    #[token("fn")]
+    Fn,
+
     // ── Reserved keywords ────────────────────────────────────
     #[token("voices")]
     Voice,
@@ -273,6 +283,10 @@ impl fmt::Display for Token {
             Token::Instrument => write!(f, "instrument"),
             Token::Analyzer => write!(f, "analyzer"),
             Token::Utility => write!(f, "utility"),
+            Token::Use => write!(f, "use"),
+            Token::Expose => write!(f, "expose"),
+            Token::As => write!(f, "as"),
+            Token::Fn => write!(f, "fn"),
             Token::Voice => write!(f, "voices"),
             Token::Poly => write!(f, "poly"),
             Token::Unison => write!(f, "unison"),

@@ -1,0 +1,24 @@
+// Reusable saturation functions
+plugin "Saturation Lib" {
+  vendor "Muse Audio"
+  version "0.1.0"
+  category utility
+
+  clap { id "dev.museaudio.lib.saturation" description "lib" features [audio_effect] }
+  vst3 { id "MuseLibSat001" subcategories [Fx] }
+
+  input stereo
+  output stereo
+
+  fn warm_saturate(drive, tone) -> processor {
+    input -> gain(drive) -> tanh() -> lowpass(tone) -> output
+  }
+
+  fn hard_clip_saturate(amount) -> processor {
+    input -> gain(amount) -> clip(-1.0, 1.0) -> output
+  }
+
+  process {
+    input -> output
+  }
+}

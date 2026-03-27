@@ -34,6 +34,35 @@ pub enum PluginItem {
     GuiDecl(GuiBlock),
     SampleDecl(SampleDecl),
     WavetableDecl(WavetableDecl),
+    UseDecl(UseDecl),
+    FnDef(FnDef),
+}
+
+// ── Use/import declarations ─────────────────────────────────
+
+/// `use "path/to/module.muse" expose name1, name2`
+/// or `use "path/to/module.muse" as namespace`
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    /// Relative path to the .muse file to import from.
+    pub path: String,
+    /// Names to selectively import (when using `expose`).
+    pub expose: Vec<String>,
+    /// Optional namespace alias (when using `as`).
+    pub alias: Option<String>,
+    pub span: Span,
+}
+
+// ── User-defined functions ──────────────────────────────────
+
+/// `fn name(param1, param2) -> processor { body }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnDef {
+    pub name: String,
+    pub params: Vec<String>,
+    pub return_type: Option<String>,
+    pub body: Vec<Spanned<Statement>>,
+    pub span: Span,
 }
 
 // ── Metadata ─────────────────────────────────────────────────

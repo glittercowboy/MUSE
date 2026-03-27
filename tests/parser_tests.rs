@@ -2576,3 +2576,122 @@ fn parse_test_input_backward_compat() {
         other => panic!("Expected Input impulse, got {:?}", other),
     }
 }
+
+// ── Import system parser tests ──────────────────────────────
+
+#[test]
+fn parse_use_expose_declaration() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  use "lib/saturation.muse" expose warm_saturate, hard_clip
+
+  process { input -> output }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let use_decls: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::UseDecl(decl) = item { Some(decl) } else { None }
+    }).collect();
+
+    assert_eq!(use_decls.len(), 1);
+    assert_eq!(use_decls[0].path, "lib/saturation.muse");
+    assert_eq!(use_decls[0].expose, vec!["warm_saturate", "hard_clip"]);
+    assert!(use_decls[0].alias.is_none());
+}
+
+#[test]
+fn parse_use_as_declaration() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  use "lib/effects.muse" as fx
+
+  process { input -> output }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let use_decls: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::UseDecl(decl) = item { Some(decl) } else { None }
+    }).collect();
+
+    assert_eq!(use_decls.len(), 1);
+    assert_eq!(use_decls[0].path, "lib/effects.muse");
+    assert!(use_decls[0].expose.is_empty());
+    assert_eq!(use_decls[0].alias, Some("fx".to_string()));
+}
+
+#[test]
+fn parse_fn_definition() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  fn warm_saturate(drive, tone) -> processor {
+    input -> gain(drive) -> tanh() -> lowpass(tone) -> output
+  }
+
+  process { input -> output }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let fn_defs: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::FnDef(f) = item { Some(f) } else { None }
+    }).collect();
+
+    assert_eq!(fn_defs.len(), 1);
+    assert_eq!(fn_defs[0].name, "warm_saturate");
+    assert_eq!(fn_defs[0].params, vec!["drive", "tone"]);
+    assert_eq!(fn_defs[0].return_type, Some("processor".to_string()));
+    assert!(!fn_defs[0].body.is_empty());
+}
+
+#[test]
+fn parse_fn_no_return_type() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test" version "0.1.0" category utility
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "test" subcategories [Fx] }
+  input stereo output stereo
+
+  fn my_effect(amount) {
+    input -> gain(amount) -> output
+  }
+
+  process { input -> output }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.unwrap();
+
+    let fn_defs: Vec<_> = plugin.items.iter().filter_map(|(item, _)| {
+        if let PluginItem::FnDef(f) = item { Some(f) } else { None }
+    }).collect();
+
+    assert_eq!(fn_defs.len(), 1);
+    assert_eq!(fn_defs[0].name, "my_effect");
+    assert_eq!(fn_defs[0].params, vec!["amount"]);
+    assert!(fn_defs[0].return_type.is_none());
+}
