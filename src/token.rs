@@ -95,6 +95,14 @@ pub enum Token {
     #[token("utility")]
     Utility,
 
+    // ── Modulation keywords ────────────────────────────────────
+    #[token("mod")]
+    ModKw,
+    #[token("route")]
+    Route,
+    #[token("amount")]
+    Amount,
+
     // ── Reserved keywords ────────────────────────────────────
     #[token("voices")]
     Voice,
@@ -280,6 +288,9 @@ impl fmt::Display for Token {
             Token::Instrument => write!(f, "instrument"),
             Token::Analyzer => write!(f, "analyzer"),
             Token::Utility => write!(f, "utility"),
+            Token::ModKw => write!(f, "mod"),
+            Token::Route => write!(f, "route"),
+            Token::Amount => write!(f, "amount"),
             Token::Voice => write!(f, "voices"),
             Token::Poly => write!(f, "poly"),
             Token::Unison => write!(f, "unison"),

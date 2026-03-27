@@ -2554,8 +2554,8 @@ fn codegen_user_functions_generates_inlined_code() {
 
     // The fn body should be inlined — params bound as local variables
     assert!(
-        lib_rs.contains("let amount"),
-        "Generated code should contain 'let amount' binding from fn param.\nGenerated:\n{}",
+        lib_rs.contains("let amt"),
+        "Generated code should contain 'let amt' binding from fn param.\nGenerated:\n{}",
         lib_rs
     );
     assert!(

@@ -1,0 +1,68 @@
+// Modulated Filter — demonstrates mod/route declarations for LFO modulation.
+// The LFO modulates cutoff frequency, creating a filter sweep effect.
+
+plugin "Mod Filter" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.mod-filter"
+    description "A filter with LFO and envelope modulation"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseModFilt01"
+    subcategories   [Fx, Filter]
+  }
+
+  input  stereo
+  output stereo
+
+  param cutoff: float = 2000.0 in 20.0..20000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  param resonance: float = 0.5 in 0.0..1.0 {
+    smoothing linear 20ms
+  }
+
+  param lfo_rate: float = 2.0 in 0.1..20.0 {
+    smoothing linear 50ms
+    unit "Hz"
+  }
+
+  param lfo_depth: float = 0.5 in 0.0..1.0 {
+    smoothing linear 20ms
+    display "percentage"
+  }
+
+  mod lfo1 = lfo(param.lfo_rate)
+
+  route lfo1 -> param.cutoff amount param.lfo_depth
+
+  process {
+    input -> lowpass(param.cutoff, param.resonance) -> output
+  }
+
+  test "filter passes signal" {
+    set param.cutoff = 5000.0
+    set param.resonance = 0.0
+    set param.lfo_depth = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+
+  test "modulation produces variation" {
+    set param.cutoff = 2000.0
+    set param.lfo_rate = 5.0
+    set param.lfo_depth = 0.8
+    input sine 440Hz 8192 samples
+    assert output.rms > -20dB
+    assert no_nan
+    assert no_denormal
+  }
+}

@@ -31,8 +31,8 @@ plugin "Channel Strip" {
     unit "dB"
   }
 
-  fn saturate(amount, cutoff) -> processor {
-    gain(amount) -> tanh() -> lowpass(cutoff)
+  fn saturate(amt, cutoff) -> processor {
+    gain(amt) -> tanh() -> lowpass(cutoff)
   }
 
   fn output_stage(vol) -> processor {

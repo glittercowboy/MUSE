@@ -104,6 +104,8 @@ struct Resolver<'a> {
     bus_names: HashMap<String, IoDirection>,
     /// Duplicate bus name detection scoped by direction: (direction, effective_name)
     seen_bus_names: HashSet<(IoDirection, String)>,
+    /// Mod source declarations: name → span (for duplicate detection and route validation)
+    mod_sources: HashMap<String, Span>,
 }
 
 impl<'a> Resolver<'a> {
@@ -127,6 +129,7 @@ impl<'a> Resolver<'a> {
             seen_wavetables: HashSet::new(),
             bus_names: HashMap::new(),
             seen_bus_names: HashSet::new(),
+            mod_sources: HashMap::new(),
         }
     }
 
@@ -221,6 +224,89 @@ impl<'a> Resolver<'a> {
                             }
                         }
                     }
+                }
+                PluginItem::ModDecl(decl) => {
+                    if self.mod_sources.contains_key(&decl.name) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E017",
+                                decl.span,
+                                format!("duplicate mod source name '{}'", decl.name),
+                            )
+                            .with_suggestion("Each mod source must have a unique name."),
+                        );
+                    } else {
+                        self.mod_sources.insert(decl.name.clone(), decl.span);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Phase 1b: validate mod source expressions and route declarations
+        for (item, _span) in &plugin.items {
+            match item {
+                PluginItem::ModDecl(decl) => {
+                    // Resolve the source expression
+                    self.resolve_expr(&decl.source);
+                }
+                PluginItem::RouteDecl(decl) => {
+                    // Validate source references a declared mod
+                    if !self.mod_sources.contains_key(&decl.source) {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E017",
+                                decl.span,
+                                format!(
+                                    "route references unknown mod source '{}' — no `mod {}` declared",
+                                    decl.source, decl.source
+                                ),
+                            )
+                            .with_suggestion(format!(
+                                "Declare the mod source first: `mod {} = lfo(2.0)`",
+                                decl.source
+                            )),
+                        );
+                    }
+
+                    // Validate target references a declared param (format: "param.X")
+                    if let Some(param_name) = decl.target.strip_prefix("param.") {
+                        if !self.params.contains_key(param_name) {
+                            self.diagnostics.push(
+                                Diagnostic::error(
+                                    "E017",
+                                    decl.span,
+                                    format!(
+                                        "route target references unknown parameter '{}' — no `param {}` declared",
+                                        param_name, param_name
+                                    ),
+                                )
+                                .with_suggestion(format!(
+                                    "Declared parameters: {}",
+                                    self.params
+                                        .keys()
+                                        .cloned()
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )),
+                            );
+                        }
+                    } else {
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                "E017",
+                                decl.span,
+                                format!(
+                                    "route target must be in the form 'param.<name>', got '{}'",
+                                    decl.target
+                                ),
+                            )
+                            .with_suggestion("Use `route source -> param.cutoff amount 0.5`"),
+                        );
+                    }
+
+                    // Resolve the amount expression
+                    self.resolve_expr(&decl.amount);
                 }
                 _ => {}
             }
