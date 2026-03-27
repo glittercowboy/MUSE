@@ -2431,3 +2431,69 @@ fn phase_osc_example_resolves_ok() {
     let source = include_str!("../examples/phase_osc.muse");
     resolve_expect_ok(source);
 }
+// ── Pattern literal resolution ───────────────────────────────
+
+#[test]
+fn pattern_resolves_to_number_type() {
+    let source = r#"
+plugin "PatternTest" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  param rate_hz: float = 4.0 in 0.5..20.0
+  process {
+    let steps = pattern [1.0, 0.0, 0.7, 0.0] rate param.rate_hz
+    input -> gain(steps) -> output
+  }
+}
+"#;
+    let resolved = resolve_expect_ok(source);
+    // Find the type of the pattern expression (the let binding value)
+    // Pattern should resolve to Number type
+    let has_number_type = resolved.type_map.values().any(|t| *t == DspType::Number);
+    assert!(has_number_type, "Expected at least one Number type in type_map for pattern");
+}
+
+#[test]
+fn pattern_with_hz_rate_resolves() {
+    let source = r#"
+plugin "PatternTest" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {
+    let steps = pattern [1.0, 0.5] rate 4.0
+    input -> gain(steps) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn pattern_empty_values_produces_error() {
+    let source = r#"
+plugin "PatternTest" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  input stereo
+  output stereo
+  process {
+    let steps = pattern [] rate 4.0
+    input -> gain(steps) -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e017 = find_error(&diags, "E017");
+    assert!(
+        e017.message.contains("at least one value"),
+        "Expected empty pattern error, got: {}",
+        e017.message
+    );
+}

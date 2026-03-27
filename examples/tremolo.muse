@@ -22,7 +22,7 @@ plugin "Velvet Tremolo" {
   input  stereo
   output stereo
 
-  param rate: float = 4.0 in 0.1..20.0 {
+  param lfo_rate: float = 4.0 in 0.1..20.0 {
     smoothing linear 5ms
     unit "Hz"
   }
@@ -32,7 +32,7 @@ plugin "Velvet Tremolo" {
   }
 
   process {
-    let lfo = sine(param.rate)
+    let lfo = sine(param.lfo_rate)
     let mod_gain = 1.0 - param.depth + param.depth * lfo
     input -> gain(mod_gain) -> output
   }

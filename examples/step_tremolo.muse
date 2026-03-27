@@ -1,0 +1,50 @@
+plugin "Step Tremolo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.step-tremolo"
+    description "A step-sequenced tremolo effect"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseStepTrem1"
+    subcategories   [Fx, Modulation]
+  }
+
+  input  stereo
+  output stereo
+
+  param rate_hz: float = 4.0 in 0.5..20.0 {
+    smoothing linear 50ms
+    unit "Hz"
+  }
+
+  param depth: float = 0.8 in 0.0..1.0 {
+    smoothing linear 20ms
+    display "percentage"
+  }
+
+  process {
+    let steps = pattern [1.0, 0.0, 0.7, 0.0, 1.0, 0.0, 0.5, 0.3] rate param.rate_hz
+    let tremolo_gain = 1.0 - param.depth + param.depth * steps
+    input -> gain(tremolo_gain) -> output
+  }
+
+  test "tremolo produces output" {
+    set param.rate_hz = 4.0
+    set param.depth = 0.5
+    input sine 440Hz 8192 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+
+  test "no modulation at zero depth" {
+    set param.depth = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -10dB
+    assert no_nan
+  }
+}

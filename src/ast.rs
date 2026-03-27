@@ -348,6 +348,13 @@ pub enum Expr {
         factor: u32,
         body: Vec<Spanned<Statement>>,
     },
+    /// Pattern literal: `pattern [1.0, 0.0, 0.7, 0.0] rate expr`
+    /// Steps through values at the given rate (in Hz or param reference).
+    /// Produces a Number-typed control signal.
+    Pattern {
+        values: Vec<f64>,
+        rate: Box<Spanned<Expr>>,
+    },
     /// Error recovery placeholder
     Error,
 }

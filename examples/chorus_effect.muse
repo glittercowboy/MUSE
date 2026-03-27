@@ -22,7 +22,7 @@ plugin "Silk Chorus" {
   input  stereo
   output stereo
 
-  param rate: float = 1.5 in 0.1..10.0 {
+  param lfo_rate: float = 1.5 in 0.1..10.0 {
     smoothing linear 5ms
     unit "Hz"
   }
@@ -32,12 +32,12 @@ plugin "Silk Chorus" {
   }
 
   process {
-    input -> chorus(param.rate, param.depth) -> output
+    input -> chorus(param.lfo_rate, param.depth) -> output
   }
 
   test "chorus produces output" {
     input  sine 440Hz 1024 samples
-    set    param.rate = 1.5
+    set    param.lfo_rate = 1.5
     set    param.depth = 0.4
     assert output.peak > 0.0
   }

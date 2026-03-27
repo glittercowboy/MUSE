@@ -99,6 +99,9 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
             };
             out.push_str(&format!("    state_{}: {},\n", name, rust_type));
         }
+        for (idx, values) in &process_info.pattern_values {
+            out.push_str(&format!("    pattern_state_{}: PatternState{},\n", idx, values.len()));
+        }
     }
 
     // Delay state fields — outside the poly/mono guard (delays work in both effects and instruments)
@@ -161,6 +164,15 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
         // User-declared state variable defaults (non-polyphonic)
         for (name, _state_type, default_code) in &process_info.state_decls {
             out.push_str(&format!("            state_{}: {},\n", name, default_code));
+        }
+        for (idx, values) in &process_info.pattern_values {
+            let values_str: Vec<String> = values.iter().map(|v| format!("{:.1}", v)).collect();
+            out.push_str(&format!(
+                "            pattern_state_{}: PatternState{} {{ phase: 0.0, step_index: 0, values: [{}] }},\n",
+                idx,
+                values.len(),
+                values_str.join(", ")
+            ));
         }
     }
 
@@ -240,6 +252,9 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     // Voice uses simple BiquadState (not per-channel array) for eq_biquad
     let voice_slots = process_info.simple_state_slots();
     out.push_str(&emit_state_fields(&voice_slots, "    "));
+    for (idx, values) in &process_info.pattern_values {
+        out.push_str(&format!("    pattern_state_{}: PatternState{},\n", idx, values.len()));
+    }
     for i in 0..process_info.eq_biquad_count {
         out.push_str(&format!("    eq_biquad_state_{}: BiquadState,\n", i));
     }
@@ -268,6 +283,15 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
         fields.push("adsr_state: AdsrState::default()".to_string());
     }
     let voice_slots = process_info.simple_state_slots();
+    for (idx, values) in &process_info.pattern_values {
+        let values_str: Vec<String> = values.iter().map(|v| format!("{:.1}", v)).collect();
+        fields.push(format!(
+            "pattern_state_{}: PatternState{} {{ phase: 0.0, step_index: 0, values: [{}] }}",
+            idx,
+            values.len(),
+            values_str.join(", ")
+        ));
+    }
     for i in 0..process_info.eq_biquad_count {
         fields.push(format!("eq_biquad_state_{}: BiquadState::default()", i));
     }

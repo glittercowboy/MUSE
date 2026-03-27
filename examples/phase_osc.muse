@@ -19,7 +19,7 @@ plugin "Phase Tremolo" {
   input  stereo
   output stereo
 
-  param rate: float = 4.0 in 0.1..20.0 {
+  param lfo_rate: float = 4.0 in 0.1..20.0 {
     smoothing linear 10ms
     unit "Hz"
   }
@@ -33,7 +33,7 @@ plugin "Phase Tremolo" {
     state phase: float = 0.0
 
     // Advance phase by rate/sample_rate each sample, wrap at 1.0
-    phase = (phase + param.rate / sample_rate) % 1.0
+    phase = (phase + param.lfo_rate / sample_rate) % 1.0
 
     // Compute tremolo modulation: 1.0 - depth * (0.5 + 0.5 * sin-like shape)
     // Use simple triangle wave approximation: |2*phase - 1|
