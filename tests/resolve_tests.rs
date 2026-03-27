@@ -1816,3 +1816,149 @@ plugin "Test" {
         e016.message
     );
 }
+
+// ── Modulation routing tests ────────────────────────────────
+
+#[test]
+fn mod_route_valid_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+
+  mod lfo1 = lfo(2.0)
+  route lfo1 -> param.cutoff amount 0.5
+
+  process {
+    input -> lowpass(param.cutoff, 0.5) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn mod_route_unknown_source_produces_e017() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+
+  route unknown_lfo -> param.cutoff amount 0.5
+
+  process {
+    input -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e017 = find_error(&diags, "E017");
+    assert!(
+        e017.message.contains("unknown mod source 'unknown_lfo'"),
+        "Expected unknown mod source error, got: {}",
+        e017.message
+    );
+}
+
+#[test]
+fn mod_route_unknown_param_target_produces_e017() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+
+  mod lfo1 = lfo(2.0)
+  route lfo1 -> param.nonexistent amount 0.5
+
+  process {
+    input -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e017 = find_error(&diags, "E017");
+    assert!(
+        e017.message.contains("unknown parameter 'nonexistent'"),
+        "Expected unknown param target error, got: {}",
+        e017.message
+    );
+}
+
+#[test]
+fn mod_duplicate_name_produces_e017() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+
+  mod lfo1 = lfo(2.0)
+  mod lfo1 = lfo(4.0)
+
+  process {
+    input -> output
+  }
+}
+"#;
+    let diags = resolve_expect_errors(source);
+    let e017 = find_error(&diags, "E017");
+    assert!(
+        e017.message.contains("duplicate mod source name 'lfo1'"),
+        "Expected duplicate mod source error, got: {}",
+        e017.message
+    );
+}
+
+#[test]
+fn mod_route_with_param_ref_amount_resolves_ok() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+  param lfo_rate: float = 2.0 in 0.1..20.0
+  param lfo_depth: float = 0.5 in 0.0..1.0
+
+  mod lfo1 = lfo(param.lfo_rate)
+  route lfo1 -> param.cutoff amount param.lfo_depth
+
+  process {
+    input -> lowpass(param.cutoff, 0.5) -> output
+  }
+}
+"#;
+    resolve_expect_ok(source);
+}

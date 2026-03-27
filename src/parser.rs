@@ -1709,6 +1709,66 @@ where
         })
 }
 
+// ── Modulation declaration parsers ───────────────────────────
+
+fn mod_decl_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let expr = expr_parser();
+
+    just(Token::ModKw)
+        .ignore_then(ident_name())
+        .then_ignore(just(Token::Eq))
+        .then(expr)
+        .map_with(|(name, source), e| {
+            (
+                PluginItem::ModDecl(ModDecl {
+                    name,
+                    source: Box::new(source),
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
+fn route_decl_parser<'src, I>(
+) -> impl Parser<'src, I, Spanned<PluginItem>, ParserExtra<'src>> + Clone
+where
+    I: ValueInput<'src, Token = Token, Span = Span>,
+{
+    let expr = expr_parser();
+
+    // Parse the target as "param.name" — an ident followed by dot and ident
+    let dotted_target = select! {
+        Token::Ident(s) => s,
+        Token::Param => "param".to_string(),
+    }
+    .then_ignore(just(Token::Dot))
+    .then(select! { Token::Ident(s) => s })
+    .map(|(prefix, field)| format!("{}.{}", prefix, field));
+
+    just(Token::Route)
+        .ignore_then(ident_name())
+        .then_ignore(just(Token::Arrow))
+        .then(dotted_target)
+        .then_ignore(just(Token::Amount))
+        .then(expr)
+        .map_with(|((source, target), amount), e| {
+            (
+                PluginItem::RouteDecl(RouteDecl {
+                    source,
+                    target,
+                    amount: Box::new(amount),
+                    span: e.span(),
+                }),
+                e.span(),
+            )
+        })
+}
+
 // ── Top-level plugin parser ──────────────────────────────────
 
 fn plugin_parser<'src, I>() -> impl Parser<'src, I, PluginDef, ParserExtra<'src>> + Clone
@@ -1728,6 +1788,8 @@ where
         gui_block_parser(),
         sample_decl_parser(),
         wavetable_decl_parser(),
+        mod_decl_parser(),
+        route_decl_parser(),
         process_block_parser(),
         test_block_parser(),
     ))

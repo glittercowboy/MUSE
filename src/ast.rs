@@ -34,6 +34,27 @@ pub enum PluginItem {
     GuiDecl(GuiBlock),
     SampleDecl(SampleDecl),
     WavetableDecl(WavetableDecl),
+    ModDecl(ModDecl),
+    RouteDecl(RouteDecl),
+}
+
+// ── Modulation ───────────────────────────────────────────────
+
+/// Modulation source declaration: `mod name = expr`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModDecl {
+    pub name: String,
+    pub source: Box<Spanned<Expr>>,
+    pub span: Span,
+}
+
+/// Modulation route: `route source -> param.target amount expr`
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteDecl {
+    pub source: String,
+    pub target: String,
+    pub amount: Box<Spanned<Expr>>,
+    pub span: Span,
 }
 
 // ── Metadata ─────────────────────────────────────────────────

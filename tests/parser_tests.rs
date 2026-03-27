@@ -2576,3 +2576,180 @@ fn parse_test_input_backward_compat() {
         other => panic!("Expected Input impulse, got {:?}", other),
     }
 }
+
+// ── Modulation declaration tests ────────────────────────────
+
+#[test]
+fn parse_mod_declaration() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param rate: float = 2.0 in 0.1..20.0
+
+  mod lfo1 = lfo(param.rate)
+
+  process {
+    input -> output
+  }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let mod_count = plugin
+        .items
+        .iter()
+        .filter(|(item, _)| matches!(item, PluginItem::ModDecl(_)))
+        .count();
+    assert_eq!(mod_count, 1, "Expected 1 mod declaration");
+
+    let mod_decl = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::ModDecl(m) = item { Some(m) } else { None }
+    }).unwrap();
+    assert_eq!(mod_decl.name, "lfo1");
+}
+
+#[test]
+fn parse_route_declaration() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+  param depth: float = 0.5 in 0.0..1.0
+
+  mod lfo1 = lfo(2.0)
+
+  route lfo1 -> param.cutoff amount param.depth
+
+  process {
+    input -> output
+  }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let route_count = plugin
+        .items
+        .iter()
+        .filter(|(item, _)| matches!(item, PluginItem::RouteDecl(_)))
+        .count();
+    assert_eq!(route_count, 1, "Expected 1 route declaration");
+
+    let route_decl = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::RouteDecl(r) = item { Some(r) } else { None }
+    }).unwrap();
+    assert_eq!(route_decl.source, "lfo1");
+    assert_eq!(route_decl.target, "param.cutoff");
+}
+
+#[test]
+fn parse_mod_and_route_together() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+  param lfo_rate: float = 2.0 in 0.1..20.0
+  param lfo_depth: float = 0.5 in 0.0..1.0
+
+  mod lfo1 = lfo(param.lfo_rate)
+  route lfo1 -> param.cutoff amount param.lfo_depth
+
+  process {
+    input -> lowpass(param.cutoff, 0.5) -> output
+  }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let mod_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::ModDecl(_))).count();
+    let route_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::RouteDecl(_))).count();
+    assert_eq!(mod_count, 1);
+    assert_eq!(route_count, 1);
+}
+
+#[test]
+fn parse_route_with_numeric_amount() {
+    let source = r#"
+plugin "Test" {
+  vendor "Test"
+  version "0.1.0"
+  category effect
+  clap { id "test" description "test" features [audio_effect] }
+  vst3 { id "Test12345678" subcategories [Fx] }
+  input stereo
+  output stereo
+
+  param cutoff: float = 1000.0 in 20.0..20000.0
+
+  mod lfo1 = lfo(2.0)
+  route lfo1 -> param.cutoff amount 0.5
+
+  process {
+    input -> output
+  }
+}
+"#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Expected no parse errors, got: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let route_decl = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::RouteDecl(r) = item { Some(r) } else { None }
+    }).unwrap();
+    assert_eq!(route_decl.source, "lfo1");
+    assert_eq!(route_decl.target, "param.cutoff");
+    // Amount should be a number expression 0.5
+    match &route_decl.amount.0 {
+        Expr::Number(val, _) => assert_eq!(*val, 0.5),
+        other => panic!("Expected number amount, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_modulated_filter_example() {
+    let source = include_str!("../examples/modulated_filter.muse");
+    let (ast, errors) = parse(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no errors parsing modulated_filter.muse, got: {:?}",
+        errors
+    );
+    let plugin = ast.expect("Expected AST from modulated_filter.muse");
+    assert_eq!(plugin.name, "Mod Filter");
+
+    let mod_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::ModDecl(_))).count();
+    let route_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::RouteDecl(_))).count();
+    let param_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::ParamDecl(_))).count();
+    let test_count = plugin.items.iter().filter(|(item, _)| matches!(item, PluginItem::TestBlock(_))).count();
+
+    assert_eq!(mod_count, 1, "Expected 1 mod declaration");
+    assert_eq!(route_count, 1, "Expected 1 route declaration");
+    assert_eq!(param_count, 4, "Expected 4 params");
+    assert_eq!(test_count, 2, "Expected 2 test blocks");
+}
