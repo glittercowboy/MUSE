@@ -315,6 +315,34 @@ where
                 .then(expr.clone())
                 .map_with(|(name, value), e| (Statement::Let { name, value }, e.span()));
 
+            let state_type_inner = choice((
+                just(Token::Float).to(StateType::Float),
+                just(Token::Int).to(StateType::Int),
+                just(Token::Bool).to(StateType::Bool),
+            ));
+
+            let state_decl = just(Token::State)
+                .ignore_then(ident_name())
+                .then_ignore(just(Token::Colon))
+                .then(state_type_inner)
+                .then_ignore(just(Token::Eq))
+                .then(expr.clone())
+                .map_with(|((name, state_type), default), e| {
+                    (
+                        Statement::StateDecl {
+                            name,
+                            state_type,
+                            default: Box::new(default),
+                        },
+                        e.span(),
+                    )
+                });
+
+            let assign_stmt = ident_name()
+                .then_ignore(just(Token::Eq))
+                .then(expr.clone())
+                .map_with(|(target, value), e| (Statement::Assign { target, value }, e.span()));
+
             let return_stmt = just(Token::Return)
                 .ignore_then(expr.clone())
                 .map_with(|value, e| (Statement::Return(value), e.span()));
@@ -323,7 +351,7 @@ where
                 .clone()
                 .map_with(|e, extra| (Statement::Expr(e), extra.span()));
 
-            let_stmt.or(return_stmt).or(expr_stmt)
+            let_stmt.or(state_decl).or(assign_stmt).or(return_stmt).or(expr_stmt)
         };
 
         // ── If expression ────────────────────────────────
@@ -407,8 +435,8 @@ where
                             // Each expression-statement is its own branch
                             branches.push(vec![s]);
                         }
-                        Statement::Let { .. } | Statement::Assign { .. } => {
-                            // Attach let/assign to the next branch (or start one)
+                        Statement::Let { .. } | Statement::Assign { .. } | Statement::StateDecl { .. } => {
+                            // Attach let/assign/state to the next branch (or start one)
                             if branches.is_empty() || {
                                 let last = branches.last().unwrap();
                                 matches!(last.last().map(|s| &s.0), Some(Statement::Expr(_)))
@@ -1015,6 +1043,36 @@ where
             .then(expr.clone())
             .map_with(|(name, value), e| (Statement::Let { name, value }, e.span()));
 
+        // state name: type = default_expr
+        let state_type = choice((
+            just(Token::Float).to(StateType::Float),
+            just(Token::Int).to(StateType::Int),
+            just(Token::Bool).to(StateType::Bool),
+        ));
+
+        let state_decl = just(Token::State)
+            .ignore_then(ident_name())
+            .then_ignore(just(Token::Colon))
+            .then(state_type)
+            .then_ignore(just(Token::Eq))
+            .then(expr.clone())
+            .map_with(|((name, state_type), default), e| {
+                (
+                    Statement::StateDecl {
+                        name,
+                        state_type,
+                        default: Box::new(default),
+                    },
+                    e.span(),
+                )
+            });
+
+        // name = expr  (bare assignment to a state variable)
+        let assign_stmt = ident_name()
+            .then_ignore(just(Token::Eq))
+            .then(expr.clone())
+            .map_with(|(target, value), e| (Statement::Assign { target, value }, e.span()));
+
         let return_stmt = just(Token::Return)
             .ignore_then(expr.clone())
             .map_with(|value, e| (Statement::Return(value), e.span()));
@@ -1022,7 +1080,7 @@ where
         let expr_stmt = expr
             .map_with(|e, extra| (Statement::Expr(e), extra.span()));
 
-        let_stmt.or(return_stmt).or(expr_stmt)
+        let_stmt.or(state_decl).or(assign_stmt).or(return_stmt).or(expr_stmt)
     };
 
     just(Token::Process)

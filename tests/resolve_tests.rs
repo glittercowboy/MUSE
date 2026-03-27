@@ -2377,3 +2377,57 @@ fn oversample_distortion_example_resolves() {
     let source = include_str!("../examples/oversampled_distortion.muse");
     resolve_expect_ok(source);
 }
+// ── State variable tests ────────────────────────────────────
+
+#[test]
+fn state_variable_in_scope_resolves_ok() {
+    let source = r#"
+        plugin "Test" {
+            vendor "Me"
+            version "0.1.0"
+            category effect
+            input stereo
+            output stereo
+            clap { id "test.state.scope" description "test" features [audio_effect, stereo] }
+            vst3 { id "TestStateScope12" subcategories [Fx] }
+            process {
+                state phase: float = 0.0
+                phase = phase + 0.01
+                input -> gain(phase) -> output
+            }
+        }
+    "#;
+    resolve_expect_ok(source);
+}
+
+#[test]
+fn state_assignment_to_undeclared_produces_error() {
+    let source = r#"
+        plugin "Test" {
+            vendor "Me"
+            version "0.1.0"
+            category effect
+            input stereo
+            output stereo
+            clap { id "test.state.bad" description "test" features [audio_effect, stereo] }
+            vst3 { id "TestStateBad1234" subcategories [Fx] }
+            process {
+                phase = 0.5
+                input -> output
+            }
+        }
+    "#;
+    let diags = resolve_expect_errors(source);
+    let e017 = find_error(&diags, "E017");
+    assert!(
+        e017.message.contains("undeclared state variable 'phase'"),
+        "Expected undeclared state variable error, got: {}",
+        e017.message
+    );
+}
+
+#[test]
+fn phase_osc_example_resolves_ok() {
+    let source = include_str!("../examples/phase_osc.muse");
+    resolve_expect_ok(source);
+}

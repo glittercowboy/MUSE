@@ -1,0 +1,51 @@
+// Phase-based LFO tremolo effect using state variables.
+// Demonstrates persistent per-sample state for custom modulation.
+plugin "Phase Tremolo" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  category effect
+
+  clap {
+    id          "dev.museaudio.phase-trem"
+    description "A tremolo effect using state variables for phase tracking"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MusePhaseTrem123"
+    subcategories   [Fx]
+  }
+
+  input  stereo
+  output stereo
+
+  param rate: float = 4.0 in 0.1..20.0 {
+    smoothing linear 10ms
+    unit "Hz"
+  }
+
+  param depth: float = 0.5 in 0.0..1.0 {
+    smoothing linear 10ms
+    display "percentage"
+  }
+
+  process {
+    state phase: float = 0.0
+
+    // Advance phase by rate/sample_rate each sample, wrap at 1.0
+    phase = (phase + param.rate / sample_rate) % 1.0
+
+    // Compute tremolo modulation: 1.0 - depth * (0.5 + 0.5 * sin-like shape)
+    // Use simple triangle wave approximation: |2*phase - 1|
+    let tri = phase * 2.0 - 1.0
+    let mod_amount = 1.0 - param.depth * tri * tri
+
+    input -> gain(mod_amount) -> output
+  }
+
+  test "passes audio with modulation" {
+    input sine 440Hz 44100 samples
+    assert output.rms > -40dB
+    assert no_nan
+  }
+}

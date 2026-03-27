@@ -2962,3 +2962,103 @@ fn parse_oversampled_distortion_example() {
     let plugin = ast.expect("Expected AST from oversampled_distortion.muse");
     assert_eq!(plugin.name, "HQ Distortion");
 }
+// ── State variable tests ────────────────────────────────────
+
+#[test]
+fn parse_state_declaration() {
+    let source = r#"
+        plugin "Test" {
+            vendor "Me"
+            version "0.1.0"
+            category effect
+            input stereo
+            output stereo
+            clap { id "test.state" description "test" features [audio_effect, stereo] }
+            vst3 { id "TestState1234567" subcategories [Fx] }
+            process {
+                state phase: float = 0.0
+                state count: int = 0
+                state active: bool = true
+                input -> output
+            }
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let process = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::ProcessBlock(pb) = item { Some(pb) } else { None }
+    }).expect("Expected process block");
+
+    // First three statements should be state declarations
+    match &process.body[0].0 {
+        Statement::StateDecl { name, state_type, .. } => {
+            assert_eq!(name, "phase");
+            assert_eq!(*state_type, StateType::Float);
+        }
+        other => panic!("Expected StateDecl, got {:?}", other),
+    }
+    match &process.body[1].0 {
+        Statement::StateDecl { name, state_type, .. } => {
+            assert_eq!(name, "count");
+            assert_eq!(*state_type, StateType::Int);
+        }
+        other => panic!("Expected StateDecl, got {:?}", other),
+    }
+    match &process.body[2].0 {
+        Statement::StateDecl { name, state_type, .. } => {
+            assert_eq!(name, "active");
+            assert_eq!(*state_type, StateType::Bool);
+        }
+        other => panic!("Expected StateDecl, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_state_assignment() {
+    let source = r#"
+        plugin "Test" {
+            vendor "Me"
+            version "0.1.0"
+            category effect
+            input stereo
+            output stereo
+            clap { id "test.assign" description "test" features [audio_effect, stereo] }
+            vst3 { id "TestAssign12345" subcategories [Fx] }
+            process {
+                state phase: float = 0.0
+                phase = phase + 0.01
+                input -> output
+            }
+        }
+    "#;
+    let (ast, errors) = parse(source);
+    assert!(errors.is_empty(), "Parse errors: {:?}", errors);
+    let plugin = ast.expect("Expected AST");
+
+    let process = plugin.items.iter().find_map(|(item, _)| {
+        if let PluginItem::ProcessBlock(pb) = item { Some(pb) } else { None }
+    }).expect("Expected process block");
+
+    // Second statement should be assignment
+    match &process.body[1].0 {
+        Statement::Assign { target, .. } => {
+            assert_eq!(target, "phase");
+        }
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
+#[test]
+fn parse_phase_osc_example() {
+    let source = include_str!("../examples/phase_osc.muse");
+    let (ast, errors) = parse(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no errors parsing phase_osc.muse, got: {:?}",
+        errors
+    );
+    let plugin = ast.expect("Expected AST from phase_osc.muse");
+    assert_eq!(plugin.name, "Phase Tremolo");
+}

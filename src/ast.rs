@@ -260,12 +260,27 @@ pub enum Statement {
         name: String,
         value: Spanned<Expr>,
     },
+    /// State variable declaration: `state name: type = default`
+    /// Persists across samples (stored on plugin/voice struct).
+    StateDecl {
+        name: String,
+        state_type: StateType,
+        default: Box<Spanned<Expr>>,
+    },
     Assign {
         target: String,
         value: Spanned<Expr>,
     },
     Return(Spanned<Expr>),
     Expr(Spanned<Expr>),
+}
+
+/// Type annotation for state variable declarations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StateType {
+    Float,
+    Int,
+    Bool,
 }
 
 // ── Expressions ──────────────────────────────────────────────

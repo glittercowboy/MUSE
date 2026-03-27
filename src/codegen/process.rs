@@ -46,6 +46,10 @@ pub struct ProcessInfo {
     pub oversample_count: usize,
     /// (index, factor) pairs for each oversample block
     pub oversample_factors: Vec<(usize, u32)>,
+    /// State variable declarations: (name, type, default_expr_code)
+    pub state_decls: Vec<(String, crate::ast::StateType, String)>,
+    /// Whether `sample_rate` is referenced directly in expressions
+    pub uses_sample_rate_directly: bool,
 }
 
 /// A (field_prefix, rust_type, count) descriptor for generating DSP state fields.
@@ -83,7 +87,7 @@ impl ProcessInfo {
             || self.chorus_count > 0 || self.compressor_count > 0 || self.delay_count > 0
             || self.eq_biquad_count > 0 || self.rms_count > 0 || self.peak_follow_count > 0
             || self.gate_count > 0 || self.wt_osc_call_count > 0 || self.reverb_count > 0
-            || self.needs_transport
+            || self.needs_transport || self.uses_sample_rate_directly
     }
 }
 
@@ -129,6 +133,7 @@ pub fn emit_playback_defaults(kind: &str, count: usize, indent: &str, active_def
     out
 }
 
+
 pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_config: Option<&crate::codegen::CodegenUnisonConfig>, sample_infos: &[SampleInfo], wavetable_infos: &[WavetableInfo]) -> (String, ProcessInfo) {
     let is_instrument = find_midi_decl(plugin);
 
@@ -162,6 +167,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
                     needs_transport: false,
                     oversample_count: 0,
                     oversample_factors: Vec::new(),
+                    state_decls: Vec::new(),
+                    uses_sample_rate_directly: false,
                 },
             )
         }
@@ -273,6 +280,8 @@ pub fn generate_process(plugin: &PluginDef, voice_count: Option<u32>, unison_con
         needs_transport: ctx.needs_transport,
         oversample_count: ctx.oversample_counter,
         oversample_factors: ctx.oversample_factors,
+        state_decls: ctx.state_decls.clone(),
+        uses_sample_rate_directly: ctx.uses_sample_rate_directly,
     };
 
     (process_body, info)
@@ -491,6 +500,12 @@ struct ProcessContext<'a> {
     needs_transport: bool,
     /// User-defined function declarations for inlining at call sites.
     fn_defs: HashMap<String, FnDef>,
+    /// State declarations collected during process generation.
+    state_decls: Vec<(String, crate::ast::StateType, String)>,
+    /// Set of declared state variable names (for codegen prefix lookup).
+    state_var_names: HashSet<String>,
+    /// Whether `sample_rate` is referenced directly in expressions.
+    uses_sample_rate_directly: bool,
 }
 
 impl<'a> ProcessContext<'a> {
@@ -528,6 +543,9 @@ impl<'a> ProcessContext<'a> {
             aux_output_map: HashMap::new(),
             needs_transport: false,
             fn_defs: HashMap::new(),
+            state_decls: Vec::new(),
+            state_var_names: HashSet::new(),
+            uses_sample_rate_directly: false,
         }
     }
 
@@ -554,6 +572,14 @@ fn generate_statement(
             lines.push(format!("let {} = {};", name, expr_code));
             lines
         }
+        Statement::StateDecl { name, state_type, default } => {
+            // State declarations don't generate per-sample code — they become struct fields.
+            // We record them in the context so plugin.rs can generate the fields.
+            let default_code = generate_expr(&default.0, ctx);
+            ctx.state_decls.push((name.clone(), state_type.clone(), default_code));
+            ctx.state_var_names.insert(name.clone());
+            Vec::new()
+        }
         Statement::Expr(expr) => {
             if let Some(output_lines) = extract_output_chain(&expr.0, ctx) {
                 let mut lines = ctx.drain_pending();
@@ -573,7 +599,17 @@ fn generate_statement(
         Statement::Assign { target, value } => {
             let expr_code = generate_chain_value(&value.0, ctx);
             let mut lines = ctx.drain_pending();
-            lines.push(format!("{} = {};", target, expr_code));
+            // State variable assignments use the appropriate prefix
+            let prefix = if ctx.state_var_names.contains(target) {
+                if ctx.is_polyphonic {
+                    format!("voice.state_{}", target)
+                } else {
+                    format!("self.state_{}", target)
+                }
+            } else {
+                target.clone()
+            };
+            lines.push(format!("{} = {};", prefix, expr_code));
             lines
         }
         Statement::Return(expr) => {
@@ -1023,8 +1059,18 @@ fn generate_expr(expr: &Expr, ctx: &mut ProcessContext) -> String {
                 ctx.needs_transport = true;
                 "(transport.pos_beats().unwrap_or(0.0)) as f32".to_string()
             }
+            "sample_rate" => {
+                ctx.uses_sample_rate_directly = true;
+                "self.sample_rate".to_string()
+            }
             _ => {
-                if ctx.aux_input_map.contains_key(name) {
+                if ctx.state_var_names.contains(name) {
+                    if ctx.is_polyphonic {
+                        format!("voice.state_{}", name)
+                    } else {
+                        format!("self.state_{}", name)
+                    }
+                } else if ctx.aux_input_map.contains_key(name) {
                     format!("{}_sample", name)
                 } else {
                     name.clone()

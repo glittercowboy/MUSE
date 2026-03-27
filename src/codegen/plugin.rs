@@ -90,6 +90,15 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
             out.push_str("    adsr_state: AdsrState,\n");
         }
         out.push_str(&emit_state_fields(&simple_slots, "    "));
+        // User-declared state variable fields (non-polyphonic: on plugin struct)
+        for (name, state_type, _) in &process_info.state_decls {
+            let rust_type = match state_type {
+                crate::ast::StateType::Float => "f32",
+                crate::ast::StateType::Int => "i32",
+                crate::ast::StateType::Bool => "bool",
+            };
+            out.push_str(&format!("    state_{}: {},\n", name, rust_type));
+        }
     }
 
     // Delay state fields — outside the poly/mono guard (delays work in both effects and instruments)
@@ -149,6 +158,10 @@ pub fn generate_plugin_struct(plugin: &PluginDef, process_info: &ProcessInfo, sa
             out.push_str("            adsr_state: AdsrState::default(),\n");
         }
         out.push_str(&emit_state_defaults(&simple_slots, "            "));
+        // User-declared state variable defaults (non-polyphonic)
+        for (name, _state_type, default_code) in &process_info.state_decls {
+            out.push_str(&format!("            state_{}: {},\n", name, default_code));
+        }
     }
 
     for i in 0..process_info.delay_count {
@@ -232,6 +245,15 @@ fn generate_voice_struct(process_info: &ProcessInfo) -> String {
     }
     out.push_str(&emit_playback_fields("play", process_info.play_call_count, "    "));
     out.push_str(&emit_playback_fields("loop", process_info.loop_call_count, "    "));
+    // Per-voice user-declared state variables
+    for (name, state_type, _) in &process_info.state_decls {
+        let rust_type = match state_type {
+            crate::ast::StateType::Float => "f32",
+            crate::ast::StateType::Int => "i32",
+            crate::ast::StateType::Bool => "bool",
+        };
+        out.push_str(&format!("    state_{}: {},\n", name, rust_type));
+    }
     out.push_str("}\n");
     out
 }
@@ -261,6 +283,10 @@ fn generate_voice_field_defaults(process_info: &ProcessInfo) -> String {
     for i in 0..process_info.loop_call_count {
         fields.push(format!("loop_pos_{}: 0.0", i));
         fields.push(format!("loop_active_{}: true", i));
+    }
+    // User-declared state variable defaults
+    for (name, _state_type, default_code) in &process_info.state_decls {
+        fields.push(format!("state_{}: {}", name, default_code));
     }
     if fields.is_empty() {
         String::new()
