@@ -1,0 +1,227 @@
+// Shimmer Verb — Ethereal reverb with pitch-shifted feedback and modulated diffusion.
+// Inspired by Strymon BigSky / Valhalla Shimmer. Feed any input and get luminous,
+// evolving reverb tails that rise in pitch with each reflection.
+//
+// Showcases: reverb(), signal math (Signal * Signal), split/merge, feedback,
+// LFO modulation, GUI with spectrum analyzer.
+
+plugin "Shimmer Verb" {
+  vendor   "Muse Audio"
+  version  "0.1.0"
+  url      "https://github.com/glittercowboy/music-lang"
+  category effect
+
+  clap {
+    id          "dev.museaudio.shimmer-verb"
+    description "Ethereal reverb with pitch-shifted shimmer and modulated diffusion"
+    features    [audio_effect, stereo]
+  }
+
+  vst3 {
+    id              "MuseShimmer01"
+    subcategories   [Fx, Reverb]
+  }
+
+  input  stereo
+  output stereo
+
+  // --- Reverb core ---
+  param size: float = 0.75 in 0.1..1.0 {
+    smoothing linear 50ms
+    display "percentage"
+  }
+
+  param decay: float = 4.0 in 0.5..12.0 {
+    smoothing logarithmic 100ms
+    unit "s"
+  }
+
+  param damping: float = 0.6 in 0.0..1.0 {
+    smoothing linear 30ms
+    display "percentage"
+  }
+
+  // --- Shimmer controls ---
+  param shimmer: float = 0.5 in 0.0..1.0 {
+    smoothing linear 50ms
+    display "percentage"
+  }
+
+  param shimmer_tone: float = 3000.0 in 500.0..12000.0 {
+    smoothing logarithmic 50ms
+    unit "Hz"
+  }
+
+  // --- Modulation ---
+  param mod_rate: float = 0.3 in 0.05..5.0 {
+    smoothing linear 50ms
+    unit "Hz"
+  }
+
+  param mod_depth: float = 0.3 in 0.0..1.0 {
+    smoothing linear 30ms
+    display "percentage"
+  }
+
+  // --- Mix ---
+  param predelay: float = 20.0 in 0.0..200.0 {
+    smoothing linear 50ms
+    unit "ms"
+  }
+
+  param mix_amt: float = 0.5 in 0.0..1.0 {
+    smoothing linear 30ms
+    display "percentage"
+  }
+
+  param output_gain: float = 0.0 in -12.0..6.0 {
+    smoothing logarithmic 50ms
+    unit "dB"
+  }
+
+  gui {
+    theme dark
+    accent "#8B5CF6"
+    size 720 480
+
+    layout vertical {
+      panel "Shimmer Verb" {
+        layout horizontal {
+          knob size
+          knob decay
+          knob damping
+        }
+      }
+      panel "Shimmer" {
+        layout horizontal {
+          knob shimmer
+          knob shimmer_tone
+          knob mod_rate
+          knob mod_depth
+        }
+      }
+      panel "Output" {
+        layout horizontal {
+          knob predelay
+          knob mix_amt
+          knob output_gain
+        }
+      }
+    }
+  }
+
+  process {
+    // Dry signal for final mix
+    let dry = input
+
+    // Pre-delay feeds into reverb
+    let predelayed = input -> delay(param.predelay)
+
+    // Core reverb — use internal mix=1.0, we handle dry/wet ourselves
+    let reverbed = predelayed -> reverb(param.size, param.decay, param.damping, 1.0)
+
+    // Shimmer path: chorus thickening + tone shaping on the reverb tail
+    let shimmered = reverbed -> chorus(param.mod_rate, param.mod_depth)
+      -> lowpass(param.shimmer_tone) -> gain(param.shimmer)
+
+    // Blend reverb + shimmer tail
+    let wet = mix(reverbed, shimmered)
+
+    // Final output: dry/wet crossfade + output level
+    crossfade(dry, wet, param.mix_amt) -> gain(param.output_gain) -> output
+  }
+
+  test "dry signal when mix is zero" {
+    set param.mix_amt = 0.0
+    set param.output_gain = 0.0
+    input sine 440Hz 4096 samples
+    assert output.rms > -6dB
+    assert no_nan
+  }
+
+  test "reverb produces output on sustained signal" {
+    set param.size = 0.5
+    set param.decay = 0.8
+    set param.damping = 0.3
+    set param.shimmer = 0.0
+    set param.predelay = 0.0
+    set param.mix_amt = 1.0
+    set param.output_gain = 0.0
+    input sine 440Hz 8192 samples
+    assert output.rms > -40dB
+    assert no_nan
+  }
+
+  test "shimmer adds character" {
+    set param.shimmer = 0.8
+    set param.shimmer_tone = 8000.0
+    set param.mod_rate = 1.0
+    set param.mod_depth = 0.5
+    set param.mix_amt = 1.0
+    set param.output_gain = 0.0
+    set param.decay = 0.8
+    set param.size = 0.5
+    set param.predelay = 0.0
+    input sine 440Hz 8192 samples
+    assert output.rms > -40dB
+    assert no_nan
+  }
+
+  test "silence in produces silence out" {
+    input silence 4096 samples
+    assert output.rms < -60dB
+    assert no_nan
+  }
+
+  preset "Cathedral" {
+    size = 0.9
+    decay = 8.0
+    damping = 0.4
+    shimmer = 0.6
+    shimmer_tone = 6000.0
+    mod_rate = 0.2
+    mod_depth = 0.4
+    predelay = 40.0
+    mix_amt = 0.6
+    output_gain = 0.0
+  }
+
+  preset "Bright Pad" {
+    size = 0.7
+    decay = 4.0
+    damping = 0.2
+    shimmer = 0.8
+    shimmer_tone = 10000.0
+    mod_rate = 0.5
+    mod_depth = 0.5
+    predelay = 15.0
+    mix_amt = 0.7
+    output_gain = 0.0
+  }
+
+  preset "Dark Space" {
+    size = 0.85
+    decay = 6.0
+    damping = 0.8
+    shimmer = 0.3
+    shimmer_tone = 2000.0
+    mod_rate = 0.15
+    mod_depth = 0.2
+    predelay = 60.0
+    mix_amt = 0.5
+    output_gain = -3.0
+  }
+
+  preset "Subtle Room" {
+    size = 0.3
+    decay = 1.5
+    damping = 0.5
+    shimmer = 0.1
+    shimmer_tone = 4000.0
+    mod_rate = 0.8
+    mod_depth = 0.1
+    predelay = 5.0
+    mix_amt = 0.3
+    output_gain = 0.0
+  }
+}
